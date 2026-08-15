@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Rider Notes Key Detector</string>
+    <string name="accessibility_service_description">Observes hardware-button key codes for BLE-M3 testing. It does not read screen content or typed text and does not block button actions.</string>
+</resources>

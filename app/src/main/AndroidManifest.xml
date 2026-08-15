@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:label="Rider Notes Key Detector"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.RiderNotes">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Milestone 1 uses Accessibility only for global hardware-key observation.
+          The service cannot retrieve screen contents and never consumes a key.
+        -->
+        <service
+            android:name=".input.BleButtonAccessibilityService"
+            android:exported="true"
+            android:label="Rider Notes button detector"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/button_detector_accessibility_service" />
+        </service>
+    </application>
+
+</manifest>

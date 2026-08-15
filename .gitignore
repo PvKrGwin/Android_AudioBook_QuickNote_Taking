@@ -1,0 +1,24 @@
+# Android Studio and Gradle generated files
+.gradle/
+.idea/
+build/
+**/build/
+local.properties
+*.iml
+
+# Signing keys and secrets must never enter Git
+*.jks
+*.keystore
+keystore.properties
+secrets.properties
+
+# Future Rider Notes recordings and exports
+recordings/
+exports/
+*.m4a
+*.wav
+*.mp3
+
+# Operating-system files
+.DS_Store
+Thumbs.db
