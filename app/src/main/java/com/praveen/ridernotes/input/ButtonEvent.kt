@@ -1,14 +1,15 @@
 package com.praveen.ridernotes.input
 
 import android.view.KeyEvent
+import android.view.MotionEvent
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * A readable snapshot of one Android hardware-key event.
+ * A readable snapshot of one external-input event.
  *
- * Android reuses KeyEvent objects internally, so we copy the useful values
+ * Android reuses input-event objects internally, so we copy the useful values
  * immediately instead of storing the original object.
  */
 data class ButtonEvent(
@@ -23,10 +24,11 @@ data class ButtonEvent(
     val deviceId: Int,
     val deviceName: String,
     val sourceHex: String,
-    val captureRoutes: Set<String>
+    val captureRoutes: Set<String>,
+    val details: String = ""
 ) {
     val likelyMeaning: String
-        get() = ButtonMeaning.forKeyCode(keyCode)
+        get() = if (details.isNotBlank()) details else ButtonMeaning.forKeyCode(keyCode)
 
     fun asShareableText(): String {
         val time = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault())
@@ -37,14 +39,16 @@ data class ButtonEvent(
             append(action)
             append(" | ")
             append(keyName)
-            append(" (")
-            append(keyCode)
-            append(") | scan=")
-            append(scanCode)
-            append(" | repeat=")
-            append(repeatCount)
-            append(" | long=")
-            append(isLongPress)
+            if (keyCode >= 0) {
+                append(" (")
+                append(keyCode)
+                append(") | scan=")
+                append(scanCode)
+                append(" | repeat=")
+                append(repeatCount)
+                append(" | long=")
+                append(isLongPress)
+            }
             append(" | device=")
             append(deviceName)
             append(" [")
@@ -82,6 +86,38 @@ data class ButtonEvent(
                 captureRoutes = setOf(route)
             )
         }
+
+        fun from(event: MotionEvent, route: String): ButtonEvent {
+            val actionName = when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> "MOTION_DOWN"
+                MotionEvent.ACTION_UP -> "MOTION_UP"
+                MotionEvent.ACTION_MOVE -> "MOTION_MOVE"
+                MotionEvent.ACTION_SCROLL -> "MOTION_SCROLL"
+                MotionEvent.ACTION_HOVER_MOVE -> "HOVER_MOVE"
+                MotionEvent.ACTION_BUTTON_PRESS -> "BUTTON_PRESS"
+                MotionEvent.ACTION_BUTTON_RELEASE -> "BUTTON_RELEASE"
+                else -> "MOTION_${event.actionMasked}"
+            }
+            val vertical = event.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            val horizontal = event.getAxisValue(MotionEvent.AXIS_HSCROLL)
+
+            return ButtonEvent(
+                capturedAtMillis = System.currentTimeMillis(),
+                eventTimeMillis = event.eventTime,
+                action = actionName,
+                keyCode = -1,
+                keyName = "MOTION_EVENT",
+                scanCode = 0,
+                repeatCount = 0,
+                isLongPress = false,
+                deviceId = event.deviceId,
+                deviceName = event.device?.name ?: "Unknown device",
+                sourceHex = "0x${event.source.toString(16)}",
+                captureRoutes = setOf(route),
+                details = "Motion: button=${event.actionButton}, buttons=${event.buttonState}, " +
+                    "vScroll=$vertical, hScroll=$horizontal"
+            )
+        }
     }
 }
 
@@ -91,10 +127,16 @@ object ButtonMeaning {
         KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> "Media play/pause"
         KeyEvent.KEYCODE_MEDIA_PLAY -> "Media play"
         KeyEvent.KEYCODE_MEDIA_PAUSE -> "Media pause"
+        KeyEvent.KEYCODE_MEDIA_REWIND -> "Media rewind"
+        KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> "Media fast-forward"
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS -> "Media previous"
+        KeyEvent.KEYCODE_MEDIA_NEXT -> "Media next"
         KeyEvent.KEYCODE_VOLUME_UP -> "Volume up"
         KeyEvent.KEYCODE_VOLUME_DOWN -> "Volume down"
         KeyEvent.KEYCODE_DPAD_UP -> "Up / scroll"
         KeyEvent.KEYCODE_DPAD_DOWN -> "Down / scroll"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "Left / previous"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "Right / next"
         KeyEvent.KEYCODE_DPAD_CENTER -> "Centre/confirm"
         KeyEvent.KEYCODE_ENTER -> "Enter/confirm"
         KeyEvent.KEYCODE_CAMERA -> "Camera shutter"
