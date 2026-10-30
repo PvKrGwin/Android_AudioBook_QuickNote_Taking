@@ -6,9 +6,12 @@ import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.os.Bundle
 import android.provider.Settings
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -47,9 +50,11 @@ import com.praveen.ridernotes.input.ButtonEventStore
 
 class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
+    private lateinit var diagnosticMediaSession: MediaSession
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setupDiagnosticMediaSession()
 
         setContent {
             RiderNotesTheme {
@@ -68,11 +73,88 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
+        diagnosticMediaSession.isActive = true
+    }
+
+    override fun onPause() {
+        diagnosticMediaSession.isActive = false
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        diagnosticMediaSession.release()
+        super.onDestroy()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         ButtonEventStore.record(ButtonEvent.from(event, route = "Foreground activity"))
-        return super.dispatchKeyEvent(event)
+
+        // Diagnostic safety: an external remote must not activate Clear or Copy
+        // while we are trying to identify it. Phone buttons keep normal behavior.
+        return if (event.device?.isExternal == true) true else super.dispatchKeyEvent(event)
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.device?.isExternal == true) {
+            ButtonEventStore.record(
+                ButtonEvent.from(event, route = "Foreground generic motion")
+            )
+            return true
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.device?.isExternal == true) {
+            ButtonEventStore.record(
+                ButtonEvent.from(event, route = "Foreground external touch")
+            )
+            return true
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    private fun setupDiagnosticMediaSession() {
+        diagnosticMediaSession = MediaSession(this, "RiderNotesSignalDetector").apply {
+            setFlags(
+                MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or
+                    MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS
+            )
+            setCallback(object : MediaSession.Callback() {
+                override fun onMediaButtonEvent(mediaButtonIntent: Intent): Boolean {
+                    @Suppress("DEPRECATION")
+                    val event = mediaButtonIntent
+                        .getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
+
+                    if (event != null) {
+                        ButtonEventStore.record(
+                            ButtonEvent.from(event, route = "Diagnostic media session")
+                        )
+                        return true
+                    }
+                    return super.onMediaButtonEvent(mediaButtonIntent)
+                }
+            })
+            setPlaybackState(
+                PlaybackState.Builder()
+                    .setActions(
+                        PlaybackState.ACTION_PLAY_PAUSE or
+                            PlaybackState.ACTION_PLAY or
+                            PlaybackState.ACTION_PAUSE or
+                            PlaybackState.ACTION_REWIND or
+                            PlaybackState.ACTION_FAST_FORWARD or
+                            PlaybackState.ACTION_SKIP_TO_PREVIOUS or
+                            PlaybackState.ACTION_SKIP_TO_NEXT
+                    )
+                    .setState(
+                        PlaybackState.STATE_PLAYING,
+                        PlaybackState.PLAYBACK_POSITION_UNKNOWN,
+                        1f
+                    )
+                    .build()
+            )
+            isActive = true
+        }
     }
 
     private fun isDetectorEnabled(): Boolean {
@@ -92,8 +174,9 @@ class MainActivity : ComponentActivity() {
 
     private fun copyResults() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        val text = ButtonEventStore.asShareableText().ifBlank { "No BLE-M3 events captured yet." }
-        clipboard.setPrimaryClip(ClipData.newPlainText("BLE-M3 key test", text))
+        val text = ButtonEventStore.asShareableText()
+            .ifBlank { "No Beauty-R1 signals captured yet." }
+        clipboard.setPrimaryClip(ClipData.newPlainText("Beauty-R1 signal test", text))
     }
 }
 
@@ -119,7 +202,7 @@ private fun DetectorScreen(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Milestone 1 · BLE-M3 key detector",
+                text = "Milestone 1.1 · remote signal detector",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -134,7 +217,7 @@ private fun DetectorScreen(
             Spacer(Modifier.height(14.dp))
 
             Text(
-                text = "Captured events (${events.value.size})",
+                text = "Captured signals (${events.value.size})",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
@@ -179,14 +262,15 @@ private fun StatusCard(enabled: Boolean, onOpenSettings: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text(
-                text = if (enabled) "Global detector enabled" else "Global detector not enabled",
+                text = if (enabled) "Global key detector enabled" else "Global key detector not enabled",
                 fontWeight = FontWeight.Bold
             )
             Text(
                 text = if (enabled) {
-                    "You may open YouTube, test BLE-M3, and return here. Buttons are observed but not blocked."
+                    "While this screen is open, Rider Notes also captures and blocks external " +
+                        "motion/media signals so the remote cannot press Clear accidentally."
                 } else {
-                    "Enable ‘Rider Notes button detector’ to observe BLE-M3 while another app is open."
+                    "Enable ‘Rider Notes button detector’ for background hardware-key observation."
                 }
             )
             if (!enabled) {
@@ -205,11 +289,11 @@ private fun EmptyInstructions() {
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("No key events yet", fontWeight = FontWeight.Bold)
-            Text("1. Confirm BLE-M3 is connected.")
-            Text("2. Enable the global detector above.")
-            Text("3. Press each remote button once while this screen is open.")
-            Text("4. Then play YouTube, test the buttons, and return here.")
+            Text("No signals yet", fontWeight = FontWeight.Bold)
+            Text("1. Confirm Beauty-R1 is connected.")
+            Text("2. Keep this screen open for the expanded diagnostic.")
+            Text("3. Press one remote button once.")
+            Text("4. Clear, repeat for each physical button, then copy the results.")
         }
     }
 }
@@ -232,7 +316,9 @@ private fun EventCard(event: ButtonEvent) {
                 Text(event.keyName, fontWeight = FontWeight.Bold)
                 Text(event.action)
             }
-            Text("Key ${event.keyCode} · Scan ${event.scanCode} · Repeat ${event.repeatCount}")
+            if (event.keyCode >= 0) {
+                Text("Key ${event.keyCode} · Scan ${event.scanCode} · Repeat ${event.repeatCount}")
+            }
             Text("Likely: ${event.likelyMeaning}")
             Text("Device: ${event.deviceName} (${event.deviceId})")
             Text(
