@@ -8,6 +8,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
@@ -44,6 +45,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -52,10 +54,15 @@ import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
+import com.praveen.ridernotes.recording.SavedVoiceNote
+import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 
 class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
     private val microphoneEnabled = mutableStateOf(false)
+    private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
+    private val playingFileName = mutableStateOf<String?>(null)
+    private var notePlayer: MediaPlayer? = null
     private lateinit var diagnosticMediaSession: MediaSession
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +78,10 @@ class MainActivity : ComponentActivity() {
                     },
                     microphoneEnabled = microphoneEnabled,
                     onRequestMicrophone = ::requestRecordingPermissions,
+                    savedNotes = savedNotes,
+                    playingFileName = playingFileName,
+                    onRefreshNotes = ::refreshSavedNotes,
+                    onPlayNote = ::playOrStopNote,
                     onClear = ButtonEventStore::clear,
                     onCopy = ::copyResults
                 )
@@ -82,6 +93,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
+        refreshSavedNotes()
         diagnosticMediaSession.isActive = true
     }
 
@@ -91,6 +103,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        stopNotePlayback()
         diagnosticMediaSession.release()
         super.onDestroy()
     }
@@ -208,6 +221,43 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun refreshSavedNotes() {
+        savedNotes.value = SavedVoiceNoteRepository.load(this)
+    }
+
+    private fun playOrStopNote(note: SavedVoiceNote) {
+        if (playingFileName.value == note.audioFile.name) {
+            stopNotePlayback()
+            return
+        }
+
+        stopNotePlayback()
+        try {
+            notePlayer = MediaPlayer().apply {
+                setDataSource(note.audioFile.absolutePath)
+                setOnCompletionListener { stopNotePlayback() }
+                setOnErrorListener { _, _, _ ->
+                    stopNotePlayback()
+                    true
+                }
+                prepare()
+                start()
+            }
+            playingFileName.value = note.audioFile.name
+        } catch (_: Exception) {
+            stopNotePlayback()
+        }
+    }
+
+    private fun stopNotePlayback() {
+        notePlayer?.runCatching {
+            if (isPlaying) stop()
+            release()
+        }
+        notePlayer = null
+        playingFileName.value = null
+    }
+
     private fun copyResults() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = ButtonEventStore.asShareableText()
@@ -226,10 +276,15 @@ private fun DetectorScreen(
     onOpenAccessibilitySettings: () -> Unit,
     microphoneEnabled: State<Boolean>,
     onRequestMicrophone: () -> Unit,
+    savedNotes: State<List<SavedVoiceNote>>,
+    playingFileName: State<String?>,
+    onRefreshNotes: () -> Unit,
+    onPlayNote: (SavedVoiceNote) -> Unit,
     onClear: () -> Unit,
     onCopy: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
+    val showSavedNotes = remember { mutableStateOf(true) }
 
     Scaffold { innerPadding ->
         Column(
@@ -244,59 +299,147 @@ private fun DetectorScreen(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Milestone 1.1 · remote signal detector",
+                text = "Beauty-R1 media controls and voice notes",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             Spacer(Modifier.height(14.dp))
-
             StatusCard(
                 enabled = detectorEnabled.value,
                 onOpenSettings = onOpenAccessibilitySettings
             )
-
             Spacer(Modifier.height(10.dp))
-
             MicrophoneCard(
                 enabled = microphoneEnabled.value,
                 onRequestPermission = onRequestMicrophone
             )
-
-            Spacer(Modifier.height(14.dp))
-
-            Text(
-                text = "Captured signals (${events.value.size})",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+            Spacer(Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                OutlinedButton(onClick = onClear) { Text("Clear") }
-                OutlinedButton(onClick = onCopy) { Text("Copy results") }
+                Button(onClick = { showSavedNotes.value = true }) {
+                    Text("Saved notes (${savedNotes.value.size})")
+                }
+                OutlinedButton(onClick = { showSavedNotes.value = false }) {
+                    Text("Signal log")
+                }
             }
-
             Spacer(Modifier.height(8.dp))
 
-            if (events.value.isEmpty()) {
-                EmptyInstructions()
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize()
+            if (showSavedNotes.value) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(
-                        items = events.value,
-                        key = { event ->
-                            "${event.eventTimeMillis}-${event.action}-${event.keyCode}-${event.scanCode}"
+                    Text(
+                        "Saved voice notes",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
+                }
+
+                if (savedNotes.value.isEmpty()) {
+                    Card {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("No saved notes yet", fontWeight = FontWeight.Bold)
+                            Text("Double-press Beauty-R1 to record your first note.")
                         }
-                    ) { event ->
-                        EventCard(event)
+                    }
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(
+                            items = savedNotes.value,
+                            key = { it.audioFile.absolutePath }
+                        ) { note ->
+                            SavedNoteCard(
+                                note = note,
+                                isPlaying = playingFileName.value == note.audioFile.name,
+                                onPlay = { onPlayNote(note) }
+                            )
+                        }
                     }
                 }
+            } else {
+                Text(
+                    text = "Captured signals (${events.value.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    OutlinedButton(onClick = onClear) { Text("Clear") }
+                    OutlinedButton(onClick = onCopy) { Text("Copy results") }
+                }
+                Spacer(Modifier.height(8.dp))
+
+                if (events.value.isEmpty()) {
+                    EmptyInstructions()
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(
+                            items = events.value,
+                            key = { event ->
+                                "${event.eventTimeMillis}-${event.action}-${event.keyCode}-${event.scanCode}"
+                            }
+                        ) { event ->
+                            EventCard(event)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedNoteCard(
+    note: SavedVoiceNote,
+    isPlaying: Boolean,
+    onPlay: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Text(note.title, fontWeight = FontWeight.Bold)
+            Text("${note.sourceApp} · ${note.recordedAtLabel}")
+            note.chapter?.let { Text("Chapter: $it") }
+            note.playbackPositionLabel?.let { Text("Media position: $it") }
+            Button(onClick = onPlay) {
+                Text(if (isPlaying) "Stop recording playback" else "Play recording")
+            }
+            Text(
+                "Audio: ${note.audioFile.name}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (!note.transcript.isNullOrBlank()) {
+                Text("Transcript", fontWeight = FontWeight.SemiBold)
+                Text(note.transcript)
+            } else {
+                Text(
+                    "Transcript: ${note.transcriptionStatus.lowercase().replace('_', ' ')}",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
