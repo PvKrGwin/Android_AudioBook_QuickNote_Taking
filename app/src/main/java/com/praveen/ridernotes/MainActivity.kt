@@ -585,19 +585,31 @@ private fun DetectorScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
-                        OutlinedButton(onClick = onImportBackup) { Text("Import backup") }
-                        if (selectedNotes.isNotEmpty()) {
-                            Button(onClick = { onExportNotes(selectedNotes) }) {
-                                Text("Export (${selectedNotes.size})")
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
+                            OutlinedButton(onClick = onImportBackup) {
+                                Text("Import backup")
                             }
-                            Button(onClick = { showDeleteConfirmation.value = true }) {
-                                Text("Delete (${selectedNotes.size})")
+                        }
+                        if (selectedNotes.isNotEmpty()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Button(onClick = { onExportNotes(selectedNotes) }) {
+                                    Text("Export (${selectedNotes.size})")
+                                }
+                                Button(onClick = {
+                                    showDeleteConfirmation.value = true
+                                }) {
+                                    Text("Delete (${selectedNotes.size})")
+                                }
                             }
                         }
                     }
