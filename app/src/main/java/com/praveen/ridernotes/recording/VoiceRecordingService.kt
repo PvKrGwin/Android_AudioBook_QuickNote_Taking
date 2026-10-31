@@ -5,9 +5,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -29,6 +31,7 @@ class VoiceRecordingService : Service() {
     private var outputFile: File? = null
     private var recordingStarted = false
     private var pauseCheckAttempts = 0
+    private var recordingInputLabel = "Phone microphone"
 
     private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -92,6 +95,13 @@ class VoiceRecordingService : Service() {
                 // Speech-optimized capture lets the phone apply its built-in
                 // voice processing/noise suppression where the device supports it.
                 setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                val bluetoothInput = findBluetoothMicrophone()
+                recordingInputLabel =
+                    if (bluetoothInput != null && setPreferredDevice(bluetoothInput)) {
+                        "Bluetooth headset microphone"
+                    } else {
+                        "Phone microphone"
+                    }
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44_100)
@@ -105,7 +115,12 @@ class VoiceRecordingService : Service() {
             recorder = mediaRecorder
             recordingStarted = true
             updateNotification("Recording voice note…")
-            ButtonEventStore.record(ButtonEvent.recordingResult("Recording started", true))
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "Recording started using $recordingInputLabel",
+                    true
+                )
+            )
             handler.postDelayed(autoStop, MAX_RECORDING_MS)
         } catch (error: Exception) {
             outputFile?.delete()
@@ -196,6 +211,7 @@ class VoiceRecordingService : Service() {
                 .put("subtitleOrChapter", mediaContext?.subtitle ?: JSONObject.NULL)
                 .put("author", mediaContext?.author ?: JSONObject.NULL)
                 .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
+                .put("recordingInput", recordingInputLabel)
                 .put("transcriptionStatus", "PENDING")
 
             File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
@@ -208,6 +224,21 @@ class VoiceRecordingService : Service() {
                 )
             )
         }
+    }
+
+    private fun findBluetoothMicrophone(): AudioDeviceInfo? {
+        val audioManager = getSystemService(AudioManager::class.java)
+        return audioManager
+            .getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { device ->
+                device.isSource && (
+                    device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        (
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                        )
+                    )
+            }
     }
 
     private fun safeFilePart(value: String): String {
