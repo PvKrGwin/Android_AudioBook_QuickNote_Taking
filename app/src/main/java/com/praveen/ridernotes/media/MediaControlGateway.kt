@@ -53,11 +53,12 @@ object MediaControlGateway {
         }
 
         val state = controller.playbackState
-        val wasPlaying = state?.state in setOf(
+        val wasPlaying = when (state?.state) {
             PlaybackState.STATE_PLAYING,
             PlaybackState.STATE_BUFFERING,
-            PlaybackState.STATE_CONNECTING
-        )
+            PlaybackState.STATE_CONNECTING -> true
+            else -> false
+        }
         val metadata = controller.metadata
         val noteContext = VoiceNoteMediaContext(
             packageName = controller.packageName,
