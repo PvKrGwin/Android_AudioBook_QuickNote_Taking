@@ -354,19 +354,34 @@ private fun DetectorScreen(
                         }
                     }
                 } else {
+                    val notesBySource = savedNotes.value
+                        .groupBy { it.sourceApp }
+                        .toSortedMap(compareBy(String.CASE_INSENSITIVE_ORDER) { it })
+
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(
-                            items = savedNotes.value,
-                            key = { it.audioFile.absolutePath }
-                        ) { note ->
-                            SavedNoteCard(
-                                note = note,
-                                isPlaying = playingFileName.value == note.audioFile.name,
-                                onPlay = { onPlayNote(note) }
-                            )
+                        notesBySource.forEach { (source, sourceNotes) ->
+                            item(key = "heading-$source") {
+                                Text(
+                                    text = source,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                                )
+                            }
+                            items(
+                                items = sourceNotes,
+                                key = { it.audioFile.absolutePath }
+                            ) { note ->
+                                SavedNoteCard(
+                                    note = note,
+                                    isPlaying = playingFileName.value == note.audioFile.name,
+                                    onPlay = { onPlayNote(note) }
+                                )
+                            }
                         }
                     }
                 }
