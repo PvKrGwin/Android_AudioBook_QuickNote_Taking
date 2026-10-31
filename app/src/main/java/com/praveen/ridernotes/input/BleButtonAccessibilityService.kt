@@ -11,6 +11,7 @@ import android.media.ToneGenerator
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
@@ -28,6 +29,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private var lastDeviceId = -1
     private var lastDeviceName = "Beauty-R1"
     private var screenReceiverRegistered = false
+    private var lastScreenOffBeepAt = 0L
 
     private val screenOnReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -54,6 +56,10 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
         if (!event.isBeautyCameraButton()) {
             return false
+        }
+
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            acknowledgeScreenOffPress()
         }
 
         if (event.action == KeyEvent.ACTION_DOWN &&
@@ -148,6 +154,18 @@ class BleButtonAccessibilityService : AccessibilityService() {
             registerReceiver(screenOnReceiver, filter)
         }
         screenReceiverRegistered = true
+    }
+
+    private fun acknowledgeScreenOffPress() {
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val now = SystemClock.elapsedRealtime()
+        if (!power.isInteractive && now - lastScreenOffBeepAt >= 1200L) {
+            lastScreenOffBeepAt = now
+            ToneGenerator(AudioManager.STREAM_MUSIC, 100).apply {
+                startTone(ToneGenerator.TONE_PROP_BEEP, 1000)
+                handler.postDelayed({ release() }, 1100L)
+            }
+        }
     }
 
     private fun playScreenReadyTone() {
