@@ -56,7 +56,13 @@ class VoiceRecordingService : Service() {
         try {
             val folder = File(filesDir, "voice_notes").apply { mkdirs() }
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-            val file = File(folder, "RiderNote_${timestamp}.m4a")
+            val mediaContext = MediaControlGateway.currentVoiceNoteContext()
+            val sourceName = if (mediaContext?.isStandalone == false) {
+                safeFilePart(mediaContext.appName)
+            } else {
+                "Standalone"
+            }
+            val file = File(folder, "RiderNote_${sourceName}_${timestamp}.m4a")
 
             val mediaRecorder = MediaRecorder().apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -173,6 +179,14 @@ class VoiceRecordingService : Service() {
                 )
             )
         }
+    }
+
+    private fun safeFilePart(value: String): String {
+        val cleaned = value
+            .replace(Regex("[^A-Za-z0-9]+"), "-")
+            .trim('-')
+            .take(40)
+        return cleaned.ifBlank { "Media" }
     }
 
     private fun playBeep() {
