@@ -2,6 +2,7 @@ package com.praveen.ridernotes.media
 
 import android.content.ComponentName
 import android.content.Context
+import android.app.Notification
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
@@ -10,6 +11,8 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
+import android.service.notification.StatusBarNotification
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
 object MediaControlGateway {
@@ -25,6 +28,8 @@ object MediaControlGateway {
     )
 
     private val supportedPackages = supportedAppNames.keys
+    private val notificationTextByPackage =
+        ConcurrentHashMap<String, List<String>>()
 
     data class Result(val successful: Boolean, val message: String)
 
@@ -62,7 +67,11 @@ object MediaControlGateway {
             else -> false
         }
         val metadata = controller.metadata
-        val (mediaTitle, mediaChapter) = mediaFields(controller.packageName, metadata)
+        val (mediaTitle, mediaChapter) = mediaFields(
+            controller.packageName,
+            metadata,
+            notificationTextByPackage[controller.packageName].orEmpty()
+        )
         val noteContext = VoiceNoteMediaContext(
             packageName = controller.packageName,
             appName = appLabel(context, controller.packageName),
@@ -84,6 +93,44 @@ object MediaControlGateway {
     }
 
     fun currentVoiceNoteContext(): VoiceNoteMediaContext? = voiceNoteContext
+
+    fun updateNotificationMetadata(sbn: StatusBarNotification) {
+        if (sbn.packageName !in supportedPackages) return
+        val extras = sbn.notification.extras
+        val values = buildList {
+            listOf(
+                Notification.EXTRA_TITLE,
+                Notification.EXTRA_TITLE_BIG,
+                Notification.EXTRA_TEXT,
+                Notification.EXTRA_BIG_TEXT,
+                Notification.EXTRA_SUB_TEXT,
+                Notification.EXTRA_INFO_TEXT,
+                Notification.EXTRA_SUMMARY_TEXT
+            ).forEach { key ->
+                extras.getCharSequence(key)
+                    ?.toString()
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let(::add)
+            }
+            extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+                .orEmpty()
+                .map { it.toString().trim() }
+                .filter { it.isNotBlank() }
+                .forEach(::add)
+        }.distinct()
+        if (values.isNotEmpty()) notificationTextByPackage[sbn.packageName] = values
+    }
+
+    fun removeNotificationMetadata(sbn: StatusBarNotification) {
+        if (sbn.packageName in supportedPackages) {
+            notificationTextByPackage.remove(sbn.packageName)
+        }
+    }
+
+    fun clearNotificationMetadata() {
+        notificationTextByPackage.clear()
+    }
 
     fun finishVoiceNote(context: Context, delayMs: Long = 1_500L) {
         val savedContext = voiceNoteContext
@@ -255,7 +302,8 @@ object MediaControlGateway {
 
     private fun mediaFields(
         packageName: String,
-        metadata: MediaMetadata?
+        metadata: MediaMetadata?,
+        notificationText: List<String>
     ): Pair<String?, String?> {
         if (metadata == null) return null to null
 
@@ -281,17 +329,40 @@ object MediaControlGateway {
             }
 
             "com.audible.application" -> {
-                // Audible commonly publishes the author as DISPLAY_SUBTITLE.
-                // Never label that value as a chapter.
-                val bookTitle = title ?: album ?: displayTitle
-                val chapter = listOf(displayDescription, displayTitle)
-                    .firstOrNull { candidate ->
-                        !candidate.isNullOrBlank() &&
-                            !candidate.equals(bookTitle, ignoreCase = true) &&
-                            !candidate.equals(author, ignoreCase = true) &&
-                            !candidate.equals(displaySubtitle, ignoreCase = true)
+                // Audible commonly publishes the author as DISPLAY_SUBTITLE,
+                // while chapter/episode text may live in DISPLAY_DESCRIPTION,
+                // DISPLAY_TITLE, or only in its playback notification.
+                val bookOrEpisodeTitle = title ?: album ?: displayTitle
+                val excluded = listOfNotNull(
+                    bookOrEpisodeTitle,
+                    album,
+                    author,
+                    displaySubtitle,
+                    "Audible"
+                )
+
+                fun isUseful(candidate: String?): Boolean {
+                    if (candidate.isNullOrBlank() || candidate.length < 2) return false
+                    if (excluded.any { it.equals(candidate, ignoreCase = true) }) return false
+                    if (candidate.matches(Regex("""\\d{1,2}:\\d{2}(:\\d{2})?"""))) return false
+                    return true
+                }
+
+                val candidates = listOfNotNull(displayDescription, displayTitle) +
+                    notificationText.filter(::isUseful)
+                val chapterOrEpisode = candidates
+                    .filter(::isUseful)
+                    .distinctBy { it.lowercase() }
+                    .sortedByDescending { candidate ->
+                        if (
+                            candidate.contains("chapter", ignoreCase = true) ||
+                            candidate.contains("episode", ignoreCase = true) ||
+                            candidate.contains("part", ignoreCase = true)
+                        ) 1 else 0
                     }
-                bookTitle to chapter
+                    .firstOrNull()
+
+                bookOrEpisodeTitle to chapterOrEpisode
             }
 
             else -> {
