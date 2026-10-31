@@ -62,10 +62,12 @@ import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
+import com.praveen.ridernotes.transcription.ScribTranscriber
 
 class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
     private val microphoneEnabled = mutableStateOf(false)
+    private val scribStatus = mutableStateOf("")
     private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
     private val playingFileName = mutableStateOf<String?>(null)
     private var notePlayer: MediaPlayer? = null
@@ -84,6 +86,8 @@ class MainActivity : ComponentActivity() {
                     },
                     microphoneEnabled = microphoneEnabled,
                     onRequestMicrophone = ::requestRecordingPermissions,
+                    scribStatus = scribStatus,
+                    onEnableScrib = ::enableScrib,
                     savedNotes = savedNotes,
                     playingFileName = playingFileName,
                     onRefreshNotes = ::refreshSavedNotes,
@@ -100,6 +104,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
+        scribStatus.value = ScribTranscriber.status(this)
         refreshSavedNotes()
         diagnosticMediaSession.isActive = true
     }
@@ -273,6 +278,10 @@ class MainActivity : ComponentActivity() {
         playingFileName.value = null
     }
 
+    private fun enableScrib() {
+        scribStatus.value = ScribTranscriber.enableScrib(this)
+    }
+
     private fun copyResults() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = ButtonEventStore.asShareableText()
@@ -291,6 +300,8 @@ private fun DetectorScreen(
     onOpenAccessibilitySettings: () -> Unit,
     microphoneEnabled: State<Boolean>,
     onRequestMicrophone: () -> Unit,
+    scribStatus: State<String>,
+    onEnableScrib: () -> Unit,
     savedNotes: State<List<SavedVoiceNote>>,
     playingFileName: State<String?>,
     onRefreshNotes: () -> Unit,
@@ -384,35 +395,82 @@ private fun DetectorScreen(
 
             when (selectedTab.value) {
                 0 -> {
-                    Image(
-                        painter = painterResource(R.drawable.rider_notes_logo),
-                        contentDescription = "Rider Notes logo",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(170.dp),
-                        contentScale = ContentScale.Fit
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    StatusCard(
-                        enabled = detectorEnabled.value,
-                        onOpenSettings = onOpenAccessibilitySettings
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    MicrophoneCard(
-                        enabled = microphoneEnabled.value,
-                        onRequestPermission = onRequestMicrophone
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    Card {
-                        Column(
-                            modifier = Modifier.padding(14.dp),
-                            verticalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Text("Beauty-R1 controls", fontWeight = FontWeight.Bold)
-                            Text("Single press · Play or pause")
-                            Text("Double press · Record voice note")
-                            Text("Triple press · Rewind")
-                            Text("Four presses · Forward")
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        item {
+                            Image(
+                                painter = painterResource(R.drawable.rider_notes_logo),
+                                contentDescription = "Rider Notes logo",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(170.dp),
+                                contentScale = ContentScale.Fit
+                            )
+                        }
+                        item {
+                            StatusCard(
+                                enabled = detectorEnabled.value,
+                                onOpenSettings = onOpenAccessibilitySettings
+                            )
+                        }
+                        item {
+                            MicrophoneCard(
+                                enabled = microphoneEnabled.value,
+                                onRequestPermission = onRequestMicrophone
+                            )
+                        }
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        "Free offline transcription with Scrib",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text("1. Install the regular Scrib app from F-Droid.")
+                                    Text("2. Open Scrib and download/select a multilingual model.")
+                                    Text("3. Return here and tap Enable Scrib.")
+                                    Text("4. New recordings are transcribed automatically offline.")
+                                    Text(
+                                        scribStatus.value,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    if (!scribStatus.value.startsWith("Scrib enabled")) {
+                                        Button(onClick = onEnableScrib) {
+                                            Text("Enable Scrib transcription")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Text("Beauty-R1 controls", fontWeight = FontWeight.Bold)
+                                    Text("Single press · Play or pause")
+                                    Text("Double press · Record voice note")
+                                    Text("Triple press · Rewind")
+                                    Text("Four presses · Forward")
+                                }
+                            }
+                        }
+                        item {
+                            Text(
+                                text = "Created by Praveen Kumar V",
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 12.dp),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
