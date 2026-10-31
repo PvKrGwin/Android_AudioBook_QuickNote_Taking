@@ -100,12 +100,8 @@ class VoiceRecordingService : Service() {
                 // voice processing/noise suppression where the device supports it.
                 setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
                 val bluetoothInput = findBluetoothMicrophone()
-                recordingInputLabel =
-                    if (bluetoothInput != null && setPreferredDevice(bluetoothInput)) {
-                        "Bluetooth headset microphone"
-                    } else {
-                        "Phone microphone"
-                    }
+                val preferred = bluetoothInput != null && setPreferredDevice(bluetoothInput)
+                recordingInputLabel = if (preferred) "Bluetooth requested (not yet verified)" else "Bluetooth not requested"
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44_100)
@@ -113,6 +109,15 @@ class VoiceRecordingService : Service() {
                 setOutputFile(file.absolutePath)
                 prepare()
                 start()
+                val routed = routedDevice
+                val bluetoothRouted = routed?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        routed?.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+                recordingInputLabel = when {
+                    bluetoothRouted -> "Bluetooth confirmed: ${routed?.productName}"
+                    routed == null -> "Microphone route unknown (Bluetooth not confirmed)"
+                    else -> "Non-Bluetooth microphone: ${routed.productName}"
+                }
             }
 
             outputFile = file
