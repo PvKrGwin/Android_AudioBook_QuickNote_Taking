@@ -51,8 +51,21 @@ object MediaControlGateway {
 
     fun prepareForVoiceNote(context: Context): VoiceNoteMediaContext {
         val controller = try {
-            findBestSupportedController(context)
-        } catch (_: SecurityException) {
+            // A paused or stale session must not turn a spontaneous thought
+            // into a media-linked recording.
+            findControllers(context)
+                .asSequence()
+                .filter { it.packageName in supportedPackages }
+                .filter { session ->
+                    session.playbackState?.state in listOf(
+                        PlaybackState.STATE_PLAYING,
+                        PlaybackState.STATE_BUFFERING,
+                        PlaybackState.STATE_CONNECTING
+                    )
+                }
+                .maxByOrNull(::priority)
+        } catch (_: Exception) {
+            // Standalone recording must work without notification access too.
             null
         }
 
