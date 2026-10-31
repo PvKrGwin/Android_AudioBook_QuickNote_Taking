@@ -88,7 +88,9 @@ class VoiceRecordingService : Service() {
             val file = File(folder, "RiderNote_${sourceName}_${timestamp}.m4a")
 
             val mediaRecorder = MediaRecorder().apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
+                // Speech-optimized capture lets the phone apply its built-in
+                // voice processing/noise suppression where the device supports it.
+                setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44_100)
