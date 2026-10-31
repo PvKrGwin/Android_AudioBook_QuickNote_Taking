@@ -3,7 +3,7 @@
 
     <application
         android:allowBackup="true"
-        android:label="Rider Notes Key Detector"
+        android:label="Rider Notes"
         android:supportsRtl="true"
         android:theme="@style/Theme.RiderNotes">
 
@@ -16,10 +16,6 @@
             </intent-filter>
         </activity>
 
-        <!--
-          Milestone 1 uses Accessibility only for global hardware-key observation.
-          The service cannot retrieve screen contents and never consumes a key.
-        -->
         <service
             android:name=".input.BleButtonAccessibilityService"
             android:exported="true"
@@ -28,10 +24,24 @@
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
-
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/button_detector_accessibility_service" />
+        </service>
+
+        <!--
+          Grants access to Android media-session controllers after the user
+          explicitly enables Notification access. Notification contents are
+          neither inspected nor stored.
+        -->
+        <service
+            android:name=".media.RiderNotificationListenerService"
+            android:exported="true"
+            android:label="Rider Notes media control"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
     </application>
 
