@@ -176,7 +176,7 @@ class VoiceRecordingService : Service() {
     }
 
     private fun playBeep() {
-        ToneGenerator(AudioManager.STREAM_MUSIC, 75).apply {
+        ToneGenerator(AudioManager.STREAM_MUSIC, 100).apply {
             startTone(ToneGenerator.TONE_PROP_BEEP, BEEP_MS)
             handler.postDelayed({ release() }, BEEP_MS + 50L)
         }
@@ -234,6 +234,6 @@ class VoiceRecordingService : Service() {
         private const val MAX_RECORDING_MS = 40_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
-        private const val BEEP_MS = 120
+        private const val BEEP_MS = 180
     }
 }
