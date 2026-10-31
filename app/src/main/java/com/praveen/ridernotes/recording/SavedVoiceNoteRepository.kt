@@ -13,6 +13,7 @@ data class SavedVoiceNote(
     val title: String,
     val sourceApp: String,
     val chapter: String?,
+    val author: String?,
     val playbackPositionMs: Long?,
     val transcriptionStatus: String,
     val transcript: String?
@@ -69,6 +70,7 @@ object SavedVoiceNoteRepository {
                 title = audioFile.nameWithoutExtension,
                 sourceApp = "Unknown source",
                 chapter = null,
+                author = null,
                 playbackPositionMs = null,
                 transcriptionStatus = "NOT_STARTED",
                 transcript = null
@@ -98,6 +100,7 @@ object SavedVoiceNoteRepository {
                 title = title,
                 sourceApp = sourceApp,
                 chapter = chapter,
+                author = json.optNullableString("author"),
                 playbackPositionMs = json.optNullableLong("playbackPositionMs"),
                 transcriptionStatus = json.optNullableString("transcriptionStatus") ?: "NOT_STARTED",
                 transcript = json.optNullableString("transcript")
@@ -109,6 +112,7 @@ object SavedVoiceNoteRepository {
                 title = audioFile.nameWithoutExtension,
                 sourceApp = "Metadata unavailable",
                 chapter = null,
+                author = null,
                 playbackPositionMs = null,
                 transcriptionStatus = "UNKNOWN",
                 transcript = null
