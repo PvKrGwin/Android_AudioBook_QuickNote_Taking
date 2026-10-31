@@ -284,7 +284,8 @@ private fun DetectorScreen(
     onCopy: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
-    val showSavedNotes = remember { mutableStateOf(true) }
+    val selectedTab = remember { mutableStateOf(0) }
+    val expandedSources = remember { mutableStateOf<Set<String>>(emptySet()) }
 
     Scaffold { innerPadding ->
         Column(
@@ -304,116 +305,166 @@ private fun DetectorScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(Modifier.height(14.dp))
-            StatusCard(
-                enabled = detectorEnabled.value,
-                onOpenSettings = onOpenAccessibilitySettings
-            )
-            Spacer(Modifier.height(10.dp))
-            MicrophoneCard(
-                enabled = microphoneEnabled.value,
-                onRequestPermission = onRequestMicrophone
-            )
             Spacer(Modifier.height(12.dp))
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Button(onClick = { showSavedNotes.value = true }) {
-                    Text("Saved notes (${savedNotes.value.size})")
+                if (selectedTab.value == 0) {
+                    Button(onClick = { selectedTab.value = 0 }) { Text("Home") }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 0 }) { Text("Home") }
                 }
-                OutlinedButton(onClick = { showSavedNotes.value = false }) {
-                    Text("Signal log")
+                if (selectedTab.value == 1) {
+                    Button(onClick = { selectedTab.value = 1 }) {
+                        Text("Notes (${savedNotes.value.size})")
+                    }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 1 }) {
+                        Text("Notes (${savedNotes.value.size})")
+                    }
+                }
+                if (selectedTab.value == 2) {
+                    Button(onClick = { selectedTab.value = 2 }) { Text("Log") }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 2 }) { Text("Log") }
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
 
-            if (showSavedNotes.value) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Saved voice notes",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+            when (selectedTab.value) {
+                0 -> {
+                    StatusCard(
+                        enabled = detectorEnabled.value,
+                        onOpenSettings = onOpenAccessibilitySettings
                     )
-                    OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
-                }
-
-                if (savedNotes.value.isEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    MicrophoneCard(
+                        enabled = microphoneEnabled.value,
+                        onRequestPermission = onRequestMicrophone
+                    )
+                    Spacer(Modifier.height(10.dp))
                     Card {
                         Column(
                             modifier = Modifier.padding(14.dp),
                             verticalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
-                            Text("No saved notes yet", fontWeight = FontWeight.Bold)
-                            Text("Double-press Beauty-R1 to record your first note.")
+                            Text("Beauty-R1 controls", fontWeight = FontWeight.Bold)
+                            Text("Single press · Play or pause")
+                            Text("Double press · Record voice note")
+                            Text("Triple press · Rewind")
+                            Text("Four presses · Forward")
                         }
                     }
-                } else {
+                }
+
+                1 -> {
                     val notesBySource = savedNotes.value
                         .groupBy { it.sourceApp }
                         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
 
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxSize()
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        notesBySource.forEach { (source, sourceNotes) ->
-                            item(key = "heading-$source") {
-                                Text(
-                                    text = source,
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
-                                )
+                        Text(
+                            "Saved notes",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
+                    }
+                    Spacer(Modifier.height(4.dp))
+
+                    if (savedNotes.value.isEmpty()) {
+                        Card {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Text("No saved notes yet", fontWeight = FontWeight.Bold)
+                                Text("Double-press Beauty-R1 to record your first note.")
                             }
-                            items(
-                                items = sourceNotes,
-                                key = { it.audioFile.absolutePath }
-                            ) { note ->
-                                SavedNoteCard(
-                                    note = note,
-                                    isPlaying = playingFileName.value == note.audioFile.name,
-                                    onPlay = { onPlayNote(note) }
-                                )
+                        }
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            notesBySource.forEach { (source, sourceNotes) ->
+                                item(key = "heading-$source") {
+                                    val expanded = source in expandedSources.value
+                                    OutlinedButton(
+                                        onClick = {
+                                            expandedSources.value =
+                                                if (expanded) {
+                                                    expandedSources.value - source
+                                                } else {
+                                                    expandedSources.value + source
+                                                }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = if (expanded) {
+                                                "▼  $source (${sourceNotes.size})"
+                                            } else {
+                                                "▶  $source (${sourceNotes.size})"
+                                            },
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                if (source in expandedSources.value) {
+                                    items(
+                                        items = sourceNotes,
+                                        key = { it.audioFile.absolutePath }
+                                    ) { note ->
+                                        SavedNoteCard(
+                                            note = note,
+                                            isPlaying =
+                                                playingFileName.value == note.audioFile.name,
+                                            onPlay = { onPlayNote(note) }
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            } else {
-                Text(
-                    text = "Captured signals (${events.value.size})",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    OutlinedButton(onClick = onClear) { Text("Clear") }
-                    OutlinedButton(onClick = onCopy) { Text("Copy results") }
-                }
-                Spacer(Modifier.height(8.dp))
 
-                if (events.value.isEmpty()) {
-                    EmptyInstructions()
-                } else {
-                    LazyColumn(
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxSize()
+                else -> {
+                    Text(
+                        text = "Captured signals (${events.value.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        items(
-                            items = events.value,
-                            key = { event ->
-                                "${event.eventTimeMillis}-${event.action}-${event.keyCode}-${event.scanCode}"
+                        OutlinedButton(onClick = onClear) { Text("Clear") }
+                        OutlinedButton(onClick = onCopy) { Text("Copy results") }
+                    }
+                    Spacer(Modifier.height(8.dp))
+
+                    if (events.value.isEmpty()) {
+                        EmptyInstructions()
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(
+                                items = events.value,
+                                key = { event ->
+                                    "${event.eventTimeMillis}-${event.action}-${event.keyCode}-${event.scanCode}"
+                                }
+                            ) { event ->
+                                EventCard(event)
                             }
-                        ) { event ->
-                            EventCard(event)
                         }
                     }
                 }
