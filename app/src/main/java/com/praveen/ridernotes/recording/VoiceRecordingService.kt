@@ -35,7 +35,7 @@ class VoiceRecordingService : Service() {
     private var recordingInputLabel = "Phone microphone"
     private var recordingWakeLock: PowerManager.WakeLock? = null
 
-    private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
+    private val autoStop = Runnable { stopAndSave("50-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
 
     override fun onCreate() {
@@ -237,11 +237,12 @@ class VoiceRecordingService : Service() {
         }
     }
 
+    @Suppress("DEPRECATION")
     private fun acquireRecordingWakeLock() {
         if (recordingWakeLock?.isHeld == true) return
         recordingWakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
                 "${packageName}:voice-note-recording"
             )
             .apply {
@@ -335,7 +336,7 @@ class VoiceRecordingService : Service() {
 
         private const val CHANNEL_ID = "rider_notes_recording"
         private const val NOTIFICATION_ID = 2001
-        private const val MAX_RECORDING_MS = 40_000L
+        private const val MAX_RECORDING_MS = 50_000L
         private const val WAKE_LOCK_SAFETY_MS = 10_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
