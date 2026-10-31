@@ -489,7 +489,14 @@ private fun SavedNoteCard(
         ) {
             Text(note.title, fontWeight = FontWeight.Bold)
             Text("${note.sourceApp} · ${note.recordedAtLabel}")
-            note.chapter?.let { Text("Chapter: $it") }
+            note.chapter?.let {
+                val label = if (note.sourceApp == "Audible") {
+                    "Chapter / episode"
+                } else {
+                    "Chapter"
+                }
+                Text("$label: $it")
+            }
             note.playbackPositionLabel?.let { Text("Media position: $it") }
             Button(onClick = onPlay) {
                 Text(if (isPlaying) "Stop recording playback" else "Play recording")
