@@ -17,12 +17,14 @@ object MediaControlGateway {
 
     private const val SEEK_STEP_MS = 10_000L
 
-    private val supportedPackages = setOf(
-        "com.audible.application",
-        "com.google.android.youtube",
-        "com.google.android.apps.youtube.music",
-        "com.google.android.apps.books"
+    private val supportedAppNames = mapOf(
+        "com.audible.application" to "Audible",
+        "com.google.android.youtube" to "YouTube",
+        "com.google.android.apps.youtube.music" to "YouTube Music",
+        "com.google.android.apps.books" to "Google Play Books"
     )
+
+    private val supportedPackages = supportedAppNames.keys
 
     data class Result(val successful: Boolean, val message: String)
 
@@ -251,10 +253,11 @@ object MediaControlGateway {
         )
     }
 
-    private fun appLabel(context: Context, packageName: String): String = try {
-        val application = context.packageManager.getApplicationInfo(packageName, 0)
-        context.packageManager.getApplicationLabel(application).toString()
-    } catch (_: Exception) {
-        packageName
-    }
+    private fun appLabel(context: Context, packageName: String): String =
+        supportedAppNames[packageName] ?: try {
+            val application = context.packageManager.getApplicationInfo(packageName, 0)
+            context.packageManager.getApplicationLabel(application).toString()
+        } catch (_: Exception) {
+            packageName
+        }
 }
