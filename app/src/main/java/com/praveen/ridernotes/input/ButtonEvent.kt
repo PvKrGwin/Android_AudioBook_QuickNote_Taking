@@ -135,6 +135,7 @@ data class ButtonEvent(
                 RemotePressPatternDetector.Gesture.SINGLE -> "Single press — Play/Pause requested"
                 RemotePressPatternDetector.Gesture.DOUBLE -> "Double press — future voice note"
                 RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press — rewind 10 seconds requested"
+                RemotePressPatternDetector.Gesture.QUADRUPLE -> "Four presses — forward 10 seconds requested"
             }
         )
 
