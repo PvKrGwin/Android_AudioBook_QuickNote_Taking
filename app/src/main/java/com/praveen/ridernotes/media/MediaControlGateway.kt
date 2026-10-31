@@ -406,8 +406,15 @@ object MediaControlGateway {
                     if (candidate.isNullOrBlank() || candidate.length < 2) return false
                     if (excluded.any { it.equals(candidate, ignoreCase = true) }) return false
                     if (candidate.matches(Regex("""\d{1,2}:\d{2}(:\d{2})?"""))) return false
+                    if (candidate.matches(Regex("""\d{4}-\d{2}-\d{2}"""))) return false
                     if (candidate.startsWith("http", ignoreCase = true)) return false
                     if (candidate.length > 200) return false
+                    if (
+                        candidate.equals("WIDEVINE_OFFLINE", ignoreCase = true) ||
+                        candidate.equals("Product", ignoreCase = true) ||
+                        candidate.equals("ContinuousListen", ignoreCase = true) ||
+                        candidate.matches(Regex("""B0[A-Z0-9]+"""))
+                    ) return false
                     return true
                 }
 
@@ -418,11 +425,13 @@ object MediaControlGateway {
                     .filter(::isUseful)
                     .distinctBy { it.lowercase() }
                     .sortedByDescending { candidate ->
-                        if (
-                            candidate.contains("chapter", ignoreCase = true) ||
-                            candidate.contains("episode", ignoreCase = true) ||
-                            candidate.contains("part", ignoreCase = true)
-                        ) 1 else 0
+                        when {
+                            candidate.matches(Regex("""\d+\s*[:.-]\s*.+""")) -> 4
+                            candidate.contains("chapter", ignoreCase = true) -> 3
+                            candidate.contains("episode", ignoreCase = true) -> 3
+                            candidate.contains("part", ignoreCase = true) -> 2
+                            else -> 1
+                        }
                     }
                     .firstOrNull()
 
