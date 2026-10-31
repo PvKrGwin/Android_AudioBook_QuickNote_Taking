@@ -112,7 +112,16 @@ class VoiceRecordingService : Service() {
                 recorderStage = "setCommunicationDevice"
                 val routeReady = if (bluetoothInput != null &&
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    audioManager.setCommunicationDevice(bluetoothInput)
+                    // setCommunicationDevice accepts communication OUTPUT devices,
+                    // not microphone input port IDs (which cause invalid portID).
+                    val communicationOutput = audioManager.availableCommunicationDevices.firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                            it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                    }
+                    if (communicationOutput != null) {
+                        runCatching { audioManager.setCommunicationDevice(communicationOutput) }
+                            .getOrDefault(false)
+                    } else false
                 } else false
                 communicationRouteRequested = routeReady
                 // Do not call setPreferredDevice(null): some Android recorder
