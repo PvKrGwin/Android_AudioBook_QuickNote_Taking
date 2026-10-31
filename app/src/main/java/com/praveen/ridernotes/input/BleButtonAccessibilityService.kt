@@ -7,6 +7,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import com.praveen.ridernotes.media.MediaControlGateway
 
 /**
  * Observes hardware keys globally and classifies Beauty-R1's usable camera
@@ -71,6 +72,16 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 deviceName = lastDeviceName
             )
         )
+
+        if (gesture == RemotePressPatternDetector.Gesture.SINGLE) {
+            val result = MediaControlGateway.togglePlayPause(this)
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    message = result.message,
+                    successful = result.successful
+                )
+            )
+        }
     }
 
     private fun KeyEvent.isBeautyCameraButton(): Boolean {
