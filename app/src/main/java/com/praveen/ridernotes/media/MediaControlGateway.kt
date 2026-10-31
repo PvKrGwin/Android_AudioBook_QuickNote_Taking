@@ -38,6 +38,7 @@ object MediaControlGateway {
         val appName: String?,
         val title: String?,
         val subtitle: String?,
+        val author: String?,
         val playbackPositionMs: Long?,
         val wasPlaying: Boolean
     ) {
@@ -56,7 +57,7 @@ object MediaControlGateway {
         }
 
         if (controller == null) {
-            return VoiceNoteMediaContext(null, null, null, null, null, false)
+            return VoiceNoteMediaContext(null, null, null, null, null, null, false)
                 .also { voiceNoteContext = it }
         }
 
@@ -68,7 +69,7 @@ object MediaControlGateway {
             else -> false
         }
         val metadata = controller.metadata
-        val (mediaTitle, mediaChapter) = mediaFields(
+        val (mediaTitle, mediaChapter, mediaAuthor) = mediaFields(
             controller.packageName,
             metadata,
             notificationTextByPackage[controller.packageName].orEmpty()
@@ -78,6 +79,7 @@ object MediaControlGateway {
             appName = appLabel(context, controller.packageName),
             title = mediaTitle,
             subtitle = mediaChapter,
+            author = mediaAuthor,
             playbackPositionMs = state?.let(::estimatedPosition),
             wasPlaying = wasPlaying
         )
@@ -344,7 +346,7 @@ object MediaControlGateway {
         packageName: String,
         metadata: MediaMetadata?,
         notificationText: List<String>
-    ): Pair<String?, String?> {
+    ): Triple<String?, String?, String?> {
         fun value(key: String): String? =
             metadata?.getString(key)?.trim()?.takeIf { it.isNotBlank() }
 
@@ -363,7 +365,7 @@ object MediaControlGateway {
                 val bookTitle = displaySubtitle ?: album ?: displayTitle ?: title
                 val chapter = title
                     ?.takeUnless { it.equals(bookTitle, ignoreCase = true) }
-                bookTitle to chapter
+                Triple(bookTitle, chapter, author)
             }
 
             "com.audible.application" -> {
@@ -413,12 +415,12 @@ object MediaControlGateway {
                     }
                     .firstOrNull()
 
-                bookOrEpisodeTitle to chapterOrEpisode
+                Triple(bookOrEpisodeTitle, chapterOrEpisode, author)
             }
 
             else -> {
                 val chapter = displaySubtitle ?: album
-                title to chapter
+                Triple(title, chapter, author)
             }
         }
     }
