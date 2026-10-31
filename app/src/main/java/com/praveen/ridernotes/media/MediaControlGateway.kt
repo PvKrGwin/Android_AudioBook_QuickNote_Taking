@@ -47,9 +47,6 @@ object MediaControlGateway {
     @Volatile
     private var voiceNoteContext: VoiceNoteMediaContext? = null
 
-    @Volatile
-    var lastVoiceNoteMetadataDiagnostic: String? = null
-        private set
 
     fun prepareForVoiceNote(context: Context): VoiceNoteMediaContext {
         val controller = try {
@@ -71,16 +68,6 @@ object MediaControlGateway {
             else -> false
         }
         val metadata = controller.metadata
-        lastVoiceNoteMetadataDiagnostic = if (
-            controller.packageName == "com.audible.application"
-        ) {
-            audibleMetadataDiagnostic(
-                metadata,
-                notificationTextByPackage[controller.packageName].orEmpty()
-            )
-        } else {
-            null
-        }
         val (mediaTitle, mediaChapter) = mediaFields(
             controller.packageName,
             metadata,
@@ -351,15 +338,6 @@ object MediaControlGateway {
                     ?.takeIf { it.isNotBlank() }
             }
             .distinct()
-    }
-
-    private fun audibleMetadataDiagnostic(
-        metadata: MediaMetadata?,
-        notificationText: List<String>
-    ): String {
-        val mediaValues = metadataTextValues(metadata).joinToString(" | ")
-        val notificationValues = notificationText.joinToString(" | ")
-        return "media=[$mediaValues]; notification=[$notificationValues]"
     }
 
     private fun mediaFields(
