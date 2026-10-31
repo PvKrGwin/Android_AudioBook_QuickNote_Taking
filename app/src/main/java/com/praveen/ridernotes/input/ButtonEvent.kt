@@ -133,7 +133,7 @@ data class ButtonEvent(
             captureRoutes = setOf("Beauty-R1 gesture classifier"),
             details = when (gesture) {
                 RemotePressPatternDetector.Gesture.SINGLE -> "Single press — Play/Pause requested"
-                RemotePressPatternDetector.Gesture.DOUBLE -> "Double press — future voice note"
+                RemotePressPatternDetector.Gesture.DOUBLE -> "Double press — voice note requested"
                 RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press — rewind 10 seconds requested"
                 RemotePressPatternDetector.Gesture.QUADRUPLE -> "Four presses — forward 10 seconds requested"
             }
