@@ -34,6 +34,7 @@ class VoiceRecordingService : Service() {
     private var pauseCheckAttempts = 0
     private var recordingInputLabel = "Phone microphone"
     private var recordingWakeLock: PowerManager.WakeLock? = null
+    private var communicationRouteRequested = false
 
     private val autoStop = Runnable { stopAndSave("50-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -78,6 +79,7 @@ class VoiceRecordingService : Service() {
                 )
             )
             MediaControlGateway.finishVoiceNote(this, delayMs = 0L)
+            releaseBluetoothRoute()
             releaseRecordingWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
@@ -100,8 +102,25 @@ class VoiceRecordingService : Service() {
                 // voice processing/noise suppression where the device supports it.
                 setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
                 val bluetoothInput = findBluetoothMicrophone()
-                val preferred = bluetoothInput != null && setPreferredDevice(bluetoothInput)
-                recordingInputLabel = if (preferred) "Bluetooth requested (not yet verified)" else "Bluetooth not requested"
+                val audioManager = getSystemService(AudioManager::class.java)
+                // On Android 12+, request the Bluetooth communication route
+                // before choosing the recorder input. A preferred device alone
+                // does not establish a headset microphone connection.
+                val routeReady = if (bluetoothInput != null &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    audioManager.setCommunicationDevice(bluetoothInput)
+                } else false
+                communicationRouteRequested = routeReady
+                val preferred = routeReady && setPreferredDevice(bluetoothInput)
+                if (!preferred) {
+                    // Preserve the known-working built-in microphone path.
+                    setPreferredDevice(null)
+                }
+                recordingInputLabel = if (preferred) {
+                    "Bluetooth communication route requested"
+                } else {
+                    "Phone microphone fallback (Bluetooth route unavailable)"
+                }
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44_100)
@@ -114,7 +133,7 @@ class VoiceRecordingService : Service() {
                     (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
                         routed?.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
                 recordingInputLabel = when {
-                    bluetoothRouted -> "Bluetooth confirmed: ${routed?.productName}"
+                    bluetoothRouted -> "Bluetooth routed (audio not yet validated): ${routed?.productName}"
                     routed == null -> "Microphone route unknown (Bluetooth not confirmed)"
                     else -> "Non-Bluetooth microphone: ${routed.productName}"
                 }
@@ -195,6 +214,7 @@ class VoiceRecordingService : Service() {
         ButtonEventStore.record(ButtonEvent.recordingResult(message, saved))
 
         MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS)
+        releaseBluetoothRoute()
         releaseRecordingWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -254,6 +274,13 @@ class VoiceRecordingService : Service() {
     private fun releaseRecordingWakeLock() {
         recordingWakeLock?.takeIf { it.isHeld }?.release()
         recordingWakeLock = null
+    }
+
+    private fun releaseBluetoothRoute() {
+        if (communicationRouteRequested && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(AudioManager::class.java).clearCommunicationDevice()
+        }
+        communicationRouteRequested = false
     }
 
     private fun findBluetoothMicrophone(): AudioDeviceInfo? {
@@ -324,6 +351,7 @@ class VoiceRecordingService : Service() {
         recorder?.release()
         recorder = null
         RecordingController.isRecordingOrStarting = false
+        releaseBluetoothRoute()
         releaseRecordingWakeLock()
         super.onDestroy()
     }
