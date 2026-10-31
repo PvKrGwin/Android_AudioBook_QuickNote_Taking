@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import com.praveen.ridernotes.input.ButtonEvent
+import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
 
 object RecordingController {
@@ -21,6 +23,16 @@ object RecordingController {
         if (isRecordingOrStarting) return "Recording is already active"
 
         val mediaContext = MediaControlGateway.prepareForVoiceNote(context)
+        if (mediaContext.packageName == "com.audible.application") {
+            MediaControlGateway.lastVoiceNoteMetadataDiagnostic?.let { diagnostic ->
+                ButtonEventStore.record(
+                    ButtonEvent.mediaResult(
+                        message = "Audible metadata diagnostic: $diagnostic",
+                        successful = true
+                    )
+                )
+            }
+        }
         isRecordingOrStarting = true
         return try {
             ContextCompat.startForegroundService(
