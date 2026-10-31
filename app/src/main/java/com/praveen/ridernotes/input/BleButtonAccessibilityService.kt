@@ -30,11 +30,18 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private var lastDeviceName = "Beauty-R1"
     private var screenReceiverRegistered = false
     private var lastScreenOffBeepAt = 0L
+    private var screenOffObserved = false
+    private var lastScreenWakeAt = 0L
 
     private val screenOnReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == Intent.ACTION_SCREEN_ON) {
-                playScreenReadyTone()
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> screenOffObserved = true
+                Intent.ACTION_SCREEN_ON -> {
+                    screenOffObserved = false
+                    lastScreenWakeAt = SystemClock.elapsedRealtime()
+                    playScreenReadyTone()
+                }
             }
         }
     }
@@ -48,6 +55,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
         serviceInfo = serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         }
+        screenOffObserved = !(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
         registerScreenOnReceiver()
     }
 
@@ -146,7 +154,10 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
     private fun registerScreenOnReceiver() {
         if (screenReceiverRegistered) return
-        val filter = IntentFilter(Intent.ACTION_SCREEN_ON)
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(screenOnReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
@@ -159,13 +170,27 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private fun acknowledgeScreenOffPress() {
         val power = getSystemService(Context.POWER_SERVICE) as PowerManager
         val now = SystemClock.elapsedRealtime()
-        if (!power.isInteractive && now - lastScreenOffBeepAt >= 1200L) {
-            lastScreenOffBeepAt = now
-            ToneGenerator(AudioManager.STREAM_MUSIC, 100).apply {
-                startTone(ToneGenerator.TONE_PROP_BEEP, 1000)
-                handler.postDelayed({ release() }, 1100L)
+        // Some remote presses wake Android just before accessibility receives
+        // the key. A short grace window preserves the screen-off acknowledgement.
+        val screenWasOff = !power.isInteractive || screenOffObserved ||
+            (lastScreenWakeAt > 0L && now - lastScreenWakeAt in 0L..350L)
+        if (!screenWasOff || now - lastScreenOffBeepAt < 1200L) return
+
+        lastScreenOffBeepAt = now
+        val outcome = runCatching {
+            ToneGenerator(AudioManager.STREAM_MUSIC, 100).also { tone ->
+                val started = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 1000)
+                handler.postDelayed({ tone.release() }, 1150L)
+                if (!started) error("ToneGenerator refused playback")
             }
         }
+        ButtonEventStore.record(
+            ButtonEvent.recordingResult(
+                message = if (outcome.isSuccess) "SCREEN_OFF_BUTTON_BEEP: requested 1000 ms tone"
+                    else "SCREEN_OFF_BUTTON_BEEP failed: ${outcome.exceptionOrNull()?.javaClass?.simpleName}",
+                successful = outcome.isSuccess
+            )
+        )
     }
 
     private fun playScreenReadyTone() {
