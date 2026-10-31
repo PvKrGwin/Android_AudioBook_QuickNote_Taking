@@ -58,7 +58,7 @@ class VoiceRecordingService : Service() {
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
             val mediaContext = MediaControlGateway.currentVoiceNoteContext()
             val sourceName = if (mediaContext?.isStandalone == false) {
-                safeFilePart(mediaContext.appName)
+                safeFilePart(mediaContext.appName ?: "Media")
             } else {
                 "Standalone"
             }
