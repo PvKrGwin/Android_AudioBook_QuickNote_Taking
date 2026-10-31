@@ -160,6 +160,7 @@ class VoiceRecordingService : Service() {
 
             val json = JSONObject()
                 .put("audioFile", audioFile.name)
+                .put("metadataVersion", 2)
                 .put("recordedAtEpochMs", recordedAt)
                 .put("type", if (mediaContext?.isStandalone == false) "MEDIA_LINKED" else "STANDALONE")
                 .put("title", mediaContext?.title ?: standaloneTitle)
