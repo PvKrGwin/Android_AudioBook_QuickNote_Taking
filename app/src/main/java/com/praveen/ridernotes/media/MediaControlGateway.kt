@@ -135,6 +135,20 @@ object MediaControlGateway {
         return false
     }
 
+    fun observeActivePlayback(context: Context) {
+        runCatching {
+            findControllers(context)
+                .filter { isMediaApp(context, it.packageName) }
+                .forEach { controller ->
+                    val state = controller.playbackState
+                    if (state?.state == PlaybackState.STATE_PLAYING) {
+                        observedPlayingPackages.add(controller.packageName)
+                        lastKnownPlayingAt[controller.packageName] = SystemClock.elapsedRealtime()
+                    }
+                }
+        }
+    }
+
     fun updateNotificationMetadata(sbn: StatusBarNotification) {
         if (sbn.packageName == "com.praveen.ridernotes") return
         val extras = sbn.notification.extras
@@ -325,8 +339,9 @@ object MediaControlGateway {
         }
         if (state.state != PlaybackState.STATE_PAUSED ||
             !observedPlayingPackages.contains(pkg)) return false
-        val pausedAt = state.lastPositionUpdateTime.takeIf { it > 0L }
-            ?: lastKnownPlayingAt[pkg] ?: return false
+        val observedAt = lastKnownPlayingAt[pkg] ?: return false
+        val pausedAt = state.lastPositionUpdateTime
+            .takeIf { it in observedAt..now } ?: observedAt
         return now - pausedAt in 0L..LINK_GRACE_MS
     }
 
