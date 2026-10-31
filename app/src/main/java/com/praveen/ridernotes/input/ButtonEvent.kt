@@ -132,10 +132,26 @@ data class ButtonEvent(
             sourceHex = "0x301",
             captureRoutes = setOf("Beauty-R1 gesture classifier"),
             details = when (gesture) {
-                RemotePressPatternDetector.Gesture.SINGLE -> "Single press — future Play/Pause"
+                RemotePressPatternDetector.Gesture.SINGLE -> "Single press — Play/Pause requested"
                 RemotePressPatternDetector.Gesture.DOUBLE -> "Double press — future voice note"
                 RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press — future rewind 10 seconds"
             }
+        )
+
+        fun mediaResult(message: String, successful: Boolean): ButtonEvent = ButtonEvent(
+            capturedAtMillis = System.currentTimeMillis(),
+            eventTimeMillis = android.os.SystemClock.uptimeMillis(),
+            action = if (successful) "MEDIA_OK" else "MEDIA_INFO",
+            keyCode = -1,
+            keyName = "PLAY_PAUSE_RESULT",
+            scanCode = 0,
+            repeatCount = 0,
+            isLongPress = false,
+            deviceId = -1,
+            deviceName = "Android media session",
+            sourceHex = "n/a",
+            captureRoutes = setOf("Rider Notes media controller"),
+            details = message
         )
     }
 }
