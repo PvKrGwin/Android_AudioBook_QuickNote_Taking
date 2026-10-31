@@ -233,7 +233,7 @@ class MainActivity : ComponentActivity() {
         if (notes.any { it.audioFile.name == playingFileName.value }) {
             stopNotePlayback()
         }
-        notes.forEach(SavedVoiceNoteRepository::delete)
+        notes.forEach { SavedVoiceNoteRepository.delete(it) }
         refreshSavedNotes()
     }
 
