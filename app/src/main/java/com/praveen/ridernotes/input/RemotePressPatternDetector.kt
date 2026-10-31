@@ -2,10 +2,7 @@ package com.praveen.ridernotes.input
 
 /**
  * Converts Beauty-R1's alternating volume-key clicks into logical gestures.
- *
- * KEYCODE_VOLUME_UP and KEYCODE_VOLUME_DOWN are deliberately treated as the
- * same physical button. The caller supplies one press for each ACTION_DOWN and
- * calls [resolve] after [windowMs] has elapsed.
+ * Volume Up and Volume Down are treated as the same physical button.
  */
 class RemotePressPatternDetector(
     private val windowMs: Long = DEFAULT_WINDOW_MS
@@ -13,7 +10,8 @@ class RemotePressPatternDetector(
     enum class Gesture {
         SINGLE,
         DOUBLE,
-        TRIPLE
+        TRIPLE,
+        QUADRUPLE
     }
 
     private var firstPressAt: Long? = null
@@ -24,10 +22,9 @@ class RemotePressPatternDetector(
     }
 
     /**
-     * Records one physical press. A triple press resolves immediately.
-     *
-     * If a new press arrives after the existing window, the older pattern is
-     * returned and the new press becomes the beginning of the next pattern.
+     * Records one physical press. Four presses resolve immediately. One to
+     * three presses wait for the window to close so triple can be distinguished
+     * from quadruple.
      */
     @Synchronized
     fun onPress(atMillis: Long): Gesture? {
@@ -44,18 +41,14 @@ class RemotePressPatternDetector(
         }
 
         pressCount += 1
-        return if (pressCount >= 3) {
+        return if (pressCount >= 4) {
             reset()
-            Gesture.TRIPLE
+            Gesture.QUADRUPLE
         } else {
             null
         }
     }
 
-    /**
-     * Resolves a pending single or double press once its recognition window
-     * has elapsed. Calling this too early leaves the pattern pending.
-     */
     @Synchronized
     fun resolve(atMillis: Long): Gesture? {
         val startedAt = firstPressAt ?: return null
@@ -66,7 +59,6 @@ class RemotePressPatternDetector(
         return completed
     }
 
-    /** Uptime at which the current pattern can be resolved by the caller. */
     @Synchronized
     fun resolutionDeadlineMillis(): Long? = firstPressAt?.plus(windowMs)
 
@@ -86,7 +78,8 @@ class RemotePressPatternDetector(
     private fun gestureFor(count: Int): Gesture = when (count) {
         1 -> Gesture.SINGLE
         2 -> Gesture.DOUBLE
-        else -> Gesture.TRIPLE
+        3 -> Gesture.TRIPLE
+        else -> Gesture.QUADRUPLE
     }
 
     companion object {
