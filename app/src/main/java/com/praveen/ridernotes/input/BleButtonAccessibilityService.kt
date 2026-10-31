@@ -73,12 +73,19 @@ class BleButtonAccessibilityService : AccessibilityService() {
             )
         )
 
-        if (gesture == RemotePressPatternDetector.Gesture.SINGLE) {
-            val result = MediaControlGateway.togglePlayPause(this)
+        val result = when (gesture) {
+            RemotePressPatternDetector.Gesture.SINGLE ->
+                MediaControlGateway.togglePlayPause(this)
+            RemotePressPatternDetector.Gesture.TRIPLE ->
+                MediaControlGateway.rewindTenSeconds(this)
+            RemotePressPatternDetector.Gesture.DOUBLE -> null
+        }
+
+        result?.let {
             ButtonEventStore.record(
                 ButtonEvent.mediaResult(
-                    message = result.message,
-                    successful = result.successful
+                    message = it.message,
+                    successful = it.successful
                 )
             )
         }
