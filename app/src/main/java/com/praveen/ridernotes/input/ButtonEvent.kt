@@ -134,7 +134,7 @@ data class ButtonEvent(
             details = when (gesture) {
                 RemotePressPatternDetector.Gesture.SINGLE -> "Single press — Play/Pause requested"
                 RemotePressPatternDetector.Gesture.DOUBLE -> "Double press — future voice note"
-                RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press — future rewind 10 seconds"
+                RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press — rewind 10 seconds requested"
             }
         )
 
@@ -143,7 +143,7 @@ data class ButtonEvent(
             eventTimeMillis = android.os.SystemClock.uptimeMillis(),
             action = if (successful) "MEDIA_OK" else "MEDIA_INFO",
             keyCode = -1,
-            keyName = "PLAY_PAUSE_RESULT",
+            keyName = "MEDIA_ACTION_RESULT",
             scanCode = 0,
             repeatCount = 0,
             isLongPress = false,
