@@ -20,7 +20,7 @@ The app must save audio before attempting transcription.
 
 If supported media is active or paused, double press captures the source app,
 available title/chapter and playback position, pauses media, acknowledges the
-start with a short beep, records for at most 25 seconds, acknowledges the stop,
+start with a short beep, records for at most 40 seconds, acknowledges the stop,
 then resumes only the media Rider Notes paused after about 1.5 seconds.
 
 If no supported media session is active or paused, double press records a
@@ -44,7 +44,7 @@ instead of reimplementing the workflows.
 4. Pause the active compatible media session when creating a linked voice note.
 5. Play a start acknowledgement.
 6. Record Praveen's voice in a foreground service with a visible indicator.
-7. Stop on another remote press or after 25 seconds.
+7. Stop on another remote press or after 40 seconds.
 8. Save the original audio first, then play a stop acknowledgement.
 9. Resume only the media session Rider Notes paused after about 1.5 seconds.
 10. Create a transcript for every recording and retain failed work for retry.
