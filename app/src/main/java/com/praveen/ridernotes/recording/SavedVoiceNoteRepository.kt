@@ -47,6 +47,17 @@ object SavedVoiceNoteRepository {
             .sortedByDescending { it.recordedAtEpochMs }
     }
 
+    fun delete(note: SavedVoiceNote): Boolean {
+        val parent = note.audioFile.parentFile ?: return false
+        val baseName = note.audioFile.nameWithoutExtension
+        val companionExtensions = listOf("json", "txt", "vtt", "srt")
+
+        companionExtensions.forEach { extension ->
+            File(parent, "$baseName.$extension").delete()
+        }
+        return note.audioFile.delete() || !note.audioFile.exists()
+    }
+
     private fun loadOne(audioFile: File): SavedVoiceNote {
         val metadataFile = File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
         val fallbackTime = audioFile.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()
