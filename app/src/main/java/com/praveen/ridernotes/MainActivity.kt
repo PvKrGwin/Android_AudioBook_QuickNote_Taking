@@ -18,6 +18,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -63,11 +64,32 @@ import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 import com.praveen.ridernotes.transcription.ScribTranscriber
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
     private val microphoneEnabled = mutableStateOf(false)
     private val scribStatus = mutableStateOf("")
+    private val backupStatus = mutableStateOf("")
+    private var pendingExportNotes: List<SavedVoiceNote> = emptyList()
+
+    private val exportBackupLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { destination ->
+        if (destination != null) exportPendingNotes(destination)
+    }
+
+    private val importBackupLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { source ->
+        if (source != null) importBackup(source)
+    }
     private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
     private val playingFileName = mutableStateOf<String?>(null)
     private var notePlayer: MediaPlayer? = null
@@ -93,6 +115,9 @@ class MainActivity : ComponentActivity() {
                     onRefreshNotes = ::refreshSavedNotes,
                     onPlayNote = ::playOrStopNote,
                     onDeleteNotes = ::deleteNotes,
+                    backupStatus = backupStatus,
+                    onExportNotes = ::requestExport,
+                    onImportBackup = ::requestImport,
                     onClear = ButtonEventStore::clear,
                     onCopy = ::copyResults
                 )
@@ -278,6 +303,78 @@ class MainActivity : ComponentActivity() {
         playingFileName.value = null
     }
 
+    private fun requestExport(notes: List<SavedVoiceNote>) {
+        if (notes.isEmpty()) return
+        pendingExportNotes = notes
+        val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm", Locale.US).format(Date())
+        exportBackupLauncher.launch("RiderNotes_Backup_$timestamp.zip")
+    }
+
+    private fun exportPendingNotes(destination: android.net.Uri) {
+        try {
+            contentResolver.openOutputStream(destination)?.use { stream ->
+                ZipOutputStream(stream).use { zip ->
+                    val added = mutableSetOf<String>()
+                    pendingExportNotes.forEach { note ->
+                        val parent = note.audioFile.parentFile ?: return@forEach
+                        val base = note.audioFile.nameWithoutExtension
+                        listOf("m4a", "json", "txt", "vtt", "srt").forEach { extension ->
+                            val file = File(parent, "$base.$extension")
+                            if (file.exists() && added.add(file.name)) {
+                                zip.putNextEntry(ZipEntry(file.name))
+                                file.inputStream().use { it.copyTo(zip) }
+                                zip.closeEntry()
+                            }
+                        }
+                    }
+                }
+            } ?: error("Google Drive destination could not be opened")
+            backupStatus.value =
+                "Exported ${pendingExportNotes.size} note(s). Google Drive will sync the backup."
+        } catch (error: Exception) {
+            backupStatus.value = "Export failed: ${error.javaClass.simpleName}"
+        } finally {
+            pendingExportNotes = emptyList()
+        }
+    }
+
+    private fun requestImport() {
+        importBackupLauncher.launch(arrayOf("application/zip", "application/octet-stream"))
+    }
+
+    private fun importBackup(source: android.net.Uri) {
+        var importedFiles = 0
+        try {
+            val folder = File(filesDir, "voice_notes").apply { mkdirs() }
+            val allowedExtensions = setOf("m4a", "json", "txt", "vtt", "srt")
+            contentResolver.openInputStream(source)?.use { stream ->
+                ZipInputStream(stream).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        val safeName = entry.name.substringAfterLast('/')
+                        val extension = safeName.substringAfterLast('.', "").lowercase()
+                        if (!entry.isDirectory &&
+                            safeName.isNotBlank() &&
+                            extension in allowedExtensions
+                        ) {
+                            File(folder, safeName).outputStream().use { output ->
+                                zip.copyTo(output)
+                            }
+                            importedFiles += 1
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            } ?: error("Backup could not be opened")
+            refreshSavedNotes()
+            backupStatus.value =
+                "Backup restored: $importedFiles file(s) imported."
+        } catch (error: Exception) {
+            backupStatus.value = "Import failed: ${error.javaClass.simpleName}"
+        }
+    }
+
     private fun enableScrib() {
         scribStatus.value = ScribTranscriber.enableScrib(this)
     }
@@ -307,6 +404,9 @@ private fun DetectorScreen(
     onRefreshNotes: () -> Unit,
     onPlayNote: (SavedVoiceNote) -> Unit,
     onDeleteNotes: (List<SavedVoiceNote>) -> Unit,
+    backupStatus: State<String>,
+    onExportNotes: (List<SavedVoiceNote>) -> Unit,
+    onImportBackup: () -> Unit,
     onClear: () -> Unit,
     onCopy: () -> Unit
 ) {
@@ -491,13 +591,25 @@ private fun DetectorScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
+                        OutlinedButton(onClick = onImportBackup) { Text("Import backup") }
                         if (selectedNotes.isNotEmpty()) {
+                            Button(onClick = { onExportNotes(selectedNotes) }) {
+                                Text("Export (${selectedNotes.size})")
+                            }
                             Button(onClick = { showDeleteConfirmation.value = true }) {
                                 Text("Delete (${selectedNotes.size})")
                             }
                         }
                     }
                     Spacer(Modifier.height(4.dp))
+                    if (backupStatus.value.isNotBlank()) {
+                        Text(
+                            backupStatus.value,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(4.dp))
+                    }
 
                     if (savedNotes.value.isEmpty()) {
                         Card {
