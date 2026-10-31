@@ -190,6 +190,7 @@ class VoiceRecordingService : Service() {
                 .put("sourcePackage", mediaContext?.packageName ?: JSONObject.NULL)
                 .put("sourceApp", mediaContext?.appName ?: JSONObject.NULL)
                 .put("subtitleOrChapter", mediaContext?.subtitle ?: JSONObject.NULL)
+                .put("author", mediaContext?.author ?: JSONObject.NULL)
                 .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
                 .put("transcriptionStatus", "PENDING")
 
