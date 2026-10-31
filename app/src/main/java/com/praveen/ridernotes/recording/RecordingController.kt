@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.core.content.ContextCompat
+import com.praveen.ridernotes.media.MediaControlGateway
 
 object RecordingController {
     @Volatile
@@ -19,13 +20,24 @@ object RecordingController {
         }
         if (isRecordingOrStarting) return "Recording is already active"
 
+        val mediaContext = MediaControlGateway.prepareForVoiceNote(context)
         isRecordingOrStarting = true
-        ContextCompat.startForegroundService(
-            context,
-            Intent(context, VoiceRecordingService::class.java)
-                .setAction(VoiceRecordingService.ACTION_START)
-        )
-        return "Recording start requested"
+        return try {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, VoiceRecordingService::class.java)
+                    .setAction(VoiceRecordingService.ACTION_START)
+            )
+            if (mediaContext.isStandalone) {
+                "Standalone recording start requested"
+            } else {
+                "Paused ${mediaContext.appName}; linked recording start requested"
+            }
+        } catch (error: RuntimeException) {
+            isRecordingOrStarting = false
+            MediaControlGateway.finishVoiceNote(context, delayMs = 0L)
+            "Recording could not start: ${error.javaClass.simpleName}"
+        }
     }
 
     fun stop(context: Context): String {
