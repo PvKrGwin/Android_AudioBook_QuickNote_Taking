@@ -50,8 +50,11 @@ class BleButtonAccessibilityService : AccessibilityService() {
         lastDeviceId = event.deviceId
         lastDeviceName = event.device?.name ?: "Beauty-R1"
 
+        // Use receipt time rather than KeyEvent.eventTime. Beauty-R1 can report
+        // an event timestamp behind Android's clock, shortening the real window.
+        val receivedAt = SystemClock.uptimeMillis()
         handler.removeCallbacks(resolvePendingGesture)
-        detector.onPress(event.eventTime)?.let(::recordGesture)
+        detector.onPress(receivedAt)?.let(::recordGesture)
 
         detector.resolutionDeadlineMillis()?.let { deadline ->
             handler.postAtTime(resolvePendingGesture, deadline)
