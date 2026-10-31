@@ -111,11 +111,10 @@ class VoiceRecordingService : Service() {
                     audioManager.setCommunicationDevice(bluetoothInput)
                 } else false
                 communicationRouteRequested = routeReady
-                val preferred = routeReady && setPreferredDevice(bluetoothInput)
-                if (!preferred) {
-                    // Preserve the known-working built-in microphone path.
-                    setPreferredDevice(null)
-                }
+                // Do not call setPreferredDevice(null): some Android recorder
+                // implementations reject a null device with IllegalArgumentException.
+                val preferred = routeReady && bluetoothInput != null &&
+                    runCatching { setPreferredDevice(bluetoothInput) }.getOrDefault(false)
                 recordingInputLabel = if (preferred) {
                     "Bluetooth communication route requested"
                 } else {
