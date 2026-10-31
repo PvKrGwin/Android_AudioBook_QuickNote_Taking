@@ -47,6 +47,10 @@ object MediaControlGateway {
     @Volatile
     private var voiceNoteContext: VoiceNoteMediaContext? = null
 
+    @Volatile
+    var lastVoiceNoteMetadataDiagnostic: String? = null
+        private set
+
     fun prepareForVoiceNote(context: Context): VoiceNoteMediaContext {
         val controller = try {
             findBestSupportedController(context)
@@ -67,6 +71,16 @@ object MediaControlGateway {
             else -> false
         }
         val metadata = controller.metadata
+        lastVoiceNoteMetadataDiagnostic = if (
+            controller.packageName == "com.audible.application"
+        ) {
+            audibleMetadataDiagnostic(
+                metadata,
+                notificationTextByPackage[controller.packageName].orEmpty()
+            )
+        } else {
+            null
+        }
         val (mediaTitle, mediaChapter) = mediaFields(
             controller.packageName,
             metadata,
@@ -93,6 +107,33 @@ object MediaControlGateway {
     }
 
     fun currentVoiceNoteContext(): VoiceNoteMediaContext? = voiceNoteContext
+
+    fun ensureVoiceNoteMediaPaused(context: Context): Boolean {
+        val savedContext = voiceNoteContext ?: return true
+        if (!savedContext.wasPlaying || savedContext.packageName == null) return true
+
+        val controller = try {
+            findControllers(context)
+                .firstOrNull { it.packageName == savedContext.packageName }
+        } catch (_: Exception) {
+            null
+        } ?: return false
+
+        val stillPlaying = when (controller.playbackState?.state) {
+            PlaybackState.STATE_PLAYING,
+            PlaybackState.STATE_BUFFERING,
+            PlaybackState.STATE_CONNECTING -> true
+            else -> false
+        }
+        if (!stillPlaying) return true
+
+        if (supports(controller, PlaybackState.ACTION_PAUSE)) {
+            controller.transportControls.pause()
+        } else {
+            dispatchMediaKey(controller, KeyEvent.KEYCODE_MEDIA_PAUSE)
+        }
+        return false
+    }
 
     fun updateNotificationMetadata(sbn: StatusBarNotification) {
         if (sbn.packageName !in supportedPackages) return
@@ -300,6 +341,29 @@ object MediaControlGateway {
         )
     }
 
+    private fun metadataTextValues(metadata: MediaMetadata?): List<String> {
+        if (metadata == null) return emptyList()
+        @Suppress("DEPRECATION")
+        return metadata.bundle.keySet()
+            .mapNotNull { key ->
+                val value = metadata.bundle.get(key)
+                (value as? CharSequence)
+                    ?.toString()
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+            }
+            .distinct()
+    }
+
+    private fun audibleMetadataDiagnostic(
+        metadata: MediaMetadata?,
+        notificationText: List<String>
+    ): String {
+        val mediaValues = metadataTextValues(metadata).joinToString(" | ")
+        val notificationValues = notificationText.joinToString(" | ")
+        return "media=[$mediaValues]; notification=[$notificationValues]"
+    }
+
     private fun mediaFields(
         packageName: String,
         metadata: MediaMetadata?,
@@ -344,10 +408,13 @@ object MediaControlGateway {
                     if (candidate.isNullOrBlank() || candidate.length < 2) return false
                     if (excluded.any { it.equals(candidate, ignoreCase = true) }) return false
                     if (candidate.matches(Regex("""\d{1,2}:\d{2}(:\d{2})?"""))) return false
+                    if (candidate.startsWith("http", ignoreCase = true)) return false
+                    if (candidate.length > 200) return false
                     return true
                 }
 
                 val candidates = listOfNotNull(displayDescription, displayTitle) +
+                    metadataTextValues(metadata).filter(::isUseful) +
                     notificationText.filter(::isUseful)
                 val chapterOrEpisode = candidates
                     .filter(::isUseful)
