@@ -62,12 +62,12 @@ object MediaControlGateway {
             else -> false
         }
         val metadata = controller.metadata
+        val (mediaTitle, mediaChapter) = mediaFields(controller.packageName, metadata)
         val noteContext = VoiceNoteMediaContext(
             packageName = controller.packageName,
             appName = appLabel(context, controller.packageName),
-            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE),
-            subtitle = metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
-                ?: metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            title = mediaTitle,
+            subtitle = mediaChapter,
             playbackPositionMs = state?.let(::estimatedPosition),
             wasPlaying = wasPlaying
         )
@@ -251,6 +251,54 @@ object MediaControlGateway {
         controller.dispatchMediaButtonEvent(
             KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0)
         )
+    }
+
+    private fun mediaFields(
+        packageName: String,
+        metadata: MediaMetadata?
+    ): Pair<String?, String?> {
+        if (metadata == null) return null to null
+
+        fun value(key: String): String? =
+            metadata.getString(key)?.trim()?.takeIf { it.isNotBlank() }
+
+        val title = value(MediaMetadata.METADATA_KEY_TITLE)
+        val displayTitle = value(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
+        val displaySubtitle = value(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+        val displayDescription = value(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION)
+        val album = value(MediaMetadata.METADATA_KEY_ALBUM)
+        val author = value(MediaMetadata.METADATA_KEY_AUTHOR)
+            ?: value(MediaMetadata.METADATA_KEY_ARTIST)
+
+        return when (packageName) {
+            "com.google.android.apps.books" -> {
+                // Play Books publishes the chapter as TITLE and the book as
+                // DISPLAY_SUBTITLE/ALBUM, which is the reverse of our generic labels.
+                val bookTitle = displaySubtitle ?: album ?: displayTitle ?: title
+                val chapter = title
+                    ?.takeUnless { it.equals(bookTitle, ignoreCase = true) }
+                bookTitle to chapter
+            }
+
+            "com.audible.application" -> {
+                // Audible commonly publishes the author as DISPLAY_SUBTITLE.
+                // Never label that value as a chapter.
+                val bookTitle = title ?: album ?: displayTitle
+                val chapter = listOf(displayDescription, displayTitle)
+                    .firstOrNull { candidate ->
+                        !candidate.isNullOrBlank() &&
+                            !candidate.equals(bookTitle, ignoreCase = true) &&
+                            !candidate.equals(author, ignoreCase = true) &&
+                            !candidate.equals(displaySubtitle, ignoreCase = true)
+                    }
+                bookTitle to chapter
+            }
+
+            else -> {
+                val chapter = displaySubtitle ?: album
+                title to chapter
+            }
+        }
     }
 
     private fun appLabel(context: Context, packageName: String): String =
