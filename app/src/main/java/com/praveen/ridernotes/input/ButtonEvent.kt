@@ -139,6 +139,22 @@ data class ButtonEvent(
             }
         )
 
+        fun recordingResult(message: String, successful: Boolean): ButtonEvent = ButtonEvent(
+            capturedAtMillis = System.currentTimeMillis(),
+            eventTimeMillis = android.os.SystemClock.uptimeMillis(),
+            action = if (successful) "RECORDING_OK" else "RECORDING_INFO",
+            keyCode = -1,
+            keyName = "VOICE_NOTE_RESULT",
+            scanCode = 0,
+            repeatCount = 0,
+            isLongPress = false,
+            deviceId = -1,
+            deviceName = "Phone microphone",
+            sourceHex = "n/a",
+            captureRoutes = setOf("Rider Notes recorder"),
+            details = message
+        )
+
         fun mediaResult(message: String, successful: Boolean): ButtonEvent = ButtonEvent(
             capturedAtMillis = System.currentTimeMillis(),
             eventTimeMillis = android.os.SystemClock.uptimeMillis(),
