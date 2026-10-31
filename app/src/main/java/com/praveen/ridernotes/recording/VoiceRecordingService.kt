@@ -13,9 +13,10 @@ import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import com.praveen.ridernotes.MainActivity
-import com.praveen.ridernotes.R
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
+import com.praveen.ridernotes.media.MediaControlGateway
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -45,7 +46,6 @@ class VoiceRecordingService : Service() {
 
     private fun startRecordingFlow() {
         if (recordingStarted || recorder != null) return
-
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
         playBeep()
         handler.postDelayed(beginAfterBeep, START_BEEP_GAP_MS)
@@ -82,6 +82,7 @@ class VoiceRecordingService : Service() {
             recorder = null
             recordingStarted = false
             RecordingController.isRecordingOrStarting = false
+            MediaControlGateway.finishVoiceNote(this)
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
                     "Recording failed: ${error.javaClass.simpleName}",
@@ -117,16 +118,61 @@ class VoiceRecordingService : Service() {
         outputFile = null
         RecordingController.isRecordingOrStarting = false
 
+        val mediaContext = MediaControlGateway.currentVoiceNoteContext()
+        if (saved && file != null) {
+            saveMetadata(file, mediaContext)
+        }
+
         playBeep()
+        val source = if (mediaContext?.isStandalone == false) {
+            " linked to ${mediaContext.appName}"
+        } else {
+            " as standalone thought"
+        }
         val message = if (saved) {
-            "Saved ${file?.name} (${size / 1024} KB); stopped by $reason"
+            "Saved ${file?.name} (${size / 1024} KB)$source; stopped by $reason"
         } else {
             "Recording stopped before audio was saved"
         }
         ButtonEventStore.record(ButtonEvent.recordingResult(message, saved))
 
+        MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun saveMetadata(
+        audioFile: File,
+        mediaContext: MediaControlGateway.VoiceNoteMediaContext?
+    ) {
+        try {
+            val recordedAt = System.currentTimeMillis()
+            val standaloneTitle = SimpleDateFormat(
+                "dd MMM yyyy, h:mm a",
+                Locale.getDefault()
+            ).format(Date(recordedAt))
+
+            val json = JSONObject()
+                .put("audioFile", audioFile.name)
+                .put("recordedAtEpochMs", recordedAt)
+                .put("type", if (mediaContext?.isStandalone == false) "MEDIA_LINKED" else "STANDALONE")
+                .put("title", mediaContext?.title ?: standaloneTitle)
+                .put("sourcePackage", mediaContext?.packageName ?: JSONObject.NULL)
+                .put("sourceApp", mediaContext?.appName ?: JSONObject.NULL)
+                .put("subtitleOrChapter", mediaContext?.subtitle ?: JSONObject.NULL)
+                .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
+                .put("transcriptionStatus", "PENDING")
+
+            File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
+                .writeText(json.toString(2))
+        } catch (error: Exception) {
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "Audio saved, but metadata failed: ${error.javaClass.simpleName}",
+                    false
+                )
+            )
+        }
     }
 
     private fun playBeep() {
@@ -187,6 +233,7 @@ class VoiceRecordingService : Service() {
         private const val NOTIFICATION_ID = 2001
         private const val MAX_RECORDING_MS = 25_000L
         private const val START_BEEP_GAP_MS = 250L
+        private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 120
     }
 }
