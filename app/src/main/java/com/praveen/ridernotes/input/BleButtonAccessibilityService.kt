@@ -2,6 +2,13 @@ package com.praveen.ridernotes.input
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -20,6 +27,15 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
     private var lastDeviceId = -1
     private var lastDeviceName = "Beauty-R1"
+    private var screenReceiverRegistered = false
+
+    private val screenOnReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == Intent.ACTION_SCREEN_ON) {
+                playScreenReadyTone()
+            }
+        }
+    }
 
     private val resolvePendingGesture = Runnable {
         detector.resolve(SystemClock.uptimeMillis())?.let(::recordGesture)
@@ -30,6 +46,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
         serviceInfo = serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         }
+        registerScreenOnReceiver()
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -121,6 +138,25 @@ class BleButtonAccessibilityService : AccessibilityService() {
         return isBeautyDevice && isAlternatingCameraKey
     }
 
+    private fun registerScreenOnReceiver() {
+        if (screenReceiverRegistered) return
+        val filter = IntentFilter(Intent.ACTION_SCREEN_ON)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(screenOnReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(screenOnReceiver, filter)
+        }
+        screenReceiverRegistered = true
+    }
+
+    private fun playScreenReadyTone() {
+        ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_READY_VOLUME).apply {
+            startTone(ToneGenerator.TONE_PROP_ACK, SCREEN_READY_BEEP_MS)
+            handler.postDelayed({ release() }, SCREEN_READY_BEEP_MS + 50L)
+        }
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Screen content is deliberately not inspected.
     }
@@ -133,6 +169,15 @@ class BleButtonAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacks(resolvePendingGesture)
         detector.cancel()
+        if (screenReceiverRegistered) {
+            unregisterReceiver(screenOnReceiver)
+            screenReceiverRegistered = false
+        }
         super.onDestroy()
+    }
+
+    companion object {
+        private const val SCREEN_READY_BEEP_MS = 180
+        private const val SCREEN_READY_VOLUME = 85
     }
 }
