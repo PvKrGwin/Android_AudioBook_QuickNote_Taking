@@ -28,7 +28,7 @@ class VoiceRecordingService : Service() {
     private var outputFile: File? = null
     private var recordingStarted = false
 
-    private val autoStop = Runnable { stopAndSave("25-second auto-stop") }
+    private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
 
     override fun onCreate() {
@@ -231,7 +231,7 @@ class VoiceRecordingService : Service() {
 
         private const val CHANNEL_ID = "rider_notes_recording"
         private const val NOTIFICATION_ID = 2001
-        private const val MAX_RECORDING_MS = 25_000L
+        private const val MAX_RECORDING_MS = 40_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 120
