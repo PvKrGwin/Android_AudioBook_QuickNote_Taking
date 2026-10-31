@@ -14,6 +14,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import org.json.JSONObject
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.io.FileOutputStream
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
@@ -73,6 +74,7 @@ object OfflineTranscriber {
             readPipe = pipe[0]
             writePipe = pipe[1]
 
+            val segmentedText = StringBuilder()
             recognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
             recognizer.setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) = Unit
@@ -96,6 +98,27 @@ object OfflineTranscriber {
                 }
 
                 override fun onPartialResults(partialResults: Bundle?) = Unit
+
+                override fun onSegmentResults(segmentResults: Bundle) {
+                    val segment = segmentResults
+                        .getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        ?.trim()
+                    if (!segment.isNullOrBlank()) {
+                        if (segmentedText.isNotEmpty()) segmentedText.append(' ')
+                        segmentedText.append(segment)
+                    }
+                }
+
+                override fun onEndOfSegmentedSession() {
+                    val text = segmentedText.toString().trim()
+                    if (text.isBlank()) {
+                        finish("NO_SPEECH", error = "No clear speech was recognised")
+                    } else {
+                        finish("COMPLETED", transcript = text)
+                    }
+                }
+
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
             })
 
@@ -104,10 +127,14 @@ object OfflineTranscriber {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toLanguageTag())
                 putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                putExtra(
+                    RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                    RecognizerIntent.EXTRA_AUDIO_SOURCE
+                )
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, readPipe)
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
                 putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
-                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, 44_100)
+                putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, TARGET_SAMPLE_RATE)
             }
 
             recognizer.startListening(recognitionIntent)
@@ -158,6 +185,9 @@ object OfflineTranscriber {
             codec.start()
 
             val info = MediaCodec.BufferInfo()
+            val decodedPcm = ByteArrayOutputStream()
+            var decodedSampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            var decodedChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
             var inputEnded = false
             var outputEnded = false
 
@@ -186,12 +216,23 @@ object OfflineTranscriber {
                         outputBuffer.limit(info.offset + info.size)
                         val bytes = ByteArray(info.size)
                         outputBuffer.get(bytes)
-                        output.write(bytes)
+                        decodedPcm.write(bytes)
                     }
                     outputEnded = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
                     codec.releaseOutputBuffer(outputIndex, false)
+                } else if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    val outputFormat = codec.outputFormat
+                    decodedSampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                    decodedChannels = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
                 }
             }
+
+            val recognizerPcm = toMono16Khz(
+                decodedPcm.toByteArray(),
+                decodedSampleRate,
+                decodedChannels
+            )
+            output.write(recognizerPcm)
             output.flush()
         } finally {
             try {
@@ -202,6 +243,41 @@ object OfflineTranscriber {
             codec?.release()
             extractor.release()
         }
+    }
+
+    private fun toMono16Khz(
+        source: ByteArray,
+        sourceRate: Int,
+        channelCount: Int
+    ): ByteArray {
+        if (source.isEmpty()) return source
+        val channels = channelCount.coerceAtLeast(1)
+        val sourceFrames = source.size / (2 * channels)
+        if (sourceFrames <= 0) return ByteArray(0)
+
+        val targetFrames =
+            ((sourceFrames.toLong() * TARGET_SAMPLE_RATE) / sourceRate).toInt()
+        val result = ByteArray(targetFrames * 2)
+
+        for (targetFrame in 0 until targetFrames) {
+            val sourceFrame =
+                ((targetFrame.toLong() * sourceRate) / TARGET_SAMPLE_RATE)
+                    .toInt()
+                    .coerceAtMost(sourceFrames - 1)
+
+            var sum = 0
+            for (channel in 0 until channels) {
+                val byteIndex = (sourceFrame * channels + channel) * 2
+                val low = source[byteIndex].toInt() and 0xFF
+                val high = source[byteIndex + 1].toInt()
+                sum += (high shl 8) or low
+            }
+
+            val monoSample = (sum / channels).coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+            result[targetFrame * 2] = (monoSample and 0xFF).toByte()
+            result[targetFrame * 2 + 1] = ((monoSample shr 8) and 0xFF).toByte()
+        }
+        return result
     }
 
     private fun metadataFileFor(audioFile: File) =
@@ -241,5 +317,6 @@ object OfflineTranscriber {
         else -> "Speech recognition error " + error
     }
 
+    private const val TARGET_SAMPLE_RATE = 16_000
     private const val CODEC_TIMEOUT_US = 10_000L
 }
