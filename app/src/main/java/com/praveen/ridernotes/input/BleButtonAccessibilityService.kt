@@ -11,7 +11,7 @@ import com.praveen.ridernotes.media.MediaControlGateway
 
 /**
  * Observes hardware keys globally and classifies Beauty-R1's usable camera
- * button as a single, double or triple press.
+ * button as a single, double, triple or four-press gesture.
  */
 class BleButtonAccessibilityService : AccessibilityService() {
     private val detector = RemotePressPatternDetector()
@@ -78,6 +78,8 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 MediaControlGateway.togglePlayPause(this)
             RemotePressPatternDetector.Gesture.TRIPLE ->
                 MediaControlGateway.rewindTenSeconds(this)
+            RemotePressPatternDetector.Gesture.QUADRUPLE ->
+                MediaControlGateway.forwardTenSeconds(this)
             RemotePressPatternDetector.Gesture.DOUBLE -> null
         }
 
