@@ -12,7 +12,7 @@ import kotlin.math.max
 object MediaControlGateway {
     @Volatile var notificationAccessConnected: Boolean = false
 
-    private const val REWIND_MS = 10_000L
+    private const val SEEK_STEP_MS = 10_000L
 
     private val supportedPackages = setOf(
         "com.audible.application",
@@ -67,7 +67,7 @@ object MediaControlGateway {
             when {
                 supports(mediaController, PlaybackState.ACTION_SEEK_TO) -> {
                     val currentPosition = estimatedPosition(state)
-                    val targetPosition = max(0L, currentPosition - REWIND_MS)
+                    val targetPosition = max(0L, currentPosition - SEEK_STEP_MS)
                     mediaController.transportControls.seekTo(targetPosition)
                     Result(true, "Rewound $packageLabel by 10 seconds")
                 }
@@ -79,6 +79,32 @@ object MediaControlGateway {
             }
         } catch (error: RuntimeException) {
             Result(false, "Rewind failed: ${error.javaClass.simpleName}")
+        }
+    }
+
+    fun forwardTenSeconds(context: Context): Result {
+        val controller = controllerOrResult(context)
+        if (controller.second != null) return controller.second!!
+        val mediaController = controller.first!!
+        val packageLabel = appLabel(context, mediaController.packageName)
+        val state = mediaController.playbackState
+            ?: return Result(false, "$packageLabel has no playback position")
+
+        return try {
+            when {
+                supports(mediaController, PlaybackState.ACTION_SEEK_TO) -> {
+                    val targetPosition = estimatedPosition(state) + SEEK_STEP_MS
+                    mediaController.transportControls.seekTo(targetPosition)
+                    Result(true, "Forwarded $packageLabel by 10 seconds")
+                }
+                supports(mediaController, PlaybackState.ACTION_FAST_FORWARD) -> {
+                    mediaController.transportControls.fastForward()
+                    Result(true, "Used $packageLabel forward command")
+                }
+                else -> Result(false, "$packageLabel does not expose forward control")
+            }
+        } catch (error: RuntimeException) {
+            Result(false, "Forward failed: ${error.javaClass.simpleName}")
         }
     }
 
