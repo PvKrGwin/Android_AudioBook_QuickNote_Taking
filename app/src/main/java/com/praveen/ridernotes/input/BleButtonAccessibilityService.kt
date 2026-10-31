@@ -170,27 +170,36 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private fun acknowledgeScreenOffPress() {
         val power = getSystemService(Context.POWER_SERVICE) as PowerManager
         val now = SystemClock.elapsedRealtime()
-        // Some remote presses wake Android just before accessibility receives
-        // the key. A short grace window preserves the screen-off acknowledgement.
+        // Remote keys can wake the phone slightly before the accessibility callback.
         val screenWasOff = !power.isInteractive || screenOffObserved ||
             (lastScreenWakeAt > 0L && now - lastScreenWakeAt in 0L..350L)
         if (!screenWasOff || now - lastScreenOffBeepAt < 1200L) return
 
         lastScreenOffBeepAt = now
         val outcome = runCatching {
-            ToneGenerator(AudioManager.STREAM_MUSIC, 100).also { tone ->
-                val started = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 1000)
-                handler.postDelayed({ tone.release() }, 1150L)
-                if (!started) error("ToneGenerator refused playback")
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            handler.post {
+                val firstStarted = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 160)
+                handler.postDelayed({
+                    val secondStarted = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 160)
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            "SCREEN_OFF_BUTTON_BEEP: two short beeps requested (first=$firstStarted, second=$secondStarted)",
+                            firstStarted && secondStarted
+                        )
+                    )
+                    handler.postDelayed({ tone.release() }, 220L)
+                }, 320L)
             }
         }
-        ButtonEventStore.record(
-            ButtonEvent.recordingResult(
-                message = if (outcome.isSuccess) "SCREEN_OFF_BUTTON_BEEP: requested 1000 ms tone"
-                    else "SCREEN_OFF_BUTTON_BEEP failed: ${outcome.exceptionOrNull()?.javaClass?.simpleName}",
-                successful = outcome.isSuccess
+        if (outcome.isFailure) {
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "SCREEN_OFF_BUTTON_BEEP failed: ${outcome.exceptionOrNull()?.javaClass?.simpleName}",
+                    false
+                )
             )
-        )
+        }
     }
 
     private fun playScreenReadyTone() {
