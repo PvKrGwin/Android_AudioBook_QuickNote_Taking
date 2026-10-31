@@ -19,7 +19,7 @@ import com.praveen.ridernotes.MainActivity
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
-import com.praveen.ridernotes.transcription.OfflineTranscriber
+import com.praveen.ridernotes.transcription.ScribTranscriber
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -173,7 +173,7 @@ class VoiceRecordingService : Service() {
         val mediaContext = MediaControlGateway.currentVoiceNoteContext()
         if (saved && file != null) {
             saveMetadata(file, mediaContext)
-            OfflineTranscriber.enqueue(this, file)
+            ScribTranscriber.enqueue(this, file)
         }
 
         playBeep()
