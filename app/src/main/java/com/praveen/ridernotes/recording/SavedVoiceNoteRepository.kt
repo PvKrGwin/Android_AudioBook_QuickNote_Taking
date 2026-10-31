@@ -66,12 +66,27 @@ object SavedVoiceNoteRepository {
 
         return try {
             val json = JSONObject(metadataFile.readText())
+            val metadataVersion = json.optInt("metadataVersion", 1)
+            val sourceApp = json.optNullableString("sourceApp") ?: "Standalone"
+            var title = json.optNullableString("title") ?: audioFile.nameWithoutExtension
+            var chapter = json.optNullableString("subtitleOrChapter")
+
+            // Correct recordings made before app-specific metadata mapping was added.
+            if (metadataVersion < 2 && sourceApp == "Google Play Books") {
+                val oldTitle = title
+                title = chapter ?: oldTitle
+                chapter = oldTitle.takeUnless { it.equals(title, ignoreCase = true) }
+            } else if (metadataVersion < 2 && sourceApp == "Audible") {
+                // The old generic mapper stored Audible's author as the chapter.
+                chapter = null
+            }
+
             SavedVoiceNote(
                 audioFile = audioFile,
                 recordedAtEpochMs = json.optLong("recordedAtEpochMs", fallbackTime),
-                title = json.optNullableString("title") ?: audioFile.nameWithoutExtension,
-                sourceApp = json.optNullableString("sourceApp") ?: "Standalone",
-                chapter = json.optNullableString("subtitleOrChapter"),
+                title = title,
+                sourceApp = sourceApp,
+                chapter = chapter,
                 playbackPositionMs = json.optNullableLong("playbackPositionMs"),
                 transcriptionStatus = json.optNullableString("transcriptionStatus") ?: "NOT_STARTED",
                 transcript = json.optNullableString("transcript")
