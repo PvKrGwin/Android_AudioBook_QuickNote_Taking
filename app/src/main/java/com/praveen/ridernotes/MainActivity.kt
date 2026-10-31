@@ -21,6 +21,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,6 +53,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
@@ -381,6 +384,15 @@ private fun DetectorScreen(
 
             when (selectedTab.value) {
                 0 -> {
+                    Image(
+                        painter = painterResource(R.drawable.rider_notes_logo),
+                        contentDescription = "Rider Notes logo",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(170.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    Spacer(Modifier.height(8.dp))
                     StatusCard(
                         enabled = detectorEnabled.value,
                         onOpenSettings = onOpenAccessibilitySettings
