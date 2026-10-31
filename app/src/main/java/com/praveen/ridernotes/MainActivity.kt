@@ -32,7 +32,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +42,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
@@ -82,6 +85,7 @@ class MainActivity : ComponentActivity() {
                     playingFileName = playingFileName,
                     onRefreshNotes = ::refreshSavedNotes,
                     onPlayNote = ::playOrStopNote,
+                    onDeleteNotes = ::deleteNotes,
                     onClear = ButtonEventStore::clear,
                     onCopy = ::copyResults
                 )
@@ -225,6 +229,14 @@ class MainActivity : ComponentActivity() {
         savedNotes.value = SavedVoiceNoteRepository.load(this)
     }
 
+    private fun deleteNotes(notes: List<SavedVoiceNote>) {
+        if (notes.any { it.audioFile.name == playingFileName.value }) {
+            stopNotePlayback()
+        }
+        notes.forEach(SavedVoiceNoteRepository::delete)
+        refreshSavedNotes()
+    }
+
     private fun playOrStopNote(note: SavedVoiceNote) {
         if (playingFileName.value == note.audioFile.name) {
             stopNotePlayback()
@@ -280,12 +292,47 @@ private fun DetectorScreen(
     playingFileName: State<String?>,
     onRefreshNotes: () -> Unit,
     onPlayNote: (SavedVoiceNote) -> Unit,
+    onDeleteNotes: (List<SavedVoiceNote>) -> Unit,
     onClear: () -> Unit,
     onCopy: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
     val expandedSources = remember { mutableStateOf<Set<String>>(emptySet()) }
+    val selectedNotePaths = remember { mutableStateOf<Set<String>>(emptySet()) }
+    val showDeleteConfirmation = remember { mutableStateOf(false) }
+    val selectedNotes = savedNotes.value.filter {
+        it.audioFile.absolutePath in selectedNotePaths.value
+    }
+
+    if (showDeleteConfirmation.value) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation.value = false },
+            title = { Text("Delete selected notes?") },
+            text = {
+                Text(
+                    "This permanently deletes ${selectedNotes.size} recording(s), " +
+                        "including their transcripts and metadata."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteNotes(selectedNotes)
+                        selectedNotePaths.value = emptySet()
+                        showDeleteConfirmation.value = false
+                    }
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation.value = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold { innerPadding ->
         Column(
@@ -363,17 +410,22 @@ private fun DetectorScreen(
                         .groupBy { it.sourceApp }
                         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
 
+                    Text(
+                        "Saved notes",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            "Saved notes",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
                         OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
+                        if (selectedNotes.isNotEmpty()) {
+                            Button(onClick = { showDeleteConfirmation.value = true }) {
+                                Text("Delete (${selectedNotes.size})")
+                            }
+                        }
                     }
                     Spacer(Modifier.height(4.dp))
 
@@ -426,6 +478,18 @@ private fun DetectorScreen(
                                             note = note,
                                             isPlaying =
                                                 playingFileName.value == note.audioFile.name,
+                                            isSelected =
+                                                note.audioFile.absolutePath in selectedNotePaths.value,
+                                            onSelectionChange = { selected ->
+                                                selectedNotePaths.value =
+                                                    if (selected) {
+                                                        selectedNotePaths.value +
+                                                            note.audioFile.absolutePath
+                                                    } else {
+                                                        selectedNotePaths.value -
+                                                            note.audioFile.absolutePath
+                                                    }
+                                            },
                                             onPlay = { onPlayNote(note) }
                                         )
                                     }
@@ -477,6 +541,8 @@ private fun DetectorScreen(
 private fun SavedNoteCard(
     note: SavedVoiceNote,
     isPlaying: Boolean,
+    isSelected: Boolean,
+    onSelectionChange: (Boolean) -> Unit,
     onPlay: () -> Unit
 ) {
     Card(
@@ -487,7 +553,16 @@ private fun SavedNoteCard(
             modifier = Modifier.padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(5.dp)
         ) {
-            Text(note.title, fontWeight = FontWeight.Bold)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = onSelectionChange
+                )
+                Text(note.title, fontWeight = FontWeight.Bold)
+            }
             Text("${note.sourceApp} · ${note.recordedAtLabel}")
             note.chapter?.let {
                 val label = if (note.sourceApp == "Audible") {
