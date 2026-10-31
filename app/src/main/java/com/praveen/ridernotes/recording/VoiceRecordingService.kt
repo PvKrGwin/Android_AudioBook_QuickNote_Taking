@@ -234,6 +234,6 @@ class VoiceRecordingService : Service() {
         private const val MAX_RECORDING_MS = 40_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
-        private const val BEEP_MS = 180
+        private const val BEEP_MS = 300
     }
 }
