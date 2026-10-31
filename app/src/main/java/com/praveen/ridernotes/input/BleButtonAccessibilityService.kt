@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import com.praveen.ridernotes.media.MediaControlGateway
+import com.praveen.ridernotes.recording.RecordingController
 
 /**
  * Observes hardware keys globally and classifies Beauty-R1's usable camera
@@ -36,6 +37,17 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
         if (!event.isBeautyCameraButton()) {
             return false
+        }
+
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            event.repeatCount == 0 &&
+            RecordingController.isRecordingOrStarting
+        ) {
+            handler.removeCallbacks(resolvePendingGesture)
+            detector.cancel()
+            val message = RecordingController.stop(this)
+            ButtonEventStore.record(ButtonEvent.recordingResult(message, true))
+            return true
         }
 
         // Consume both halves of Beauty-R1's volume-shaped click so the gesture
@@ -80,7 +92,16 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 MediaControlGateway.rewindTenSeconds(this)
             RemotePressPatternDetector.Gesture.QUADRUPLE ->
                 MediaControlGateway.forwardTenSeconds(this)
-            RemotePressPatternDetector.Gesture.DOUBLE -> null
+            RemotePressPatternDetector.Gesture.DOUBLE -> {
+                val message = RecordingController.start(this)
+                ButtonEventStore.record(
+                    ButtonEvent.recordingResult(
+                        message = message,
+                        successful = message == "Recording start requested"
+                    )
+                )
+                null
+            }
         }
 
         result?.let {
