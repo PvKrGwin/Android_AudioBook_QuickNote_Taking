@@ -305,10 +305,8 @@ object MediaControlGateway {
         metadata: MediaMetadata?,
         notificationText: List<String>
     ): Pair<String?, String?> {
-        if (metadata == null) return null to null
-
         fun value(key: String): String? =
-            metadata.getString(key)?.trim()?.takeIf { it.isNotBlank() }
+            metadata?.getString(key)?.trim()?.takeIf { it.isNotBlank() }
 
         val title = value(MediaMetadata.METADATA_KEY_TITLE)
         val displayTitle = value(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
@@ -333,6 +331,7 @@ object MediaControlGateway {
                 // while chapter/episode text may live in DISPLAY_DESCRIPTION,
                 // DISPLAY_TITLE, or only in its playback notification.
                 val bookOrEpisodeTitle = title ?: album ?: displayTitle
+                    ?: notificationText.firstOrNull()
                 val excluded = listOfNotNull(
                     bookOrEpisodeTitle,
                     album,
@@ -344,7 +343,7 @@ object MediaControlGateway {
                 fun isUseful(candidate: String?): Boolean {
                     if (candidate.isNullOrBlank() || candidate.length < 2) return false
                     if (excluded.any { it.equals(candidate, ignoreCase = true) }) return false
-                    if (candidate.matches(Regex("""\\d{1,2}:\\d{2}(:\\d{2})?"""))) return false
+                    if (candidate.matches(Regex("""\d{1,2}:\d{2}(:\d{2})?"""))) return false
                     return true
                 }
 
