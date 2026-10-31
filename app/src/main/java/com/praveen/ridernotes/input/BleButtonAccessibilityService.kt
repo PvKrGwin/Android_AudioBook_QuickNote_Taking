@@ -97,7 +97,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 ButtonEventStore.record(
                     ButtonEvent.recordingResult(
                         message = message,
-                        successful = message == "Recording start requested"
+                        successful = message.endsWith("recording start requested")
                     )
                 )
                 null
