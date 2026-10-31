@@ -66,6 +66,10 @@ class RemotePressPatternDetector(
         return completed
     }
 
+    /** Uptime at which the current pattern can be resolved by the caller. */
+    @Synchronized
+    fun resolutionDeadlineMillis(): Long? = firstPressAt?.plus(windowMs)
+
     @Synchronized
     fun cancel() = reset()
 
