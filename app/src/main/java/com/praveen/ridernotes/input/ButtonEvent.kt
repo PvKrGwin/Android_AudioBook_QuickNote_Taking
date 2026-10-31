@@ -6,12 +6,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * A readable snapshot of one external-input event.
- *
- * Android reuses input-event objects internally, so we copy the useful values
- * immediately instead of storing the original object.
- */
+/** A readable snapshot of one external-input event. */
 data class ButtonEvent(
     val capturedAtMillis: Long,
     val eventTimeMillis: Long,
@@ -118,6 +113,30 @@ data class ButtonEvent(
                     "vScroll=$vertical, hScroll=$horizontal"
             )
         }
+
+        fun gesture(
+            gesture: RemotePressPatternDetector.Gesture,
+            deviceId: Int,
+            deviceName: String
+        ): ButtonEvent = ButtonEvent(
+            capturedAtMillis = System.currentTimeMillis(),
+            eventTimeMillis = android.os.SystemClock.uptimeMillis(),
+            action = "GESTURE",
+            keyCode = -1,
+            keyName = "BEAUTY_${gesture.name}",
+            scanCode = 0,
+            repeatCount = 0,
+            isLongPress = false,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            sourceHex = "0x301",
+            captureRoutes = setOf("Beauty-R1 gesture classifier"),
+            details = when (gesture) {
+                RemotePressPatternDetector.Gesture.SINGLE -> "Single press — future Play/Pause"
+                RemotePressPatternDetector.Gesture.DOUBLE -> "Double press — future voice note"
+                RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press — future rewind 10 seconds"
+            }
+        )
     }
 }
 
