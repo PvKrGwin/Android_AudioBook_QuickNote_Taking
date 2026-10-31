@@ -27,6 +27,7 @@ class VoiceRecordingService : Service() {
     private var recorder: MediaRecorder? = null
     private var outputFile: File? = null
     private var recordingStarted = false
+    private var pauseCheckAttempts = 0
 
     private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -46,6 +47,7 @@ class VoiceRecordingService : Service() {
 
     private fun startRecordingFlow() {
         if (recordingStarted || recorder != null) return
+        pauseCheckAttempts = 0
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
         playBeep()
         handler.postDelayed(beginAfterBeep, START_BEEP_GAP_MS)
@@ -53,6 +55,27 @@ class VoiceRecordingService : Service() {
 
     @Suppress("DEPRECATION")
     private fun beginRecording() {
+        if (!MediaControlGateway.ensureVoiceNoteMediaPaused(this)) {
+            pauseCheckAttempts += 1
+            if (pauseCheckAttempts <= MAX_PAUSE_ATTEMPTS) {
+                updateNotification("Waiting for media to pause…")
+                handler.postDelayed(beginAfterBeep, PAUSE_RETRY_MS)
+                return
+            }
+
+            RecordingController.isRecordingOrStarting = false
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "Recording cancelled because the media app did not pause",
+                    false
+                )
+            )
+            MediaControlGateway.finishVoiceNote(this, delayMs = 0L)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return
+        }
+
         try {
             val folder = File(filesDir, "voice_notes").apply { mkdirs() }
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
@@ -250,5 +273,7 @@ class VoiceRecordingService : Service() {
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 300
+        private const val PAUSE_RETRY_MS = 300L
+        private const val MAX_PAUSE_ATTEMPTS = 3
     }
 }
