@@ -35,6 +35,7 @@ class VoiceRecordingService : Service() {
     private var recordingInputLabel = "Phone microphone"
     private var recordingWakeLock: PowerManager.WakeLock? = null
     private var communicationRouteRequested = false
+    private var recorderStage = "not started"
 
     private val autoStop = Runnable { stopAndSave("50-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -87,6 +88,7 @@ class VoiceRecordingService : Service() {
         }
 
         try {
+            recorderStage = "create output file"
             val folder = File(filesDir, "voice_notes").apply { mkdirs() }
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
             val mediaContext = MediaControlGateway.currentVoiceNoteContext()
@@ -100,12 +102,14 @@ class VoiceRecordingService : Service() {
             val mediaRecorder = MediaRecorder().apply {
                 // Speech-optimized capture lets the phone apply its built-in
                 // voice processing/noise suppression where the device supports it.
+                recorderStage = "setAudioSource"
                 setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
                 val bluetoothInput = findBluetoothMicrophone()
                 val audioManager = getSystemService(AudioManager::class.java)
                 // On Android 12+, request the Bluetooth communication route
                 // before choosing the recorder input. A preferred device alone
                 // does not establish a headset microphone connection.
+                recorderStage = "setCommunicationDevice"
                 val routeReady = if (bluetoothInput != null &&
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     audioManager.setCommunicationDevice(bluetoothInput)
@@ -113,6 +117,7 @@ class VoiceRecordingService : Service() {
                 communicationRouteRequested = routeReady
                 // Do not call setPreferredDevice(null): some Android recorder
                 // implementations reject a null device with IllegalArgumentException.
+                recorderStage = "setPreferredDevice"
                 val preferred = routeReady && bluetoothInput != null &&
                     runCatching { setPreferredDevice(bluetoothInput) }.getOrDefault(false)
                 recordingInputLabel = if (preferred) {
@@ -120,12 +125,15 @@ class VoiceRecordingService : Service() {
                 } else {
                     "Phone microphone fallback (Bluetooth route unavailable)"
                 }
+                recorderStage = "configure MediaRecorder output"
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44_100)
                 setAudioEncodingBitRate(128_000)
                 setOutputFile(file.absolutePath)
+                recorderStage = "prepare"
                 prepare()
+                recorderStage = "start"
                 start()
                 val routed = routedDevice
                 val bluetoothRouted = routed?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
@@ -159,7 +167,7 @@ class VoiceRecordingService : Service() {
             MediaControlGateway.finishVoiceNote(this)
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
-                    "Recording failed: ${error.javaClass.simpleName}",
+                    "Recording failed at $recorderStage: ${error.javaClass.simpleName}: ${error.message?.take(160)}",
                     false
                 )
             )
