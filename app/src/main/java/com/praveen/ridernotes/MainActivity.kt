@@ -563,6 +563,27 @@ private fun DetectorScreen(
                             }
                         }
                         item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Text(
+                                        "Google Drive backup",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        "In Notes, select recordings and tap Export. " +
+                                            "Choose Google Drive in Android's save screen."
+                                    )
+                                    Text(
+                                        "On a new phone signed into the same Google account, " +
+                                            "tap Import backup and choose the saved ZIP."
+                                    )
+                                }
+                            }
+                        }
+                        item {
                             Text(
                                 text = "Created by Praveen Kumar V",
                                 modifier = Modifier
