@@ -356,7 +356,7 @@ private fun DetectorScreen(
                 } else {
                     val notesBySource = savedNotes.value
                         .groupBy { it.sourceApp }
-                        .toSortedMap(compareBy(String.CASE_INSENSITIVE_ORDER) { it })
+                        .toSortedMap(String.CASE_INSENSITIVE_ORDER)
 
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
