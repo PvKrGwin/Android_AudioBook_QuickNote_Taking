@@ -343,12 +343,10 @@ object MediaControlGateway {
 
     private fun metadataTextValues(metadata: MediaMetadata?): List<String> {
         if (metadata == null) return emptyList()
-        @Suppress("DEPRECATION")
-        return metadata.bundle.keySet()
+        return metadata.keySet()
             .mapNotNull { key ->
-                val value = metadata.bundle.get(key)
-                (value as? CharSequence)
-                    ?.toString()
+                runCatching { metadata.getString(key) }
+                    .getOrNull()
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
             }
