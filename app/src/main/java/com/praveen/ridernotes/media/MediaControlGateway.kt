@@ -2,9 +2,12 @@ package com.praveen.ridernotes.media
 
 import android.content.ComponentName
 import android.content.Context
+import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
 import kotlin.math.max
@@ -22,6 +25,85 @@ object MediaControlGateway {
     )
 
     data class Result(val successful: Boolean, val message: String)
+
+    data class VoiceNoteMediaContext(
+        val packageName: String?,
+        val appName: String?,
+        val title: String?,
+        val subtitle: String?,
+        val playbackPositionMs: Long?,
+        val wasPlaying: Boolean
+    ) {
+        val isStandalone: Boolean get() = packageName == null
+    }
+
+    @Volatile
+    private var voiceNoteContext: VoiceNoteMediaContext? = null
+
+    fun prepareForVoiceNote(context: Context): VoiceNoteMediaContext {
+        val controller = try {
+            findBestSupportedController(context)
+        } catch (_: SecurityException) {
+            null
+        }
+
+        if (controller == null) {
+            return VoiceNoteMediaContext(null, null, null, null, null, false)
+                .also { voiceNoteContext = it }
+        }
+
+        val state = controller.playbackState
+        val wasPlaying = state?.state in setOf(
+            PlaybackState.STATE_PLAYING,
+            PlaybackState.STATE_BUFFERING,
+            PlaybackState.STATE_CONNECTING
+        )
+        val metadata = controller.metadata
+        val noteContext = VoiceNoteMediaContext(
+            packageName = controller.packageName,
+            appName = appLabel(context, controller.packageName),
+            title = metadata?.getString(MediaMetadata.METADATA_KEY_TITLE),
+            subtitle = metadata?.getString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
+                ?: metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM),
+            playbackPositionMs = state?.let(::estimatedPosition),
+            wasPlaying = wasPlaying
+        )
+        voiceNoteContext = noteContext
+
+        if (wasPlaying) {
+            if (supports(controller, PlaybackState.ACTION_PAUSE)) {
+                controller.transportControls.pause()
+            } else {
+                dispatchMediaKey(controller, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            }
+        }
+        return noteContext
+    }
+
+    fun currentVoiceNoteContext(): VoiceNoteMediaContext? = voiceNoteContext
+
+    fun finishVoiceNote(context: Context, delayMs: Long = 1_500L) {
+        val savedContext = voiceNoteContext
+        voiceNoteContext = null
+        if (savedContext?.wasPlaying != true || savedContext.packageName == null) return
+
+        val appContext = context.applicationContext
+        Handler(Looper.getMainLooper()).postDelayed({
+            try {
+                val controller = findControllers(appContext)
+                    .firstOrNull { it.packageName == savedContext.packageName }
+                if (controller != null) {
+                    if (supports(controller, PlaybackState.ACTION_PLAY)) {
+                        controller.transportControls.play()
+                    } else {
+                        dispatchMediaKey(controller, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                    }
+                }
+            } catch (_: Exception) {
+                // Audio is already safe; a failed resume must not delete the note.
+            }
+        }, delayMs)
+    }
 
     fun togglePlayPause(context: Context): Result {
         val controller = controllerOrResult(context)
@@ -124,13 +206,16 @@ object MediaControlGateway {
         return null to Result(false, message)
     }
 
-    private fun findBestSupportedController(context: Context): MediaController? {
-        val manager = context.getSystemService(MediaSessionManager::class.java)
-        val listener = ComponentName(context, RiderNotificationListenerService::class.java)
-        return manager.getActiveSessions(listener)
+    private fun findBestSupportedController(context: Context): MediaController? =
+        findControllers(context)
             .asSequence()
             .filter { it.packageName in supportedPackages }
             .maxByOrNull(::priority)
+
+    private fun findControllers(context: Context): List<MediaController> {
+        val manager = context.getSystemService(MediaSessionManager::class.java)
+        val listener = ComponentName(context, RiderNotificationListenerService::class.java)
+        return manager.getActiveSessions(listener)
     }
 
     private fun priority(controller: MediaController): Int =
