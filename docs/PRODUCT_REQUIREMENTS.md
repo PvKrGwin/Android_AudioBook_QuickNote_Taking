@@ -12,8 +12,8 @@ When no recording or call operation is active:
 
 - single press: play or pause the active supported media session;
 - double press within 800 ms: create a voice note;
-- triple press within 800 ms: rewind the active media by 10 seconds;
-- forward is not required.
+- triple press within 800 ms: rewind by 10 seconds, or use the app's default rewind;
+- four presses within 800 ms: forward by 10 seconds, or use the app's default forward.
 
 During recording, any received press stops and saves the recording immediately.
 The app must save audio before attempting transcription.
