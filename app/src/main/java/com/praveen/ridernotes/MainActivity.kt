@@ -564,6 +564,7 @@ private fun SavedNoteCard(
                 Text(note.title, fontWeight = FontWeight.Bold)
             }
             Text("${note.sourceApp} · ${note.recordedAtLabel}")
+            note.author?.let { Text("Author: $it") }
             note.chapter?.let {
                 val label = if (note.sourceApp == "Audible") {
                     "Chapter / episode"
