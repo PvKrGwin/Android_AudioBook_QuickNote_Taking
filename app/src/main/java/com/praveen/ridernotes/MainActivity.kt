@@ -1,13 +1,16 @@
 package com.praveen.ridernotes
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.KeyEvent
@@ -15,6 +18,8 @@ import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,6 +55,7 @@ import com.praveen.ridernotes.input.ButtonEventStore
 
 class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
+    private val microphoneEnabled = mutableStateOf(false)
     private lateinit var diagnosticMediaSession: MediaSession
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,6 +69,8 @@ class MainActivity : ComponentActivity() {
                     onOpenAccessibilitySettings = {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     },
+                    microphoneEnabled = microphoneEnabled,
+                    onRequestMicrophone = ::requestRecordingPermissions,
                     onClear = ButtonEventStore::clear,
                     onCopy = ::copyResults
                 )
@@ -73,6 +81,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
+        microphoneEnabled.value = hasMicrophonePermission()
         diagnosticMediaSession.isActive = true
     }
 
@@ -172,11 +181,42 @@ class MainActivity : ComponentActivity() {
             }
     }
 
+    private fun hasMicrophonePermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun requestRecordingPermissions() {
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions += Manifest.permission.POST_NOTIFICATIONS
+        }
+        ActivityCompat.requestPermissions(
+            this,
+            permissions.toTypedArray(),
+            RECORDING_PERMISSION_REQUEST
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RECORDING_PERMISSION_REQUEST) {
+            microphoneEnabled.value = hasMicrophonePermission()
+        }
+    }
+
     private fun copyResults() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = ButtonEventStore.asShareableText()
             .ifBlank { "No Beauty-R1 signals captured yet." }
         clipboard.setPrimaryClip(ClipData.newPlainText("Beauty-R1 signal test", text))
+    }
+
+    companion object {
+        private const val RECORDING_PERMISSION_REQUEST = 4102
     }
 }
 
@@ -184,6 +224,8 @@ class MainActivity : ComponentActivity() {
 private fun DetectorScreen(
     detectorEnabled: State<Boolean>,
     onOpenAccessibilitySettings: () -> Unit,
+    microphoneEnabled: State<Boolean>,
+    onRequestMicrophone: () -> Unit,
     onClear: () -> Unit,
     onCopy: () -> Unit
 ) {
@@ -212,6 +254,13 @@ private fun DetectorScreen(
             StatusCard(
                 enabled = detectorEnabled.value,
                 onOpenSettings = onOpenAccessibilitySettings
+            )
+
+            Spacer(Modifier.height(10.dp))
+
+            MicrophoneCard(
+                enabled = microphoneEnabled.value,
+                onRequestPermission = onRequestMicrophone
             )
 
             Spacer(Modifier.height(14.dp))
@@ -276,6 +325,34 @@ private fun StatusCard(enabled: Boolean, onOpenSettings: () -> Unit) {
             if (!enabled) {
                 Button(onClick = onOpenSettings) {
                     Text("Open Accessibility settings")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MicrophoneCard(enabled: Boolean, onRequestPermission: () -> Unit) {
+    val background = if (enabled) Color(0xFFE7F4EA) else Color(0xFFFFF3E0)
+    Card(colors = CardDefaults.cardColors(containerColor = background)) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = if (enabled) "Microphone ready" else "Microphone permission required",
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                if (enabled) {
+                    "Double press can record a voice-note test."
+                } else {
+                    "Allow microphone access before testing voice-note recording."
+                }
+            )
+            if (!enabled) {
+                Button(onClick = onRequestPermission) {
+                    Text("Enable recording")
                 }
             }
         }
