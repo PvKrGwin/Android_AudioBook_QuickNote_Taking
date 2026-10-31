@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.praveen.ridernotes.MainActivity
 import com.praveen.ridernotes.input.ButtonEvent
@@ -32,6 +33,7 @@ class VoiceRecordingService : Service() {
     private var recordingStarted = false
     private var pauseCheckAttempts = 0
     private var recordingInputLabel = "Phone microphone"
+    private var recordingWakeLock: PowerManager.WakeLock? = null
 
     private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -52,6 +54,7 @@ class VoiceRecordingService : Service() {
     private fun startRecordingFlow() {
         if (recordingStarted || recorder != null) return
         pauseCheckAttempts = 0
+        acquireRecordingWakeLock()
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
         playBeep()
         handler.postDelayed(beginAfterBeep, START_BEEP_GAP_MS)
@@ -75,6 +78,7 @@ class VoiceRecordingService : Service() {
                 )
             )
             MediaControlGateway.finishVoiceNote(this, delayMs = 0L)
+            releaseRecordingWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
@@ -136,6 +140,7 @@ class VoiceRecordingService : Service() {
                     false
                 )
             )
+            releaseRecordingWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -185,6 +190,7 @@ class VoiceRecordingService : Service() {
         ButtonEventStore.record(ButtonEvent.recordingResult(message, saved))
 
         MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS)
+        releaseRecordingWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -224,6 +230,24 @@ class VoiceRecordingService : Service() {
                 )
             )
         }
+    }
+
+    private fun acquireRecordingWakeLock() {
+        if (recordingWakeLock?.isHeld == true) return
+        recordingWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "${packageName}:voice-note-recording"
+            )
+            .apply {
+                setReferenceCounted(false)
+                acquire(MAX_RECORDING_MS + WAKE_LOCK_SAFETY_MS)
+            }
+    }
+
+    private fun releaseRecordingWakeLock() {
+        recordingWakeLock?.takeIf { it.isHeld }?.release()
+        recordingWakeLock = null
     }
 
     private fun findBluetoothMicrophone(): AudioDeviceInfo? {
@@ -294,6 +318,7 @@ class VoiceRecordingService : Service() {
         recorder?.release()
         recorder = null
         RecordingController.isRecordingOrStarting = false
+        releaseRecordingWakeLock()
         super.onDestroy()
     }
 
@@ -306,6 +331,7 @@ class VoiceRecordingService : Service() {
         private const val CHANNEL_ID = "rider_notes_recording"
         private const val NOTIFICATION_ID = 2001
         private const val MAX_RECORDING_MS = 40_000L
+        private const val WAKE_LOCK_SAFETY_MS = 10_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 300
