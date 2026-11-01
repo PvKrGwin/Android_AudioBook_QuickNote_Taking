@@ -13,8 +13,8 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Gives an ongoing phone or app call priority over Rider Notes media gestures.
  *
- * Call notification semantic actions support both regular calls and calling
- * apps such as WhatsApp without making Rider Notes the default phone app.
+ * Call notification actions support both regular calls and calling apps such
+ * as WhatsApp without making Rider Notes the default phone app.
  */
 object CallControlGateway {
     data class Result(val successful: Boolean, val message: String)
@@ -38,35 +38,35 @@ object CallControlGateway {
 
     fun updateNotification(sbn: StatusBarNotification) {
         val notification = sbn.notification
-        val actions = notification.actions.orEmpty()
+        val actions = notification.actions?.toList().orEmpty()
+
+        // Android 12+ CallStyle places the definitive PendingIntents in these
+        // extras. Literal keys keep this source compatible with older SDK stubs.
+        @Suppress("DEPRECATION")
+        fun pendingIntent(key: String): PendingIntent? =
+            notification.extras.getParcelable(key) as? PendingIntent
+
+        val answer = pendingIntent(EXTRA_ANSWER_INTENT)
+            ?: actions.firstByTitle("answer", "accept", "pick up")
+        val reject = pendingIntent(EXTRA_DECLINE_INTENT)
+            ?: actions.firstByTitle("decline", "reject")
+        val hangUp = pendingIntent(EXTRA_HANG_UP_INTENT)
+            ?: actions.firstByTitle("hang up", "end call", "disconnect")
+
         val isCall = notification.category == Notification.CATEGORY_CALL ||
-            actions.any { it.isCallAction() }
-        if (!isCall) {
+            answer != null || reject != null || hangUp != null
+        if (!isCall || (answer == null && reject == null && hangUp == null)) {
             calls.remove(sbn.key)
             return
         }
 
-        fun actionFor(vararg meanings: Int): PendingIntent? =
-            actions.firstOrNull { it.semanticAction in meanings }?.actionIntent
-
-        val answer = actionFor(Notification.Action.SEMANTIC_ACTION_ANSWER)
-            ?: actions.firstByTitle("answer", "accept", "pick up")
-        val reject = actionFor(Notification.Action.SEMANTIC_ACTION_DECLINE_CALL)
-            ?: actions.firstByTitle("decline", "reject")
-        val hangUp = actionFor(Notification.Action.SEMANTIC_ACTION_HANGUP_CALL)
-            ?: actions.firstByTitle("hang up", "end call", "disconnect")
-
-        if (answer == null && reject == null && hangUp == null) {
-            calls.remove(sbn.key)
-        } else {
-            calls[sbn.key] = CallActions(
-                packageName = sbn.packageName,
-                answer = answer,
-                reject = reject,
-                hangUp = hangUp,
-                updatedAt = SystemClock.elapsedRealtime()
-            )
-        }
+        calls[sbn.key] = CallActions(
+            packageName = sbn.packageName,
+            answer = answer,
+            reject = reject,
+            hangUp = hangUp,
+            updatedAt = SystemClock.elapsedRealtime()
+        )
     }
 
     fun removeNotification(sbn: StatusBarNotification) {
@@ -152,16 +152,15 @@ object CallControlGateway {
         }
     }
 
-    private fun Notification.Action.isCallAction(): Boolean =
-        semanticAction == Notification.Action.SEMANTIC_ACTION_ANSWER ||
-            semanticAction == Notification.Action.SEMANTIC_ACTION_DECLINE_CALL ||
-            semanticAction == Notification.Action.SEMANTIC_ACTION_HANGUP_CALL
-
-    private fun Array<Notification.Action>.firstByTitle(
+    private fun List<Notification.Action>.firstByTitle(
         vararg labels: String
     ): PendingIntent? =
         firstOrNull { action ->
             val title = action.title?.toString()?.trim().orEmpty()
             labels.any { title.equals(it, ignoreCase = true) }
         }?.actionIntent
+
+    private const val EXTRA_ANSWER_INTENT = "android.answerIntent"
+    private const val EXTRA_DECLINE_INTENT = "android.declineIntent"
+    private const val EXTRA_HANG_UP_INTENT = "android.hangUpIntent"
 }
