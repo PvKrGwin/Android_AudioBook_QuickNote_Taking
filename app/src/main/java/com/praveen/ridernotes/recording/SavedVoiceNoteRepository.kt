@@ -7,6 +7,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+data class TranscriptSegment(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)
+
 data class SavedVoiceNote(
     val audioFile: File,
     val recordedAtEpochMs: Long,
@@ -16,7 +22,8 @@ data class SavedVoiceNote(
     val author: String?,
     val playbackPositionMs: Long?,
     val transcriptionStatus: String,
-    val transcript: String?
+    val transcript: String?,
+    val transcriptSegments: List<TranscriptSegment>
 ) {
     val recordedAtLabel: String
         get() = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
@@ -73,7 +80,8 @@ object SavedVoiceNoteRepository {
                 author = null,
                 playbackPositionMs = null,
                 transcriptionStatus = "NOT_STARTED",
-                transcript = null
+                transcript = null,
+                transcriptSegments = emptyList()
             )
         }
 
@@ -103,7 +111,20 @@ object SavedVoiceNoteRepository {
                 author = json.optNullableString("author"),
                 playbackPositionMs = json.optNullableLong("playbackPositionMs"),
                 transcriptionStatus = json.optNullableString("transcriptionStatus") ?: "NOT_STARTED",
-                transcript = json.optNullableString("transcript")
+                transcript = json.optNullableString("transcript"),
+                transcriptSegments = json.optJSONArray("transcriptSegments")?.let { array ->
+                    buildList {
+                        for (index in 0 until array.length()) {
+                            val item = array.optJSONObject(index) ?: continue
+                            val text = item.optString("text").trim()
+                            val start = item.optLong("startMs", -1L)
+                            val end = item.optLong("endMs", -1L)
+                            if (text.isNotBlank() && start >= 0L && end > start) {
+                                add(TranscriptSegment(start, end, text))
+                            }
+                        }
+                    }
+                }.orEmpty()
             )
         } catch (_: Exception) {
             SavedVoiceNote(
@@ -115,7 +136,8 @@ object SavedVoiceNoteRepository {
                 author = null,
                 playbackPositionMs = null,
                 transcriptionStatus = "UNKNOWN",
-                transcript = null
+                transcript = null,
+                transcriptSegments = emptyList()
             )
         }
     }

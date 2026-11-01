@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
+import org.json.JSONArray
 import org.json.JSONObject
 import org.opentranscribe.api.ITranscriptionCallback
 import org.opentranscribe.api.ITranscriptionService
@@ -19,6 +20,11 @@ import java.util.concurrent.ConcurrentHashMap
  * Scrib implements this contract entirely on-device.
  */
 object ScribTranscriber {
+    private data class TimedSegment(
+        val startMs: Long,
+        val endMs: Long,
+        val text: String
+    )
     private const val ACTION = "org.opentranscribe.api.ITranscriptionService"
     private const val SCRIB_PACKAGE = "org.scrib.transcriber"
     private const val PREFS = "rider_notes_transcription"
@@ -133,6 +139,7 @@ object ScribTranscriber {
                             else -> "en"
                         }
                     }
+                    val timedSegments = mutableListOf<TimedSegment>()
                     val callback = object : ITranscriptionCallback.Stub() {
                         override fun onTranscriptionProgress(text: String?) {
                             updateMetadata(metadataFile, "TRANSCRIBING")
@@ -147,10 +154,14 @@ object ScribTranscriber {
                                     error = "Scrib returned an empty transcript"
                                 )
                             } else {
+                                val completedSegments = synchronized(timedSegments) {
+                                    timedSegments.sortedBy { it.startMs }.toList()
+                                }
                                 updateMetadata(
                                     metadataFile,
                                     "COMPLETED",
-                                    transcript = transcript
+                                    transcript = transcript,
+                                    segments = completedSegments
                                 )
                                 File(
                                     audioFile.parentFile,
@@ -164,7 +175,14 @@ object ScribTranscriber {
                             startMs: Long,
                             endMs: Long,
                             text: String?
-                        ) = Unit
+                        ) {
+                            val value = text?.trim().orEmpty()
+                            if (value.isNotBlank() && startMs >= 0L && endMs > startMs) {
+                                synchronized(timedSegments) {
+                                    timedSegments += TimedSegment(startMs, endMs, value)
+                                }
+                            }
+                        }
 
                         override fun onTranscriptionError(error: TranscriptionError?) {
                             val detail = error?.message
@@ -247,7 +265,8 @@ object ScribTranscriber {
         metadataFile: File,
         status: String,
         transcript: String? = null,
-        error: String? = null
+        error: String? = null,
+        segments: List<TimedSegment>? = null
     ) {
         try {
             val json = if (metadataFile.exists()) {
@@ -257,6 +276,18 @@ object ScribTranscriber {
             }
             json.put("transcriptionStatus", status)
             if (transcript != null) json.put("transcript", transcript)
+            if (segments != null) {
+                val array = JSONArray()
+                segments.forEach { segment ->
+                    array.put(
+                        JSONObject()
+                            .put("startMs", segment.startMs)
+                            .put("endMs", segment.endMs)
+                            .put("text", segment.text)
+                    )
+                }
+                json.put("transcriptSegments", array)
+            }
             if (error != null) {
                 json.put("transcriptionError", error)
             } else {

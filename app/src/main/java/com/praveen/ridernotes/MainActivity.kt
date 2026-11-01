@@ -69,6 +69,7 @@ import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
+import com.praveen.ridernotes.recording.TranscriptSegment
 import com.praveen.ridernotes.transcription.ScribTranscriber
 import java.io.File
 import java.text.SimpleDateFormat
@@ -1018,8 +1019,8 @@ private fun SavedNoteCard(
                 if (isPlaying && playbackDurationMs > 0L) {
                     PlaybackHighlightedTranscript(
                         transcript = note.transcript,
-                        positionMs = playbackPositionMs,
-                        durationMs = playbackDurationMs
+                        segments = note.transcriptSegments,
+                        positionMs = playbackPositionMs
                     )
                 } else {
                     Text(note.transcript)
@@ -1037,29 +1038,49 @@ private fun SavedNoteCard(
 @Composable
 private fun PlaybackHighlightedTranscript(
     transcript: String,
-    positionMs: Long,
-    durationMs: Long
+    segments: List<TranscriptSegment>,
+    positionMs: Long
 ) {
-    val wordMatches = Regex("""\S+""").findAll(transcript).toList()
-    if (wordMatches.isEmpty() || durationMs <= 0L) {
+    if (segments.isEmpty()) {
+        // Older transcripts have no timing data; showing them statically is
+        // preferable to misleading full-recording proportional highlighting.
         Text(transcript)
         return
     }
-    val progress = (positionMs.toDouble() / durationMs.toDouble()).coerceIn(0.0, 0.999999)
-    val activeWord = (progress * wordMatches.size).toInt()
-    val activeRange = wordMatches[activeWord].range
+
+    val activeIndex = segments.indexOfLast { positionMs >= it.startMs }
+        .coerceAtLeast(0)
+        .coerceAtMost(segments.lastIndex)
+    val activeSegment = segments[activeIndex]
+    val segmentWords = Regex("""\S+""").findAll(activeSegment.text).toList()
+    val segmentDuration = (activeSegment.endMs - activeSegment.startMs).coerceAtLeast(1L)
+    val segmentProgress =
+        ((positionMs - activeSegment.startMs).toDouble() / segmentDuration.toDouble())
+            .coerceIn(0.0, 0.999999)
+    val activeWord = if (segmentWords.isEmpty()) {
+        null
+    } else {
+        segmentWords[(segmentProgress * segmentWords.size).toInt()].range
+    }
+
     Text(
         buildAnnotatedString {
-            append(transcript)
-            addStyle(
-                SpanStyle(
-                    background = Color(0xFFFFE082),
-                    color = Color(0xFF1F1F1F),
-                    fontWeight = FontWeight.Bold
-                ),
-                start = activeRange.first,
-                end = activeRange.last + 1
-            )
+            segments.forEachIndexed { index, segment ->
+                if (index > 0) append(" ")
+                val segmentStart = length
+                append(segment.text)
+                if (index == activeIndex && activeWord != null) {
+                    addStyle(
+                        SpanStyle(
+                            background = Color(0xFFFFE082),
+                            color = Color(0xFF1F1F1F),
+                            fontWeight = FontWeight.Bold
+                        ),
+                        start = segmentStart + activeWord.first,
+                        end = segmentStart + activeWord.last + 1
+                    )
+                }
+            }
         }
     )
 }
