@@ -47,16 +47,25 @@ class VoiceRecordingService : Service() {
     private var deferResumeUntilCallEnds = false
     private var stopCompletionStarted = false
 
-    private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
-    private val startWarning = Runnable {
-        if (!recordingStarted || stopping) return@Runnable
-        RecordingController.isExtensionWindowOpen = true
-        warningBeepCount = 0
-        updateNotification("Recording ends in 4 seconds — double press to extend")
-        playNextWarningBeep()
-    }
     private val warningBeep = Runnable { playNextWarningBeep() }
+    private val deadlineWatchdog = object : Runnable {
+        override fun run() {
+            if (!recordingStarted || stopping || autoStopAtElapsedMs <= 0L) return
+            val remaining = autoStopAtElapsedMs - SystemClock.elapsedRealtime()
+            when {
+                remaining <= 0L -> stopAndSave("40-second auto-stop")
+                remaining <= WARNING_WINDOW_MS -> {
+                    openExtensionWindow()
+                    handler.postDelayed(this, minOf(DEADLINE_CHECK_MS, remaining))
+                }
+                else -> handler.postDelayed(
+                    this,
+                    minOf(DEADLINE_CHECK_MS, remaining - WARNING_WINDOW_MS)
+                )
+            }
+        }
+    }
     private val callSafetyCheck = object : Runnable {
         override fun run() {
             if (!recordingStarted || stopping) return
@@ -342,17 +351,34 @@ class VoiceRecordingService : Service() {
 
     private fun scheduleRecordingDeadline() {
         cancelRecordingDeadline()
-        RecordingController.isExtensionWindowOpen = false
         autoStopAtElapsedMs = SystemClock.elapsedRealtime() + MAX_RECORDING_MS
-        handler.postDelayed(startWarning, MAX_RECORDING_MS - WARNING_WINDOW_MS)
-        handler.postDelayed(autoStop, MAX_RECORDING_MS)
+        ButtonEventStore.record(
+            ButtonEvent.recordingResult(
+                "RECORDING_TIMER_SCHEDULED: warning in 36 seconds, stop in 40 seconds",
+                true
+            )
+        )
+        handler.post(deadlineWatchdog)
         refreshRecordingWakeLock()
     }
 
+    private fun openExtensionWindow() {
+        if (RecordingController.isExtensionWindowOpen || !recordingStarted || stopping) return
+        RecordingController.isExtensionWindowOpen = true
+        warningBeepCount = 0
+        updateNotification("Recording ends in 4 seconds — double press to extend")
+        ButtonEventStore.record(
+            ButtonEvent.recordingResult(
+                "RECORDING_EXTENSION_WINDOW_OPEN: double press to add 40 seconds",
+                true
+            )
+        )
+        playNextWarningBeep()
+    }
+
     private fun cancelRecordingDeadline() {
-        handler.removeCallbacks(startWarning)
+        handler.removeCallbacks(deadlineWatchdog)
         handler.removeCallbacks(warningBeep)
-        handler.removeCallbacks(autoStop)
         warningBeepCount = 0
         autoStopAtElapsedMs = 0L
         RecordingController.isExtensionWindowOpen = false
@@ -366,7 +392,7 @@ class VoiceRecordingService : Service() {
         ) return
 
         warningBeepCount += 1
-        ToneGenerator(AudioManager.STREAM_MUSIC, 100).apply {
+        ToneGenerator(AudioManager.STREAM_ALARM, 100).apply {
             startTone(ToneGenerator.TONE_PROP_BEEP, WARNING_BEEP_MS)
             handler.postDelayed({ release() }, WARNING_BEEP_MS + 50L)
         }
@@ -400,9 +426,9 @@ class VoiceRecordingService : Service() {
         val now = SystemClock.elapsedRealtime()
         val remaining = (autoStopAtElapsedMs - now).coerceAtLeast(0L)
         val delay = maxOf(remaining, GESTURE_RESOLUTION_GRACE_MS)
-        handler.removeCallbacks(autoStop)
-        handler.postDelayed(autoStop, delay)
         autoStopAtElapsedMs = now + delay
+        handler.removeCallbacks(deadlineWatchdog)
+        handler.post(deadlineWatchdog)
     }
 
     private fun playStopConfirmation(autoStopped: Boolean) {
@@ -663,6 +689,7 @@ class VoiceRecordingService : Service() {
         private const val WARNING_BEEP_MS = 160
         private const val WARNING_BEEP_STEP_MS = 500L
         private const val GESTURE_RESOLUTION_GRACE_MS = 1_100L
+        private const val DEADLINE_CHECK_MS = 250L
         private const val WAKE_LOCK_SAFETY_MS = 10_000L
         private const val START_BEEP_GAP_MS = 400L
         private const val RESUME_DELAY_MS = 1_500L

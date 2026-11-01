@@ -59,6 +59,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
@@ -114,6 +116,7 @@ class MainActivity : ComponentActivity() {
     private val playingFileName = mutableStateOf<String?>(null)
     private val playingPositionMs = mutableStateOf(0L)
     private val playingDurationMs = mutableStateOf(0L)
+    private val playbackPaused = mutableStateOf(false)
     private val playbackHandler = Handler(Looper.getMainLooper())
     private var notePlayer: MediaPlayer? = null
     private val playbackProgress = object : Runnable {
@@ -149,8 +152,10 @@ class MainActivity : ComponentActivity() {
                     playingFileName = playingFileName,
                     playingPositionMs = playingPositionMs,
                     playingDurationMs = playingDurationMs,
+                    playbackPaused = playbackPaused,
                     onRefreshNotes = ::refreshSavedNotes,
-                    onPlayNote = ::playOrStopNote,
+                    onPlayNote = ::playOrPauseNote,
+                    onStopNote = ::stopNotePlayback,
                     onSeekNote = ::seekNotePlayback,
                     onDeleteNotes = ::deleteNotes,
                     backupStatus = backupStatus,
@@ -336,9 +341,18 @@ class MainActivity : ComponentActivity() {
         refreshSavedNotes()
     }
 
-    private fun playOrStopNote(note: SavedVoiceNote) {
+    private fun playOrPauseNote(note: SavedVoiceNote) {
         if (playingFileName.value == note.audioFile.name) {
-            stopNotePlayback()
+            val player = notePlayer ?: return
+            if (player.isPlaying) {
+                player.pause()
+                playbackPaused.value = true
+                playbackHandler.removeCallbacks(playbackProgress)
+            } else {
+                player.start()
+                playbackPaused.value = false
+                playbackHandler.post(playbackProgress)
+            }
             return
         }
 
@@ -357,6 +371,7 @@ class MainActivity : ComponentActivity() {
                 start()
             }
             playingFileName.value = note.audioFile.name
+            playbackPaused.value = false
             playbackHandler.removeCallbacks(playbackProgress)
             playbackHandler.post(playbackProgress)
         } catch (_: Exception) {
@@ -381,6 +396,7 @@ class MainActivity : ComponentActivity() {
         playingFileName.value = null
         playingPositionMs.value = 0L
         playingDurationMs.value = 0L
+        playbackPaused.value = false
     }
 
     private fun requestExport(notes: List<SavedVoiceNote>) {
@@ -511,8 +527,10 @@ private fun DetectorScreen(
     playingFileName: State<String?>,
     playingPositionMs: State<Long>,
     playingDurationMs: State<Long>,
+    playbackPaused: State<Boolean>,
     onRefreshNotes: () -> Unit,
     onPlayNote: (SavedVoiceNote) -> Unit,
+    onStopNote: () -> Unit,
     onSeekNote: (Long) -> Unit,
     onDeleteNotes: (List<SavedVoiceNote>) -> Unit,
     backupStatus: State<String>,
@@ -871,7 +889,11 @@ private fun DetectorScreen(
                                                 if (playingFileName.value == note.audioFile.name) {
                                                     playingDurationMs.value
                                                 } else 0L,
+                                            isPaused =
+                                                playingFileName.value == note.audioFile.name &&
+                                                    playbackPaused.value,
                                             onPlay = { onPlayNote(note) },
+                                            onStop = onStopNote,
                                             onSeek = onSeekNote
                                         )
                                     }
@@ -927,7 +949,9 @@ private fun SavedNoteCard(
     onSelectionChange: (Boolean) -> Unit,
     playbackPositionMs: Long,
     playbackDurationMs: Long,
+    isPaused: Boolean,
     onPlay: () -> Unit,
+    onStop: () -> Unit,
     onSeek: (Long) -> Unit
 ) {
     Card(
@@ -959,8 +983,19 @@ private fun SavedNoteCard(
                 Text("$label: $it")
             }
             note.playbackPositionLabel?.let { Text("Media position: $it") }
-            Button(onClick = onPlay) {
-                Text(if (isPlaying) "Stop recording playback" else "Play recording")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onPlay) {
+                    Text(
+                        when {
+                            !isPlaying -> "Play recording"
+                            isPaused -> "Resume"
+                            else -> "Pause"
+                        }
+                    )
+                }
+                if (isPlaying) {
+                    OutlinedButton(onClick = onStop) { Text("Stop") }
+                }
             }
             if (isPlaying && playbackDurationMs > 0L) {
                 Slider(
@@ -980,7 +1015,15 @@ private fun SavedNoteCard(
             )
             if (!note.transcript.isNullOrBlank()) {
                 Text("Transcript", fontWeight = FontWeight.SemiBold)
-                Text(note.transcript)
+                if (isPlaying && playbackDurationMs > 0L) {
+                    PlaybackHighlightedTranscript(
+                        transcript = note.transcript,
+                        positionMs = playbackPositionMs,
+                        durationMs = playbackDurationMs
+                    )
+                } else {
+                    Text(note.transcript)
+                }
             } else {
                 Text(
                     "Transcript: ${note.transcriptionStatus.lowercase().replace('_', ' ')}",
@@ -989,6 +1032,36 @@ private fun SavedNoteCard(
             }
         }
     }
+}
+
+@Composable
+private fun PlaybackHighlightedTranscript(
+    transcript: String,
+    positionMs: Long,
+    durationMs: Long
+) {
+    val wordMatches = Regex("""\S+""").findAll(transcript).toList()
+    if (wordMatches.isEmpty() || durationMs <= 0L) {
+        Text(transcript)
+        return
+    }
+    val progress = (positionMs.toDouble() / durationMs.toDouble()).coerceIn(0.0, 0.999999)
+    val activeWord = (progress * wordMatches.size).toInt()
+    val activeRange = wordMatches[activeWord].range
+    Text(
+        buildAnnotatedString {
+            append(transcript)
+            addStyle(
+                SpanStyle(
+                    background = Color(0xFFFFE082),
+                    color = Color(0xFF1F1F1F),
+                    fontWeight = FontWeight.Bold
+                ),
+                start = activeRange.first,
+                end = activeRange.last + 1
+            )
+        }
+    )
 }
 
 private fun formatPlaybackTime(milliseconds: Long): String {
