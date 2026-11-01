@@ -94,9 +94,15 @@ class VoiceRecordingService : Service() {
         acquireRecordingWakeLock()
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
         if (MediaControlGateway.currentVoiceNoteContext()?.isStandalone != false) {
-            announceIndividualRecordingMode()
+            announceRecordingMode(
+                announcement = INDIVIDUAL_MODE_ANNOUNCEMENT,
+                utteranceId = INDIVIDUAL_MODE_UTTERANCE_ID
+            )
         } else {
-            playStartBeepAndSchedule()
+            announceRecordingMode(
+                announcement = MEDIA_MODE_ANNOUNCEMENT,
+                utteranceId = MEDIA_MODE_UTTERANCE_ID
+            )
         }
     }
 
@@ -281,7 +287,10 @@ class VoiceRecordingService : Service() {
         playStopConfirmation(autoStopped = reason == "40-second auto-stop")
     }
 
-    private fun announceIndividualRecordingMode() {
+    private fun announceRecordingMode(
+        announcement: String,
+        utteranceId: String
+    ) {
         var engine: TextToSpeech? = null
         engine = TextToSpeech(this) { status ->
             if (status != TextToSpeech.SUCCESS) {
@@ -310,10 +319,10 @@ class VoiceRecordingService : Service() {
                 }
                 })
                 val result = engine?.speak(
-                    INDIVIDUAL_MODE_ANNOUNCEMENT,
+                    announcement,
                     TextToSpeech.QUEUE_FLUSH,
                     null,
-                    INDIVIDUAL_MODE_UTTERANCE_ID
+                    utteranceId
                 )
                 if (result == TextToSpeech.ERROR) {
                     engine?.shutdown()
@@ -664,6 +673,8 @@ class VoiceRecordingService : Service() {
         private const val PAUSE_RETRY_MS = 300L
         private const val MAX_PAUSE_ATTEMPTS = 3
         private const val INDIVIDUAL_MODE_ANNOUNCEMENT = "Individual recording mode"
+        private const val MEDIA_MODE_ANNOUNCEMENT = "Media note taking mode started"
+        private const val MEDIA_MODE_UTTERANCE_ID = "rider-notes-media-mode"
         private const val RECORD_ENDED_ANNOUNCEMENT = "Record ended"
         private const val RECORD_ENDED_UTTERANCE_ID = "rider_notes_record_ended"
         private const val INDIVIDUAL_MODE_UTTERANCE_ID = "rider-notes-individual-mode"
