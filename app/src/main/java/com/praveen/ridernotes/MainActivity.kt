@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
+import com.praveen.ridernotes.input.RemoteButtonConfig
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 import com.praveen.ridernotes.transcription.ScribTranscriber
@@ -79,6 +80,11 @@ class MainActivity : ComponentActivity() {
     private val transcriptionLanguage =
         mutableStateOf(ScribTranscriber.LANGUAGE_ENGLISH)
     private val backupStatus = mutableStateOf("")
+    private val remoteSetupStatus = mutableStateOf("")
+    private var remoteTraining = false
+    private var remoteTrainingDevice: String? = null
+    private val remoteTrainingSignals = linkedSetOf<String>()
+    private var remoteTrainingPresses = 0
     private var pendingExportNotes: List<SavedVoiceNote> = emptyList()
 
     private val exportBackupLauncher = registerForActivityResult(
@@ -123,7 +129,9 @@ class MainActivity : ComponentActivity() {
                     onExportNotes = ::requestExport,
                     onImportBackup = ::requestImport,
                     onClear = ButtonEventStore::clear,
-                    onCopy = ::copyResults
+                    onCopy = ::copyResults,
+                    remoteSetupStatus = remoteSetupStatus,
+                    onStartRemoteSetup = ::startRemoteSetup
                 )
             }
         }
@@ -152,6 +160,26 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         ButtonEventStore.record(ButtonEvent.from(event, route = "Foreground activity"))
+        if (remoteTraining && event.device?.isExternal == true &&
+            event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0
+        ) {
+            val name = event.device?.name ?: "External Bluetooth remote"
+            if (remoteTrainingDevice == null) remoteTrainingDevice = name
+            if (remoteTrainingDevice == name) {
+                remoteTrainingSignals +=
+                    RemoteButtonConfig.signature(event.keyCode, event.scanCode)
+                remoteTrainingPresses += 1
+                remoteSetupStatus.value =
+                    "Detected $name: $remoteTrainingPresses/4 presses"
+                if (remoteTrainingPresses >= 4) {
+                    RemoteButtonConfig.save(this, name, remoteTrainingSignals)
+                    remoteTraining = false
+                    remoteSetupStatus.value =
+                        "Configured $name with ${remoteTrainingSignals.size} signal(s)"
+                }
+            }
+            return true
+        }
 
         // Diagnostic safety: an external remote must not activate Clear or Copy
         // while we are trying to identify it. Phone buttons keep normal behavior.
@@ -389,6 +417,14 @@ class MainActivity : ComponentActivity() {
         transcriptionLanguage.value = mode
     }
 
+    private fun startRemoteSetup() {
+        remoteTraining = true
+        remoteTrainingDevice = null
+        remoteTrainingSignals.clear()
+        remoteTrainingPresses = 0
+        remoteSetupStatus.value = "Press your chosen Bluetooth button four times"
+    }
+
     private fun copyResults() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = ButtonEventStore.asShareableText()
@@ -420,7 +456,9 @@ private fun DetectorScreen(
     onExportNotes: (List<SavedVoiceNote>) -> Unit,
     onImportBackup: () -> Unit,
     onClear: () -> Unit,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    remoteSetupStatus: State<String>,
+    onStartRemoteSetup: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -473,7 +511,7 @@ private fun DetectorScreen(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Beauty-R1 media controls and voice notes",
+                text = "Bluetooth media controls and voice notes",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -520,6 +558,37 @@ private fun DetectorScreen(
                                     .height(170.dp),
                                 contentScale = ContentScale.Fit
                             )
+                        }
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text("How Rider Notes works", fontWeight = FontWeight.Bold)
+                                    Text("1. Pair your Bluetooth remote and headset in Android settings.")
+                                    Text("2. Enable the Rider Notes accessibility detector and microphone.")
+                                    Text("3. Single press: play/pause; double: voice note.")
+                                    Text("4. Triple press: rewind 10 seconds; four presses: forward 10 seconds.")
+                                    Text("5. During the final recording warning, single stops and double extends by 40 seconds.")
+                                    Text("6. Notes and offline Scrib transcripts appear under the Notes tab.")
+                                }
+                            }
+                        }
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text("Remote setup", fontWeight = FontWeight.Bold)
+                                    Text("After pairing, tap Train and press the one button you want Rider Notes to use four times.")
+                                    Button(onClick = onStartRemoteSetup) { Text("Train Bluetooth button") }
+                                    if (remoteSetupStatus.value.isNotBlank()) {
+                                        Text(remoteSetupStatus.value, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                }
+                            }
                         }
                         item {
                             StatusCard(

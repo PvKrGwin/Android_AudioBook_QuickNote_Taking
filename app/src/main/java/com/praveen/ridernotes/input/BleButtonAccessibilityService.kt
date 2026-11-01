@@ -42,7 +42,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 Intent.ACTION_SCREEN_ON -> {
                     screenOffObserved = false
                     lastScreenWakeAt = SystemClock.elapsedRealtime()
-                    if (isBeautyConnected()) playScreenReadyTone()
+                    if (isConfiguredRemoteConnected()) playScreenReadyTone()
                 }
             }
         }
@@ -64,7 +64,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
         ButtonEventStore.record(ButtonEvent.from(event, route = "Accessibility service"))
 
-        if (!event.isBeautyCameraButton()) {
+        if (!RemoteButtonConfig.matches(this, event)) {
             return false
         }
 
@@ -192,10 +192,10 @@ class BleButtonAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun KeyEvent.isBeautyCameraButton(): Boolean {
-        val isBeautyDevice = device?.name?.contains("Beauty-R1", ignoreCase = true) == true
+    private fun unusedLegacyBeautyMatcher(event: KeyEvent): Boolean {
+        val isBeautyDevice = event.device?.name?.contains("Beauty-R1", ignoreCase = true) == true
         val isAlternatingCameraKey =
-            keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+            event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
         return isBeautyDevice && isAlternatingCameraKey
     }
 
@@ -249,13 +249,16 @@ class BleButtonAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun isBeautyConnected(): Boolean =
+    private fun isConfiguredRemoteConnected(): Boolean {
+        val configuredName = RemoteButtonConfig.load(this).deviceName
+        return
         InputDevice.getDeviceIds().any { id ->
             InputDevice.getDevice(id)?.let { device ->
                 device.isEnabled &&
-                    device.name.contains("Beauty-R1", ignoreCase = true)
+                    device.name.equals(configuredName, ignoreCase = true)
             } == true
         }
+    }
 
     private fun playScreenReadyTone() {
         ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_READY_VOLUME).apply {
