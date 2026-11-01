@@ -43,6 +43,7 @@ class VoiceRecordingService : Service() {
     private var textToSpeech: TextToSpeech? = null
     private var warningBeepCount = 0
     private var autoStopAtElapsedMs = 0L
+    private var startCueCompleted = false
 
     private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -269,11 +270,10 @@ class VoiceRecordingService : Service() {
                 engine?.shutdown()
                 textToSpeech = null
                 handler.post(::playStartBeepAndSchedule)
-                return@TextToSpeech
-            }
-            textToSpeech = engine
-            engine?.setLanguage(Locale.ENGLISH)
-            engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            } else {
+                textToSpeech = engine
+                engine?.setLanguage(Locale.ENGLISH)
+                engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = Unit
                 override fun onDone(utteranceId: String?) {
                     handler.post {
@@ -290,23 +290,25 @@ class VoiceRecordingService : Service() {
                         playStartBeepAndSchedule()
                     }
                 }
-            })
-            val result = engine?.speak(
-                INDIVIDUAL_MODE_ANNOUNCEMENT,
-                TextToSpeech.QUEUE_FLUSH,
-                null,
-                INDIVIDUAL_MODE_UTTERANCE_ID
-            )
-            if (result == TextToSpeech.ERROR) {
-                engine?.shutdown()
-                textToSpeech = null
-                handler.post(::playStartBeepAndSchedule)
+                })
+                val result = engine?.speak(
+                    INDIVIDUAL_MODE_ANNOUNCEMENT,
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    INDIVIDUAL_MODE_UTTERANCE_ID
+                )
+                if (result == TextToSpeech.ERROR) {
+                    engine?.shutdown()
+                    textToSpeech = null
+                    handler.post(::playStartBeepAndSchedule)
+                }
             }
         }
     }
 
     private fun playStartBeepAndSchedule() {
-        if (stopping || recorder != null || recordingStarted) return
+        if (startCueCompleted || stopping || recorder != null || recordingStarted) return
+        startCueCompleted = true
         playBeep()
         handler.postDelayed(beginAfterBeep, START_BEEP_GAP_MS)
     }
@@ -578,7 +580,7 @@ class VoiceRecordingService : Service() {
         private const val WARNING_BEEP_STEP_MS = 1_000L
         private const val GESTURE_RESOLUTION_GRACE_MS = 1_100L
         private const val WAKE_LOCK_SAFETY_MS = 10_000L
-        private const val START_BEEP_GAP_MS = 250L
+        private const val START_BEEP_GAP_MS = 400L
         private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 300
         private const val ROUTE_SETTLE_MS = 300L
