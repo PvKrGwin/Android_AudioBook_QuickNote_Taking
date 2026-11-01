@@ -65,6 +65,10 @@ object RecordingController {
 
     fun interruptForCall(context: Context) {
         if (!isRecordingOrStarting) return
+        // Route any immediately following remote gesture to call control while
+        // the recording service finishes saving and releases the microphone.
+        isRecordingOrStarting = false
+        isExtensionWindowOpen = false
         context.startService(
             Intent(context, VoiceRecordingService::class.java)
                 .setAction(VoiceRecordingService.ACTION_STOP_FOR_CALL)
