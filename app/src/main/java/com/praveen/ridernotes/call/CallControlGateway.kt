@@ -141,10 +141,10 @@ object CallControlGateway {
             val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
             val now = SystemClock.uptimeMillis()
             audio.dispatchMediaKeyEvent(
-                KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_HEADSEATHOOK, 0)
+                KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_HEADSETHOOK, 0)
             )
             audio.dispatchMediaKeyEvent(
-                KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_HEADSEATHOOK, 0)
+                KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_HEADSETHOOK, 0)
             )
             Result(true, successMessage)
         } catch (error: RuntimeException) {
