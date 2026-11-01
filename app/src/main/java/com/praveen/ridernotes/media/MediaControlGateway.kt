@@ -12,6 +12,8 @@ import android.os.Looper
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.service.notification.StatusBarNotification
+import com.praveen.ridernotes.input.ButtonEvent
+import com.praveen.ridernotes.input.ButtonEventStore
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
@@ -202,21 +204,79 @@ object MediaControlGateway {
         }
 
         val appContext = context.applicationContext
-        Handler(Looper.getMainLooper()).postDelayed({
-            try {
-                val controller = findControllers(appContext)
-                    .firstOrNull { it.packageName == savedContext.packageName }
-                if (controller != null) {
-                    if (supports(controller, PlaybackState.ACTION_PLAY)) {
-                        controller.transportControls.play()
-                    } else {
-                        dispatchMediaKey(controller, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
-                    }
-                }
-            } catch (_: Exception) {
-                // Audio is already safe; a failed resume must not delete the note.
+        val handler = Handler(Looper.getMainLooper())
+        val retryDelays = longArrayOf(delayMs, delayMs + 1_500L, delayMs + 3_000L)
+        retryDelays.forEachIndexed { index, attemptAt ->
+            handler.postDelayed({
+                attemptVoiceNoteResume(
+                    context = appContext,
+                    savedContext = savedContext,
+                    attempt = index + 1,
+                    finalAttempt = index == retryDelays.lastIndex
+                )
+            }, attemptAt)
+        }
+    }
+
+    private fun attemptVoiceNoteResume(
+        context: Context,
+        savedContext: VoiceNoteMediaContext,
+        attempt: Int,
+        finalAttempt: Boolean
+    ) {
+        try {
+            val controller = findControllers(context)
+                .firstOrNull { it.packageName == savedContext.packageName }
+            if (controller == null) {
+                ButtonEventStore.record(
+                    ButtonEvent.mediaResult(
+                        "Media resume attempt $attempt: " +
+                            "${savedContext.appName ?: savedContext.packageName} session unavailable",
+                        false
+                    )
+                )
+                return
             }
-        }, delayMs)
+
+            val alreadyPlaying = when (controller.playbackState?.state) {
+                PlaybackState.STATE_PLAYING,
+                PlaybackState.STATE_BUFFERING,
+                PlaybackState.STATE_CONNECTING -> true
+                else -> false
+            }
+            if (alreadyPlaying) {
+                ButtonEventStore.record(
+                    ButtonEvent.mediaResult(
+                        "Media resumed: ${savedContext.appName ?: savedContext.packageName}",
+                        true
+                    )
+                )
+                return
+            }
+
+            if (supports(controller, PlaybackState.ACTION_PLAY)) {
+                controller.transportControls.play()
+            } else {
+                // PLAY is idempotent; unlike PLAY_PAUSE it cannot accidentally
+                // pause media that recovered between retries.
+                dispatchMediaKey(controller, KeyEvent.KEYCODE_MEDIA_PLAY)
+            }
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Media resume command sent to " +
+                        "${savedContext.appName ?: savedContext.packageName} " +
+                        "(attempt $attempt${if (finalAttempt) ", final" else ""})",
+                    true
+                )
+            )
+        } catch (error: Exception) {
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Media resume attempt $attempt failed: ${error.javaClass.simpleName}",
+                    false
+                )
+            )
+        }
     }
 
     fun resumeDeferredAfterCall(context: Context) {
