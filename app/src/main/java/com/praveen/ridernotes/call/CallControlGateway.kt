@@ -82,8 +82,8 @@ object CallControlGateway {
             audioCallState(context) != CallState.NONE
 
     /**
-     * Incoming call: single answers, double rejects.
-     * Active call: single or double hangs up.
+     * Notification-backed app call (for example WhatsApp): single answers,
+     * double rejects, and single or double hangs up once active.
      * Triple/four-press remain ignored during calls to avoid accidental seeks.
      */
     fun handleGesture(
@@ -101,13 +101,13 @@ object CallControlGateway {
                 RemotePressPatternDetector.Gesture.DOUBLE ->
                     send(call?.reject)
                         ?: Result(false, "Reject unavailable: calling app exposed no decline action")
-                else -> Result(false, "Call ringing: use single to answer or double to reject")
+                else -> Result(false, "WhatsApp/app call ringing: use single to answer or double to reject")
             }
             CallState.ACTIVE -> when (gesture) {
                 RemotePressPatternDetector.Gesture.SINGLE,
                 RemotePressPatternDetector.Gesture.DOUBLE ->
                     send(call?.hangUp) ?: dispatchHeadsetHook(context, "Ended call")
-                else -> Result(false, "Call active: use single or double to end")
+                else -> Result(false, "WhatsApp/app call active: use single or double to end")
             }
             CallState.NONE -> null
         }
