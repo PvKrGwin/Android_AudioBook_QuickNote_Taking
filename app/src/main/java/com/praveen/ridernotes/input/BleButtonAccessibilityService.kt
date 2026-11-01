@@ -13,8 +13,10 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import com.praveen.ridernotes.call.CallControlGateway
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.recording.RecordingController
 
@@ -40,7 +42,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 Intent.ACTION_SCREEN_ON -> {
                     screenOffObserved = false
                     lastScreenWakeAt = SystemClock.elapsedRealtime()
-                    playScreenReadyTone()
+                    if (isBeautyConnected()) playScreenReadyTone()
                 }
             }
         }
@@ -72,7 +74,8 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
         if (event.action == KeyEvent.ACTION_DOWN &&
             event.repeatCount == 0 &&
-            RecordingController.isRecordingOrStarting
+            RecordingController.isRecordingOrStarting &&
+            !CallControlGateway.hasOngoingCall(this)
         ) {
             handler.removeCallbacks(resolvePendingGesture)
             detector.cancel()
@@ -115,6 +118,16 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 deviceName = lastDeviceName
             )
         )
+
+        CallControlGateway.handleGesture(this, gesture)?.let { callResult ->
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    message = callResult.message,
+                    successful = callResult.successful
+                )
+            )
+            return
+        }
 
         val result = when (gesture) {
             RemotePressPatternDetector.Gesture.SINGLE ->
@@ -201,6 +214,14 @@ class BleButtonAccessibilityService : AccessibilityService() {
             )
         }
     }
+
+    private fun isBeautyConnected(): Boolean =
+        InputDevice.getDeviceIds().any { id ->
+            InputDevice.getDevice(id)?.let { device ->
+                device.isEnabled &&
+                    device.name.contains("Beauty-R1", ignoreCase = true)
+            } == true
+        }
 
     private fun playScreenReadyTone() {
         ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_READY_VOLUME).apply {

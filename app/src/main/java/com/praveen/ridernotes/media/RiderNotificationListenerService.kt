@@ -2,6 +2,7 @@ package com.praveen.ridernotes.media
 
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import com.praveen.ridernotes.call.CallControlGateway
 
 /**
  * Android grants media-session discovery through notification-listener access.
@@ -11,12 +12,18 @@ import android.service.notification.StatusBarNotification
  */
 class RiderNotificationListenerService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        sbn?.let(MediaControlGateway::updateNotificationMetadata)
+        sbn?.let {
+            MediaControlGateway.updateNotificationMetadata(it)
+            CallControlGateway.updateNotification(it)
+        }
         MediaControlGateway.observeActivePlayback(this)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
-        sbn?.let(MediaControlGateway::removeNotificationMetadata)
+        sbn?.let {
+            MediaControlGateway.removeNotificationMetadata(it)
+            CallControlGateway.removeNotification(it)
+        }
     }
 
     override fun onNotificationRankingUpdate(rankingMap: RankingMap?) = Unit
@@ -24,13 +31,17 @@ class RiderNotificationListenerService : NotificationListenerService() {
     override fun onListenerConnected() {
         super.onListenerConnected()
         MediaControlGateway.notificationAccessConnected = true
-        activeNotifications.orEmpty().forEach(MediaControlGateway::updateNotificationMetadata)
+        activeNotifications.orEmpty().forEach {
+            MediaControlGateway.updateNotificationMetadata(it)
+            CallControlGateway.updateNotification(it)
+        }
         MediaControlGateway.observeActivePlayback(this)
     }
 
     override fun onListenerDisconnected() {
         MediaControlGateway.notificationAccessConnected = false
         MediaControlGateway.clearNotificationMetadata()
+        CallControlGateway.clear()
         super.onListenerDisconnected()
     }
 }
