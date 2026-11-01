@@ -6,12 +6,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * A readable snapshot of one external-input event.
- *
- * Android reuses input-event objects internally, so we copy the useful values
- * immediately instead of storing the original object.
- */
+/** A readable snapshot of one external-input event. */
 data class ButtonEvent(
     val capturedAtMillis: Long,
     val eventTimeMillis: Long,
@@ -118,6 +113,63 @@ data class ButtonEvent(
                     "vScroll=$vertical, hScroll=$horizontal"
             )
         }
+
+        fun gesture(
+            gesture: RemotePressPatternDetector.Gesture,
+            deviceId: Int,
+            deviceName: String
+        ): ButtonEvent = ButtonEvent(
+            capturedAtMillis = System.currentTimeMillis(),
+            eventTimeMillis = android.os.SystemClock.uptimeMillis(),
+            action = "GESTURE",
+            keyCode = -1,
+            keyName = "BEAUTY_${gesture.name}",
+            scanCode = 0,
+            repeatCount = 0,
+            isLongPress = false,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            sourceHex = "0x301",
+            captureRoutes = setOf("Beauty-R1 gesture classifier"),
+            details = when (gesture) {
+                RemotePressPatternDetector.Gesture.SINGLE -> "Single press — Play/Pause requested"
+                RemotePressPatternDetector.Gesture.DOUBLE -> "Double press — voice note requested"
+                RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press — rewind 10 seconds requested"
+                RemotePressPatternDetector.Gesture.QUADRUPLE -> "Four presses — forward 10 seconds requested"
+            }
+        )
+
+        fun recordingResult(message: String, successful: Boolean): ButtonEvent = ButtonEvent(
+            capturedAtMillis = System.currentTimeMillis(),
+            eventTimeMillis = android.os.SystemClock.uptimeMillis(),
+            action = if (successful) "RECORDING_OK" else "RECORDING_INFO",
+            keyCode = -1,
+            keyName = "VOICE_NOTE_RESULT",
+            scanCode = 0,
+            repeatCount = 0,
+            isLongPress = false,
+            deviceId = -1,
+            deviceName = "Phone microphone",
+            sourceHex = "n/a",
+            captureRoutes = setOf("Rider Notes recorder"),
+            details = message
+        )
+
+        fun mediaResult(message: String, successful: Boolean): ButtonEvent = ButtonEvent(
+            capturedAtMillis = System.currentTimeMillis(),
+            eventTimeMillis = android.os.SystemClock.uptimeMillis(),
+            action = if (successful) "MEDIA_OK" else "MEDIA_INFO",
+            keyCode = -1,
+            keyName = "MEDIA_ACTION_RESULT",
+            scanCode = 0,
+            repeatCount = 0,
+            isLongPress = false,
+            deviceId = -1,
+            deviceName = "Android media session",
+            sourceHex = "n/a",
+            captureRoutes = setOf("Rider Notes media controller"),
+            details = message
+        )
     }
 }
 

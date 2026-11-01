@@ -1,13 +1,17 @@
 package com.praveen.ridernotes
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.KeyEvent
@@ -15,6 +19,9 @@ import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -26,7 +33,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -34,22 +43,32 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
+import com.praveen.ridernotes.recording.SavedVoiceNote
+import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 
 class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
+    private val microphoneEnabled = mutableStateOf(false)
+    private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
+    private val playingFileName = mutableStateOf<String?>(null)
+    private var notePlayer: MediaPlayer? = null
     private lateinit var diagnosticMediaSession: MediaSession
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,6 +82,13 @@ class MainActivity : ComponentActivity() {
                     onOpenAccessibilitySettings = {
                         startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                     },
+                    microphoneEnabled = microphoneEnabled,
+                    onRequestMicrophone = ::requestRecordingPermissions,
+                    savedNotes = savedNotes,
+                    playingFileName = playingFileName,
+                    onRefreshNotes = ::refreshSavedNotes,
+                    onPlayNote = ::playOrStopNote,
+                    onDeleteNotes = ::deleteNotes,
                     onClear = ButtonEventStore::clear,
                     onCopy = ::copyResults
                 )
@@ -73,6 +99,8 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
+        microphoneEnabled.value = hasMicrophonePermission()
+        refreshSavedNotes()
         diagnosticMediaSession.isActive = true
     }
 
@@ -82,6 +110,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        stopNotePlayback()
         diagnosticMediaSession.release()
         super.onDestroy()
     }
@@ -172,11 +201,87 @@ class MainActivity : ComponentActivity() {
             }
     }
 
+    private fun hasMicrophonePermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun requestRecordingPermissions() {
+        val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions += Manifest.permission.POST_NOTIFICATIONS
+        }
+        ActivityCompat.requestPermissions(
+            this,
+            permissions.toTypedArray(),
+            RECORDING_PERMISSION_REQUEST
+        )
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == RECORDING_PERMISSION_REQUEST) {
+            microphoneEnabled.value = hasMicrophonePermission()
+        }
+    }
+
+    private fun refreshSavedNotes() {
+        savedNotes.value = SavedVoiceNoteRepository.load(this)
+    }
+
+    private fun deleteNotes(notes: List<SavedVoiceNote>) {
+        if (notes.any { it.audioFile.name == playingFileName.value }) {
+            stopNotePlayback()
+        }
+        notes.forEach { SavedVoiceNoteRepository.delete(it) }
+        refreshSavedNotes()
+    }
+
+    private fun playOrStopNote(note: SavedVoiceNote) {
+        if (playingFileName.value == note.audioFile.name) {
+            stopNotePlayback()
+            return
+        }
+
+        stopNotePlayback()
+        try {
+            notePlayer = MediaPlayer().apply {
+                setDataSource(note.audioFile.absolutePath)
+                setOnCompletionListener { stopNotePlayback() }
+                setOnErrorListener { _, _, _ ->
+                    stopNotePlayback()
+                    true
+                }
+                prepare()
+                start()
+            }
+            playingFileName.value = note.audioFile.name
+        } catch (_: Exception) {
+            stopNotePlayback()
+        }
+    }
+
+    private fun stopNotePlayback() {
+        notePlayer?.runCatching {
+            if (isPlaying) stop()
+            release()
+        }
+        notePlayer = null
+        playingFileName.value = null
+    }
+
     private fun copyResults() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = ButtonEventStore.asShareableText()
             .ifBlank { "No Beauty-R1 signals captured yet." }
         clipboard.setPrimaryClip(ClipData.newPlainText("Beauty-R1 signal test", text))
+    }
+
+    companion object {
+        private const val RECORDING_PERMISSION_REQUEST = 4102
     }
 }
 
@@ -184,10 +289,53 @@ class MainActivity : ComponentActivity() {
 private fun DetectorScreen(
     detectorEnabled: State<Boolean>,
     onOpenAccessibilitySettings: () -> Unit,
+    microphoneEnabled: State<Boolean>,
+    onRequestMicrophone: () -> Unit,
+    savedNotes: State<List<SavedVoiceNote>>,
+    playingFileName: State<String?>,
+    onRefreshNotes: () -> Unit,
+    onPlayNote: (SavedVoiceNote) -> Unit,
+    onDeleteNotes: (List<SavedVoiceNote>) -> Unit,
     onClear: () -> Unit,
     onCopy: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
+    val selectedTab = remember { mutableStateOf(0) }
+    val expandedSources = remember { mutableStateOf<Set<String>>(emptySet()) }
+    val selectedNotePaths = remember { mutableStateOf<Set<String>>(emptySet()) }
+    val showDeleteConfirmation = remember { mutableStateOf(false) }
+    val selectedNotes = savedNotes.value.filter {
+        it.audioFile.absolutePath in selectedNotePaths.value
+    }
+
+    if (showDeleteConfirmation.value) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirmation.value = false },
+            title = { Text("Delete selected notes?") },
+            text = {
+                Text(
+                    "This permanently deletes ${selectedNotes.size} recording(s), " +
+                        "including their transcripts and metadata."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteNotes(selectedNotes)
+                        selectedNotePaths.value = emptySet()
+                        showDeleteConfirmation.value = false
+                    }
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirmation.value = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     Scaffold { innerPadding ->
         Column(
@@ -202,52 +350,257 @@ private fun DetectorScreen(
                 fontWeight = FontWeight.Bold
             )
             Text(
-                text = "Milestone 1.1 · remote signal detector",
+                text = "Beauty-R1 media controls and voice notes",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(Modifier.height(14.dp))
-
-            StatusCard(
-                enabled = detectorEnabled.value,
-                onOpenSettings = onOpenAccessibilitySettings
-            )
-
-            Spacer(Modifier.height(14.dp))
-
-            Text(
-                text = "Captured signals (${events.value.size})",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-
+            Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                OutlinedButton(onClick = onClear) { Text("Clear") }
-                OutlinedButton(onClick = onCopy) { Text("Copy results") }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            if (events.value.isEmpty()) {
-                EmptyInstructions()
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(
-                        items = events.value,
-                        key = { event ->
-                            "${event.eventTimeMillis}-${event.action}-${event.keyCode}-${event.scanCode}"
-                        }
-                    ) { event ->
-                        EventCard(event)
+                if (selectedTab.value == 0) {
+                    Button(onClick = { selectedTab.value = 0 }) { Text("Home") }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 0 }) { Text("Home") }
+                }
+                if (selectedTab.value == 1) {
+                    Button(onClick = { selectedTab.value = 1 }) {
+                        Text("Notes (${savedNotes.value.size})")
+                    }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 1 }) {
+                        Text("Notes (${savedNotes.value.size})")
                     }
                 }
+                if (selectedTab.value == 2) {
+                    Button(onClick = { selectedTab.value = 2 }) { Text("Log") }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 2 }) { Text("Log") }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            when (selectedTab.value) {
+                0 -> {
+                    Image(
+                        painter = painterResource(R.drawable.rider_notes_logo),
+                        contentDescription = "Rider Notes logo",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(170.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    StatusCard(
+                        enabled = detectorEnabled.value,
+                        onOpenSettings = onOpenAccessibilitySettings
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    MicrophoneCard(
+                        enabled = microphoneEnabled.value,
+                        onRequestPermission = onRequestMicrophone
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Card {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text("Beauty-R1 controls", fontWeight = FontWeight.Bold)
+                            Text("Single press · Play or pause")
+                            Text("Double press · Record voice note")
+                            Text("Triple press · Rewind")
+                            Text("Four presses · Forward")
+                        }
+                    }
+                }
+
+                1 -> {
+                    val notesBySource = savedNotes.value
+                        .groupBy { it.sourceApp }
+                        .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+
+                    Text(
+                        "Saved notes",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
+                        if (selectedNotes.isNotEmpty()) {
+                            Button(onClick = { showDeleteConfirmation.value = true }) {
+                                Text("Delete (${selectedNotes.size})")
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+
+                    if (savedNotes.value.isEmpty()) {
+                        Card {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
+                                Text("No saved notes yet", fontWeight = FontWeight.Bold)
+                                Text("Double-press Beauty-R1 to record your first note.")
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            notesBySource.forEach { (source, sourceNotes) ->
+                                item(key = "heading-$source") {
+                                    val expanded = source in expandedSources.value
+                                    OutlinedButton(
+                                        onClick = {
+                                            expandedSources.value =
+                                                if (expanded) {
+                                                    expandedSources.value - source
+                                                } else {
+                                                    expandedSources.value + source
+                                                }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            text = if (expanded) {
+                                                "▼  $source (${sourceNotes.size})"
+                                            } else {
+                                                "▶  $source (${sourceNotes.size})"
+                                            },
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+
+                                if (source in expandedSources.value) {
+                                    items(
+                                        items = sourceNotes,
+                                        key = { it.audioFile.absolutePath }
+                                    ) { note ->
+                                        SavedNoteCard(
+                                            note = note,
+                                            isPlaying =
+                                                playingFileName.value == note.audioFile.name,
+                                            isSelected =
+                                                note.audioFile.absolutePath in selectedNotePaths.value,
+                                            onSelectionChange = { selected ->
+                                                selectedNotePaths.value =
+                                                    if (selected) {
+                                                        selectedNotePaths.value +
+                                                            note.audioFile.absolutePath
+                                                    } else {
+                                                        selectedNotePaths.value -
+                                                            note.audioFile.absolutePath
+                                                    }
+                                            },
+                                            onPlay = { onPlayNote(note) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                else -> {
+                    Text(
+                        text = "Captured signals (${events.value.size})",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(onClick = onClear) { Text("Clear") }
+                        OutlinedButton(onClick = onCopy) { Text("Copy results") }
+                    }
+                    Spacer(Modifier.height(8.dp))
+
+                    if (events.value.isEmpty()) {
+                        EmptyInstructions()
+                    } else {
+                        LazyColumn(
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(
+                                items = events.value,
+                                key = { event ->
+                                    "${event.eventTimeMillis}-${event.action}-${event.keyCode}-${event.scanCode}"
+                                }
+                            ) { event ->
+                                EventCard(event)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SavedNoteCard(
+    note: SavedVoiceNote,
+    isPlaying: Boolean,
+    isSelected: Boolean,
+    onSelectionChange: (Boolean) -> Unit,
+    onPlay: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = onSelectionChange
+                )
+                Text(note.title, fontWeight = FontWeight.Bold)
+            }
+            Text("${note.sourceApp} · ${note.recordedAtLabel}")
+            note.author?.let { Text("Author: $it") }
+            note.chapter?.let {
+                val label = if (note.sourceApp == "Audible") {
+                    "Chapter / episode"
+                } else {
+                    "Chapter"
+                }
+                Text("$label: $it")
+            }
+            note.playbackPositionLabel?.let { Text("Media position: $it") }
+            Button(onClick = onPlay) {
+                Text(if (isPlaying) "Stop recording playback" else "Play recording")
+            }
+            Text(
+                "Audio: ${note.audioFile.name}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            if (!note.transcript.isNullOrBlank()) {
+                Text("Transcript", fontWeight = FontWeight.SemiBold)
+                Text(note.transcript)
+            } else {
+                Text(
+                    "Transcript: ${note.transcriptionStatus.lowercase().replace('_', ' ')}",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
@@ -276,6 +629,34 @@ private fun StatusCard(enabled: Boolean, onOpenSettings: () -> Unit) {
             if (!enabled) {
                 Button(onClick = onOpenSettings) {
                     Text("Open Accessibility settings")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MicrophoneCard(enabled: Boolean, onRequestPermission: () -> Unit) {
+    val background = if (enabled) Color(0xFFE7F4EA) else Color(0xFFFFF3E0)
+    Card(colors = CardDefaults.cardColors(containerColor = background)) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = if (enabled) "Microphone ready" else "Microphone permission required",
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                if (enabled) {
+                    "Double press can record a voice-note test."
+                } else {
+                    "Allow microphone access before testing voice-note recording."
+                }
+            )
+            if (!enabled) {
+                Button(onClick = onRequestPermission) {
+                    Text("Enable recording")
                 }
             }
         }
