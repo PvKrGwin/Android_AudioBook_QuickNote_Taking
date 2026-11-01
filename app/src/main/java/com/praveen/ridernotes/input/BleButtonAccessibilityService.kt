@@ -2,8 +2,16 @@ package com.praveen.ridernotes.input
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.media.AudioManager
+import android.media.ToneGenerator
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
@@ -20,6 +28,23 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
     private var lastDeviceId = -1
     private var lastDeviceName = "Beauty-R1"
+    private var screenReceiverRegistered = false
+    private var lastScreenOffBeepAt = 0L
+    private var screenOffObserved = false
+    private var lastScreenWakeAt = 0L
+
+    private val screenOnReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> screenOffObserved = true
+                Intent.ACTION_SCREEN_ON -> {
+                    screenOffObserved = false
+                    lastScreenWakeAt = SystemClock.elapsedRealtime()
+                    playScreenReadyTone()
+                }
+            }
+        }
+    }
 
     private val resolvePendingGesture = Runnable {
         detector.resolve(SystemClock.uptimeMillis())?.let(::recordGesture)
@@ -30,6 +55,8 @@ class BleButtonAccessibilityService : AccessibilityService() {
         serviceInfo = serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         }
+        screenOffObserved = !(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+        registerScreenOnReceiver()
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -37,6 +64,10 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
         if (!event.isBeautyCameraButton()) {
             return false
+        }
+
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            acknowledgeScreenOffPress()
         }
 
         if (event.action == KeyEvent.ACTION_DOWN &&
@@ -121,6 +152,63 @@ class BleButtonAccessibilityService : AccessibilityService() {
         return isBeautyDevice && isAlternatingCameraKey
     }
 
+    private fun registerScreenOnReceiver() {
+        if (screenReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(screenOnReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(screenOnReceiver, filter)
+        }
+        screenReceiverRegistered = true
+    }
+
+    private fun acknowledgeScreenOffPress() {
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val now = SystemClock.elapsedRealtime()
+        // Remote keys can wake the phone slightly before the accessibility callback.
+        val screenWasOff = !power.isInteractive || screenOffObserved ||
+            (lastScreenWakeAt > 0L && now - lastScreenWakeAt in 0L..350L)
+        if (!screenWasOff || now - lastScreenOffBeepAt < 1200L) return
+
+        lastScreenOffBeepAt = now
+        val outcome = runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            handler.post {
+                val firstStarted = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 160)
+                handler.postDelayed({
+                    val secondStarted = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 160)
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            "SCREEN_OFF_BUTTON_BEEP: two short beeps requested (first=$firstStarted, second=$secondStarted)",
+                            firstStarted && secondStarted
+                        )
+                    )
+                    handler.postDelayed({ tone.release() }, 220L)
+                }, 320L)
+            }
+        }
+        if (outcome.isFailure) {
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "SCREEN_OFF_BUTTON_BEEP failed: ${outcome.exceptionOrNull()?.javaClass?.simpleName}",
+                    false
+                )
+            )
+        }
+    }
+
+    private fun playScreenReadyTone() {
+        ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_READY_VOLUME).apply {
+            startTone(ToneGenerator.TONE_PROP_ACK, SCREEN_READY_BEEP_MS)
+            handler.postDelayed({ release() }, SCREEN_READY_BEEP_MS + 50L)
+        }
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Screen content is deliberately not inspected.
     }
@@ -133,6 +221,15 @@ class BleButtonAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacks(resolvePendingGesture)
         detector.cancel()
+        if (screenReceiverRegistered) {
+            unregisterReceiver(screenOnReceiver)
+            screenReceiverRegistered = false
+        }
         super.onDestroy()
+    }
+
+    companion object {
+        private const val SCREEN_READY_BEEP_MS = 180
+        private const val SCREEN_READY_VOLUME = 85
     }
 }

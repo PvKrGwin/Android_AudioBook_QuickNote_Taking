@@ -5,17 +5,21 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.praveen.ridernotes.MainActivity
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
+import com.praveen.ridernotes.transcription.ScribTranscriber
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -28,6 +32,11 @@ class VoiceRecordingService : Service() {
     private var outputFile: File? = null
     private var recordingStarted = false
     private var pauseCheckAttempts = 0
+    private var recordingInputLabel = "Phone microphone"
+    private var recordingWakeLock: PowerManager.WakeLock? = null
+    private var communicationRouteRequested = false
+    private var recorderStage = "not started"
+    private var stopping = false
 
     private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -46,8 +55,9 @@ class VoiceRecordingService : Service() {
     }
 
     private fun startRecordingFlow() {
-        if (recordingStarted || recorder != null) return
+        if (recordingStarted || recorder != null || stopping) return
         pauseCheckAttempts = 0
+        acquireRecordingWakeLock()
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
         playBeep()
         handler.postDelayed(beginAfterBeep, START_BEEP_GAP_MS)
@@ -71,12 +81,15 @@ class VoiceRecordingService : Service() {
                 )
             )
             MediaControlGateway.finishVoiceNote(this, delayMs = 0L)
+            releaseBluetoothRoute()
+            releaseRecordingWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return
         }
 
         try {
+            recorderStage = "create output file"
             val folder = File(filesDir, "voice_notes").apply { mkdirs() }
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
             val mediaContext = MediaControlGateway.currentVoiceNoteContext()
@@ -90,21 +103,69 @@ class VoiceRecordingService : Service() {
             val mediaRecorder = MediaRecorder().apply {
                 // Speech-optimized capture lets the phone apply its built-in
                 // voice processing/noise suppression where the device supports it.
+                recorderStage = "setAudioSource"
                 setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                val bluetoothInput = findBluetoothMicrophone()
+                val audioManager = getSystemService(AudioManager::class.java)
+                // On Android 12+, request the Bluetooth communication route
+                // before choosing the recorder input. A preferred device alone
+                // does not establish a headset microphone connection.
+                recorderStage = "setCommunicationDevice"
+                val routeReady = if (bluetoothInput != null &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    // setCommunicationDevice accepts communication OUTPUT devices,
+                    // not microphone input port IDs (which cause invalid portID).
+                    val communicationOutput = audioManager.availableCommunicationDevices.firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                            it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                    }
+                    if (communicationOutput != null) {
+                        runCatching { audioManager.setCommunicationDevice(communicationOutput) }
+                            .getOrDefault(false)
+                    } else false
+                } else false
+                communicationRouteRequested = routeReady
+                // Do not call setPreferredDevice(null): some Android recorder
+                // implementations reject a null device with IllegalArgumentException.
+                recorderStage = "setPreferredDevice"
+                val preferred = routeReady && bluetoothInput != null &&
+                    runCatching { setPreferredDevice(bluetoothInput) }.getOrDefault(false)
+                recordingInputLabel = if (preferred) {
+                    "Bluetooth communication route requested"
+                } else {
+                    "Phone microphone fallback (Bluetooth route unavailable)"
+                }
+                recorderStage = "configure MediaRecorder output"
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(44_100)
                 setAudioEncodingBitRate(128_000)
                 setOutputFile(file.absolutePath)
+                recorderStage = "prepare"
                 prepare()
+                recorderStage = "start"
                 start()
+                val routed = routedDevice
+                val bluetoothRouted = routed?.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                        routed?.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+                recordingInputLabel = when {
+                    bluetoothRouted -> "Bluetooth routed (audio not yet validated): ${routed?.productName}"
+                    routed == null -> "Microphone route unknown (Bluetooth not confirmed)"
+                    else -> "Non-Bluetooth microphone: ${routed.productName}"
+                }
             }
 
             outputFile = file
             recorder = mediaRecorder
             recordingStarted = true
             updateNotification("Recording voice note…")
-            ButtonEventStore.record(ButtonEvent.recordingResult("Recording started", true))
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "Recording started using $recordingInputLabel",
+                    true
+                )
+            )
             handler.postDelayed(autoStop, MAX_RECORDING_MS)
         } catch (error: Exception) {
             outputFile?.delete()
@@ -116,16 +177,19 @@ class VoiceRecordingService : Service() {
             MediaControlGateway.finishVoiceNote(this)
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
-                    "Recording failed: ${error.javaClass.simpleName}",
+                    "Recording failed at $recorderStage: ${error.javaClass.simpleName}: ${error.message?.take(160)}",
                     false
                 )
             )
+            releaseRecordingWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
     }
 
     private fun stopAndSave(reason: String) {
+        if (stopping) return
+        stopping = true
         handler.removeCallbacks(beginAfterBeep)
         handler.removeCallbacks(autoStop)
 
@@ -152,9 +216,9 @@ class VoiceRecordingService : Service() {
         val mediaContext = MediaControlGateway.currentVoiceNoteContext()
         if (saved && file != null) {
             saveMetadata(file, mediaContext)
+            ScribTranscriber.enqueue(this, file)
         }
 
-        playBeep()
         val source = if (mediaContext?.isStandalone == false) {
             " linked to ${mediaContext.appName}"
         } else {
@@ -168,6 +232,47 @@ class VoiceRecordingService : Service() {
         ButtonEventStore.record(ButtonEvent.recordingResult(message, saved))
 
         MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS)
+        // Return output routing from the Soundcore communication profile BEFORE
+        // announcing that recording ended. Otherwise the confirmation tone may
+        // be silent when the standalone note releases its microphone.
+        releaseBluetoothRoute()
+        playStopConfirmation(autoStopped = reason == "40-second auto-stop")
+    }
+
+    private fun playStopConfirmation(autoStopped: Boolean) {
+        val count = if (autoStopped) 6 else 1
+        // Keep the foreground service and wake lock alive until every beep
+        // finishes, including when the screen is off.
+        handler.postDelayed({
+            val tone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
+                .getOrNull()
+            if (tone == null) {
+                ButtonEventStore.record(ButtonEvent.recordingResult("RECORDING_END_BEEP: tone unavailable", false))
+                completeStop()
+                return@postDelayed
+            }
+            repeat(count) { index ->
+                handler.postDelayed({
+                    val started = runCatching {
+                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, END_BEEP_MS)
+                    }.getOrDefault(false)
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            "RECORDING_END_BEEP: ${index + 1}/$count, autoStop=$autoStopped, started=$started",
+                            started
+                        )
+                    )
+                }, index * END_BEEP_STEP_MS)
+            }
+            handler.postDelayed({
+                tone.release()
+                completeStop()
+            }, (count - 1) * END_BEEP_STEP_MS + END_BEEP_MS + 100L)
+        }, ROUTE_SETTLE_MS)
+    }
+
+    private fun completeStop() {
+        releaseRecordingWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -194,6 +299,7 @@ class VoiceRecordingService : Service() {
                 .put("subtitleOrChapter", mediaContext?.subtitle ?: JSONObject.NULL)
                 .put("author", mediaContext?.author ?: JSONObject.NULL)
                 .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
+                .put("recordingInput", recordingInputLabel)
                 .put("transcriptionStatus", "PENDING")
 
             File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
@@ -206,6 +312,47 @@ class VoiceRecordingService : Service() {
                 )
             )
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun acquireRecordingWakeLock() {
+        if (recordingWakeLock?.isHeld == true) return
+        recordingWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "${packageName}:voice-note-recording"
+            )
+            .apply {
+                setReferenceCounted(false)
+                acquire(MAX_RECORDING_MS + WAKE_LOCK_SAFETY_MS)
+            }
+    }
+
+    private fun releaseRecordingWakeLock() {
+        recordingWakeLock?.takeIf { it.isHeld }?.release()
+        recordingWakeLock = null
+    }
+
+    private fun releaseBluetoothRoute() {
+        if (communicationRouteRequested && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(AudioManager::class.java).clearCommunicationDevice()
+        }
+        communicationRouteRequested = false
+    }
+
+    private fun findBluetoothMicrophone(): AudioDeviceInfo? {
+        val audioManager = getSystemService(AudioManager::class.java)
+        return audioManager
+            .getDevices(AudioManager.GET_DEVICES_INPUTS)
+            .firstOrNull { device ->
+                device.isSource && (
+                    device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        (
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                                device.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                        )
+                    )
+            }
     }
 
     private fun safeFilePart(value: String): String {
@@ -261,6 +408,8 @@ class VoiceRecordingService : Service() {
         recorder?.release()
         recorder = null
         RecordingController.isRecordingOrStarting = false
+        releaseBluetoothRoute()
+        releaseRecordingWakeLock()
         super.onDestroy()
     }
 
@@ -273,9 +422,13 @@ class VoiceRecordingService : Service() {
         private const val CHANNEL_ID = "rider_notes_recording"
         private const val NOTIFICATION_ID = 2001
         private const val MAX_RECORDING_MS = 40_000L
+        private const val WAKE_LOCK_SAFETY_MS = 10_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 300
+        private const val ROUTE_SETTLE_MS = 300L
+        private const val END_BEEP_MS = 160
+        private const val END_BEEP_STEP_MS = 320L
         private const val PAUSE_RETRY_MS = 300L
         private const val MAX_PAUSE_ATTEMPTS = 3
     }

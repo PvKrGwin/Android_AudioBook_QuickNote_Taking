@@ -1,0 +1,242 @@
+package com.praveen.ridernotes.transcription
+
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
+import android.os.ParcelFileDescriptor
+import org.json.JSONObject
+import org.opentranscribe.api.ITranscriptionCallback
+import org.opentranscribe.api.ITranscriptionService
+import org.opentranscribe.api.TranscriptionError
+import org.opentranscribe.api.TranscriptionRequest
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Sends saved Rider Notes recordings to a user-approved Open Transcribe engine.
+ * Scrib implements this contract entirely on-device.
+ */
+object ScribTranscriber {
+    private const val ACTION = "org.opentranscribe.api.ITranscriptionService"
+    private const val SCRIB_PACKAGE = "org.scrib.transcriber"
+    private const val PREFS = "rider_notes_transcription"
+    private const val PREF_COMPONENT = "approved_transcriber_component"
+
+    private val activeConnections = ConcurrentHashMap<String, ServiceConnection>()
+
+    fun status(context: Context): String {
+        val component = approvedComponent(context)
+        return when {
+            component == null && findScrib(context) != null ->
+                "Scrib installed — tap Enable Scrib transcription"
+            component == null ->
+                "Scrib not detected"
+            else ->
+                "Scrib enabled for automatic offline transcription"
+        }
+    }
+
+    fun enableScrib(context: Context): String {
+        val component = findScrib(context)
+            ?: return "Scrib was not detected. Install and open Scrib first."
+
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_COMPONENT, component.flattenToString())
+            .apply()
+
+        return "Scrib enabled. New recordings will be transcribed automatically."
+    }
+
+    fun enqueue(context: Context, audioFile: File) {
+        val appContext = context.applicationContext
+        val metadataFile = metadataFileFor(audioFile)
+        val component = approvedComponent(appContext)
+
+        if (component == null) {
+            updateMetadata(
+                metadataFile,
+                "SCRIB_NOT_ENABLED",
+                error = "Open Rider Notes Home and enable Scrib transcription"
+            )
+            return
+        }
+
+        updateMetadata(metadataFile, "QUEUED")
+
+        val key = audioFile.absolutePath
+        lateinit var connection: ServiceConnection
+
+        fun finish() {
+            val stored = activeConnections.remove(key)
+            if (stored != null) {
+                try {
+                    appContext.unbindService(stored)
+                } catch (_: IllegalArgumentException) {
+                    // Service already disconnected.
+                }
+            }
+        }
+
+        connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+                try {
+                    val service = ITranscriptionService.Stub.asInterface(binder)
+                    val capabilities = service.capabilities
+                    if (!capabilities.modelReady) {
+                        updateMetadata(
+                            metadataFile,
+                            "MODEL_REQUIRED",
+                            error = "Open Scrib and download/select a transcription model"
+                        )
+                        finish()
+                        return
+                    }
+
+                    updateMetadata(metadataFile, "TRANSCRIBING")
+                    val audio = ParcelFileDescriptor.open(
+                        audioFile,
+                        ParcelFileDescriptor.MODE_READ_ONLY
+                    )
+                    val request = TranscriptionRequest().apply {
+                        fileName = audioFile.name
+                        mimeType = "audio/mp4"
+                        languageHint = "en"
+                    }
+                    val callback = object : ITranscriptionCallback.Stub() {
+                        override fun onTranscriptionProgress(text: String?) {
+                            updateMetadata(metadataFile, "TRANSCRIBING")
+                        }
+
+                        override fun onTranscriptionResult(text: String?) {
+                            val transcript = text?.trim().orEmpty()
+                            if (transcript.isBlank()) {
+                                updateMetadata(
+                                    metadataFile,
+                                    "NO_SPEECH",
+                                    error = "Scrib returned an empty transcript"
+                                )
+                            } else {
+                                updateMetadata(
+                                    metadataFile,
+                                    "COMPLETED",
+                                    transcript = transcript
+                                )
+                                File(
+                                    audioFile.parentFile,
+                                    audioFile.nameWithoutExtension + ".txt"
+                                ).writeText(transcript)
+                            }
+                            finish()
+                        }
+
+                        override fun onTranscriptionSegment(
+                            startMs: Long,
+                            endMs: Long,
+                            text: String?
+                        ) = Unit
+
+                        override fun onTranscriptionError(error: TranscriptionError?) {
+                            val detail = error?.message
+                                ?: error?.type?.toString()
+                                ?: "Unknown Scrib error"
+                            updateMetadata(metadataFile, "FAILED", error = detail)
+                            finish()
+                        }
+                    }
+
+                    service.transcribe(audio, request, callback)
+                    audio.close()
+                } catch (error: Exception) {
+                    updateMetadata(
+                        metadataFile,
+                        "FAILED",
+                        error = "Scrib connection failed: " +
+                            error.javaClass.simpleName
+                    )
+                    finish()
+                }
+            }
+
+            override fun onServiceDisconnected(name: ComponentName?) {
+                activeConnections.remove(key)
+            }
+
+            override fun onBindingDied(name: ComponentName?) {
+                updateMetadata(
+                    metadataFile,
+                    "FAILED",
+                    error = "Scrib service stopped unexpectedly"
+                )
+                finish()
+            }
+
+            override fun onNullBinding(name: ComponentName?) {
+                updateMetadata(
+                    metadataFile,
+                    "FAILED",
+                    error = "Scrib did not provide its transcription service"
+                )
+                finish()
+            }
+        }
+
+        activeConnections[key] = connection
+        val intent = Intent(ACTION).setComponent(component)
+        if (!appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)) {
+            activeConnections.remove(key)
+            updateMetadata(
+                metadataFile,
+                "FAILED",
+                error = "Could not connect to Scrib"
+            )
+        }
+    }
+
+    private fun findScrib(context: Context): ComponentName? {
+        val services = context.packageManager.queryIntentServices(Intent(ACTION), 0)
+        val service = services.firstOrNull {
+            it.serviceInfo.packageName == SCRIB_PACKAGE
+        } ?: return null
+        return ComponentName(service.serviceInfo.packageName, service.serviceInfo.name)
+    }
+
+    private fun approvedComponent(context: Context): ComponentName? {
+        val flattened = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(PREF_COMPONENT, null)
+            ?: return null
+        val component = ComponentName.unflattenFromString(flattened) ?: return null
+        return if (component.packageName == SCRIB_PACKAGE) component else null
+    }
+
+    private fun metadataFileFor(audioFile: File) =
+        File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
+
+    @Synchronized
+    private fun updateMetadata(
+        metadataFile: File,
+        status: String,
+        transcript: String? = null,
+        error: String? = null
+    ) {
+        try {
+            val json = if (metadataFile.exists()) {
+                JSONObject(metadataFile.readText())
+            } else {
+                JSONObject()
+            }
+            json.put("transcriptionStatus", status)
+            if (transcript != null) json.put("transcript", transcript)
+            if (error != null) {
+                json.put("transcriptionError", error)
+            } else {
+                json.remove("transcriptionError")
+            }
+            metadataFile.writeText(json.toString(2))
+        } catch (_: Exception) {
+            // Audio remains available even if transcript metadata cannot update.
+        }
+    }
+}

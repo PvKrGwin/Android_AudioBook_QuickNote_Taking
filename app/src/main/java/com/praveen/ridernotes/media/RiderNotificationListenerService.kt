@@ -12,6 +12,7 @@ import android.service.notification.StatusBarNotification
 class RiderNotificationListenerService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn?.let(MediaControlGateway::updateNotificationMetadata)
+        MediaControlGateway.observeActivePlayback(this)
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -24,6 +25,7 @@ class RiderNotificationListenerService : NotificationListenerService() {
         super.onListenerConnected()
         MediaControlGateway.notificationAccessConnected = true
         activeNotifications.orEmpty().forEach(MediaControlGateway::updateNotificationMetadata)
+        MediaControlGateway.observeActivePlayback(this)
     }
 
     override fun onListenerDisconnected() {
