@@ -34,6 +34,18 @@ object RemoteButtonConfig {
         )
     }
 
+    fun resetToBeauty(context: Context) {
+        save(
+            context,
+            "Beauty-R1",
+            setOf(
+                signature(KeyEvent.KEYCODE_VOLUME_UP, 115),
+                signature(KeyEvent.KEYCODE_VOLUME_DOWN, 114)
+            )
+        )
+        setTraining(context, false)
+    }
+
     fun save(context: Context, deviceName: String, signals: Set<String>) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString(DEVICE, deviceName)

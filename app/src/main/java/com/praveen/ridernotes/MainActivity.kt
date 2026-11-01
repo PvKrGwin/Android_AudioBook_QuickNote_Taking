@@ -13,6 +13,8 @@ import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -85,6 +87,15 @@ class MainActivity : ComponentActivity() {
     private var remoteTrainingDevice: String? = null
     private val remoteTrainingSignals = linkedSetOf<String>()
     private var remoteTrainingPresses = 0
+    private val remoteSetupHandler = Handler(Looper.getMainLooper())
+    private val remoteTrainingTimeout = Runnable {
+        if (remoteTraining) {
+            remoteTraining = false
+            RemoteButtonConfig.setTraining(this, false)
+            remoteSetupStatus.value =
+                "Training timed out after 15 seconds; previous remote kept"
+        }
+    }
     private var pendingExportNotes: List<SavedVoiceNote> = emptyList()
 
     private val exportBackupLauncher = registerForActivityResult(
@@ -131,7 +142,8 @@ class MainActivity : ComponentActivity() {
                     onClear = ButtonEventStore::clear,
                     onCopy = ::copyResults,
                     remoteSetupStatus = remoteSetupStatus,
-                    onStartRemoteSetup = ::startRemoteSetup
+                    onStartRemoteSetup = ::startRemoteSetup,
+                    onResetRemote = ::resetRemoteToBeauty
                 )
             }
         }
@@ -154,6 +166,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         stopNotePlayback()
+        remoteSetupHandler.removeCallbacks(remoteTrainingTimeout)
+        if (remoteTraining) RemoteButtonConfig.setTraining(this, false)
         diagnosticMediaSession.release()
         super.onDestroy()
     }
@@ -174,6 +188,7 @@ class MainActivity : ComponentActivity() {
                 if (remoteTrainingPresses >= 4) {
                     RemoteButtonConfig.save(this, name, remoteTrainingSignals)
                     RemoteButtonConfig.setTraining(this, false)
+                    remoteSetupHandler.removeCallbacks(remoteTrainingTimeout)
                     remoteTraining = false
                     remoteSetupStatus.value =
                         "Configured $name with ${remoteTrainingSignals.size} signal(s)"
@@ -424,7 +439,17 @@ class MainActivity : ComponentActivity() {
         remoteTrainingDevice = null
         remoteTrainingSignals.clear()
         remoteTrainingPresses = 0
-        remoteSetupStatus.value = "Press your chosen Bluetooth button four times"
+        remoteSetupStatus.value =
+            "Press your chosen Bluetooth button four times within 15 seconds"
+        remoteSetupHandler.removeCallbacks(remoteTrainingTimeout)
+        remoteSetupHandler.postDelayed(remoteTrainingTimeout, REMOTE_TRAINING_TIMEOUT_MS)
+    }
+
+    private fun resetRemoteToBeauty() {
+        remoteSetupHandler.removeCallbacks(remoteTrainingTimeout)
+        remoteTraining = false
+        RemoteButtonConfig.resetToBeauty(this)
+        remoteSetupStatus.value = "Reset complete: Beauty-R1 is the active remote"
     }
 
     private fun copyResults() {
@@ -436,6 +461,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val RECORDING_PERMISSION_REQUEST = 4102
+        private const val REMOTE_TRAINING_TIMEOUT_MS = 15_000L
     }
 }
 
@@ -460,7 +486,8 @@ private fun DetectorScreen(
     onClear: () -> Unit,
     onCopy: () -> Unit,
     remoteSetupStatus: State<String>,
-    onStartRemoteSetup: () -> Unit
+    onStartRemoteSetup: () -> Unit,
+    onResetRemote: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -584,8 +611,15 @@ private fun DetectorScreen(
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Text("Remote setup", fontWeight = FontWeight.Bold)
-                                    Text("After pairing, tap Train and press the one button you want Rider Notes to use four times.")
-                                    Button(onClick = onStartRemoteSetup) { Text("Train Bluetooth button") }
+                                    Text("After pairing, tap Train and press the chosen button four times within 15 seconds.")
+                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Button(onClick = onStartRemoteSetup) {
+                                            Text("Train button")
+                                        }
+                                        OutlinedButton(onClick = onResetRemote) {
+                                            Text("Reset to Beauty-R1")
+                                        }
+                                    }
                                     if (remoteSetupStatus.value.isNotBlank()) {
                                         Text(remoteSetupStatus.value, color = MaterialTheme.colorScheme.primary)
                                     }
