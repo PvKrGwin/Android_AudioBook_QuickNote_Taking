@@ -76,6 +76,8 @@ class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
     private val microphoneEnabled = mutableStateOf(false)
     private val scribStatus = mutableStateOf("")
+    private val transcriptionLanguage =
+        mutableStateOf(ScribTranscriber.LANGUAGE_ENGLISH)
     private val backupStatus = mutableStateOf("")
     private var pendingExportNotes: List<SavedVoiceNote> = emptyList()
 
@@ -110,6 +112,8 @@ class MainActivity : ComponentActivity() {
                     onRequestMicrophone = ::requestRecordingPermissions,
                     scribStatus = scribStatus,
                     onEnableScrib = ::enableScrib,
+                    transcriptionLanguage = transcriptionLanguage,
+                    onSelectTranscriptionLanguage = ::selectTranscriptionLanguage,
                     savedNotes = savedNotes,
                     playingFileName = playingFileName,
                     onRefreshNotes = ::refreshSavedNotes,
@@ -130,6 +134,7 @@ class MainActivity : ComponentActivity() {
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
         scribStatus.value = ScribTranscriber.status(this)
+        transcriptionLanguage.value = ScribTranscriber.languageMode(this)
         refreshSavedNotes()
         diagnosticMediaSession.isActive = true
     }
@@ -379,6 +384,11 @@ class MainActivity : ComponentActivity() {
         scribStatus.value = ScribTranscriber.enableScrib(this)
     }
 
+    private fun selectTranscriptionLanguage(mode: String) {
+        ScribTranscriber.setLanguageMode(this, mode)
+        transcriptionLanguage.value = mode
+    }
+
     private fun copyResults() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = ButtonEventStore.asShareableText()
@@ -399,6 +409,8 @@ private fun DetectorScreen(
     onRequestMicrophone: () -> Unit,
     scribStatus: State<String>,
     onEnableScrib: () -> Unit,
+    transcriptionLanguage: State<String>,
+    onSelectTranscriptionLanguage: (String) -> Unit,
     savedNotes: State<List<SavedVoiceNote>>,
     playingFileName: State<String?>,
     onRefreshNotes: () -> Unit,
@@ -519,6 +531,12 @@ private fun DetectorScreen(
                             MicrophoneCard(
                                 enabled = microphoneEnabled.value,
                                 onRequestPermission = onRequestMicrophone
+                            )
+                        }
+                        item {
+                            TranscriptionLanguageCard(
+                                selectedMode = transcriptionLanguage.value,
+                                onSelectMode = onSelectTranscriptionLanguage
                             )
                         }
                         item {
@@ -834,6 +852,52 @@ private fun StatusCard(enabled: Boolean, onOpenSettings: () -> Unit) {
                     Text("Open Accessibility settings")
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TranscriptionLanguageCard(
+    selectedMode: String,
+    onSelectMode: (String) -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("Transcription language", fontWeight = FontWeight.Bold)
+            Text(
+                when (selectedMode) {
+                    ScribTranscriber.LANGUAGE_AUTO ->
+                        "Auto-detect is best when recordings may switch between English and Kannada."
+                    ScribTranscriber.LANGUAGE_KANNADA ->
+                        "Kannada mode expects Kannada speech and requests Kannada-script transcription."
+                    else ->
+                        "English mode is best for mainly English speech with occasional Kannada names."
+                }
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(
+                    ScribTranscriber.LANGUAGE_AUTO,
+                    ScribTranscriber.LANGUAGE_ENGLISH,
+                    ScribTranscriber.LANGUAGE_KANNADA
+                ).forEach { mode ->
+                    val label = ScribTranscriber.languageLabel(mode)
+                    if (selectedMode == mode) {
+                        Button(onClick = { onSelectMode(mode) }) { Text(label) }
+                    } else {
+                        OutlinedButton(onClick = { onSelectMode(mode) }) { Text(label) }
+                    }
+                }
+            }
+            Text(
+                "Applies to new recordings only.",
+                style = MaterialTheme.typography.bodySmall
+            )
         }
     }
 }

@@ -23,6 +23,11 @@ object ScribTranscriber {
     private const val SCRIB_PACKAGE = "org.scrib.transcriber"
     private const val PREFS = "rider_notes_transcription"
     private const val PREF_COMPONENT = "approved_transcriber_component"
+    private const val PREF_LANGUAGE_MODE = "transcription_language_mode"
+
+    const val LANGUAGE_AUTO = "AUTO"
+    const val LANGUAGE_ENGLISH = "ENGLISH"
+    const val LANGUAGE_KANNADA = "KANNADA"
 
     private val activeConnections = ConcurrentHashMap<String, ServiceConnection>()
 
@@ -48,6 +53,25 @@ object ScribTranscriber {
             .apply()
 
         return "Scrib enabled. New recordings will be transcribed automatically."
+    }
+
+    fun languageMode(context: Context): String =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(PREF_LANGUAGE_MODE, LANGUAGE_ENGLISH)
+            ?: LANGUAGE_ENGLISH
+
+    fun setLanguageMode(context: Context, mode: String) {
+        require(mode in setOf(LANGUAGE_AUTO, LANGUAGE_ENGLISH, LANGUAGE_KANNADA))
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putString(PREF_LANGUAGE_MODE, mode)
+            .apply()
+    }
+
+    fun languageLabel(mode: String): String = when (mode) {
+        LANGUAGE_AUTO -> "Auto"
+        LANGUAGE_KANNADA -> "Kannada"
+        else -> "English"
     }
 
     fun enqueue(context: Context, audioFile: File) {
@@ -103,7 +127,11 @@ object ScribTranscriber {
                     val request = TranscriptionRequest().apply {
                         fileName = audioFile.name
                         mimeType = "audio/mp4"
-                        languageHint = "en"
+                        languageHint = when (languageMode(appContext)) {
+                            LANGUAGE_AUTO -> ""
+                            LANGUAGE_KANNADA -> "kn"
+                            else -> "en"
+                        }
                     }
                     val callback = object : ITranscriptionCallback.Stub() {
                         override fun onTranscriptionProgress(text: String?) {
