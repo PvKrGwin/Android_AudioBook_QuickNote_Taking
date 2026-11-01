@@ -55,6 +55,19 @@ class VoiceRecordingService : Service() {
         playNextWarningBeep()
     }
     private val warningBeep = Runnable { playNextWarningBeep() }
+    private val callSafetyCheck = object : Runnable {
+        override fun run() {
+            if (!recordingStarted || stopping) return
+            val audio = getSystemService(AudioManager::class.java)
+            if (audio.mode == AudioManager.MODE_IN_CALL ||
+                audio.mode == AudioManager.MODE_RINGTONE
+            ) {
+                stopAndSave("incoming cellular call", deferMediaResume = true)
+            } else {
+                handler.postDelayed(this, CALL_SAFETY_CHECK_MS)
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -64,6 +77,8 @@ class VoiceRecordingService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopAndSave("remote press")
+            ACTION_STOP_FOR_CALL ->
+                stopAndSave("incoming app call", deferMediaResume = true)
             ACTION_START -> startRecordingFlow()
             ACTION_EXTEND -> extendRecording()
             ACTION_HOLD_AUTO_STOP -> holdAutoStopForGesture()
@@ -187,6 +202,7 @@ class VoiceRecordingService : Service() {
                 )
             )
             scheduleRecordingDeadline()
+            handler.post(callSafetyCheck)
         } catch (error: Exception) {
             outputFile?.delete()
             outputFile = null
@@ -207,10 +223,11 @@ class VoiceRecordingService : Service() {
         }
     }
 
-    private fun stopAndSave(reason: String) {
+    private fun stopAndSave(reason: String, deferMediaResume: Boolean = false) {
         if (stopping) return
         stopping = true
         handler.removeCallbacks(beginAfterBeep)
+        handler.removeCallbacks(callSafetyCheck)
         cancelRecordingDeadline()
         textToSpeech?.stop()
         textToSpeech?.shutdown()
@@ -255,7 +272,7 @@ class VoiceRecordingService : Service() {
         }
         ButtonEventStore.record(ButtonEvent.recordingResult(message, saved))
 
-        MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS)
+        MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS, deferForCall = deferMediaResume)
         // Return output routing from the Soundcore communication profile BEFORE
         // announcing that recording ended. Otherwise the confirmation tone may
         // be silent when the standalone note releases its microphone.
@@ -549,6 +566,7 @@ class VoiceRecordingService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(beginAfterBeep)
+        handler.removeCallbacks(callSafetyCheck)
         cancelRecordingDeadline()
         textToSpeech?.stop()
         textToSpeech?.shutdown()
@@ -567,6 +585,8 @@ class VoiceRecordingService : Service() {
     companion object {
         const val ACTION_START = "com.praveen.ridernotes.action.START_RECORDING"
         const val ACTION_STOP = "com.praveen.ridernotes.action.STOP_RECORDING"
+        const val ACTION_STOP_FOR_CALL =
+            "com.praveen.ridernotes.action.STOP_RECORDING_FOR_CALL"
         const val ACTION_EXTEND = "com.praveen.ridernotes.action.EXTEND_RECORDING"
         const val ACTION_HOLD_AUTO_STOP =
             "com.praveen.ridernotes.action.HOLD_RECORDING_AUTO_STOP"
@@ -574,6 +594,7 @@ class VoiceRecordingService : Service() {
         private const val CHANNEL_ID = "rider_notes_recording"
         private const val NOTIFICATION_ID = 2001
         private const val MAX_RECORDING_MS = 40_000L
+        private const val CALL_SAFETY_CHECK_MS = 500L
         private const val WARNING_WINDOW_MS = 4_000L
         private const val WARNING_BEEP_COUNT = 8
         private const val WARNING_BEEP_MS = 160

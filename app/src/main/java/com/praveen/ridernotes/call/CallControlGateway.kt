@@ -77,6 +77,9 @@ object CallControlGateway {
         calls.clear()
     }
 
+    fun hasNotificationCall(): Boolean =
+        (currentCall()?.state ?: CallState.NONE) != CallState.NONE
+
     fun hasOngoingCall(context: Context): Boolean =
         (currentCall()?.state ?: CallState.NONE) != CallState.NONE ||
             audioCallState(context) != CallState.NONE

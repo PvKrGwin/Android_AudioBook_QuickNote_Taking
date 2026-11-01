@@ -63,6 +63,14 @@ object RecordingController {
         return "Recording extension requested"
     }
 
+    fun interruptForCall(context: Context) {
+        if (!isRecordingOrStarting) return
+        context.startService(
+            Intent(context, VoiceRecordingService::class.java)
+                .setAction(VoiceRecordingService.ACTION_STOP_FOR_CALL)
+        )
+    }
+
     fun stop(context: Context): String {
         if (!isRecordingOrStarting) return "No recording is active"
         context.startService(

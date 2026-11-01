@@ -51,6 +51,7 @@ object MediaControlGateway {
 
     @Volatile
     private var voiceNoteContext: VoiceNoteMediaContext? = null
+    @Volatile private var deferredResumeContext: VoiceNoteMediaContext? = null
 
 
     fun prepareForVoiceNote(context: Context): VoiceNoteMediaContext {
@@ -187,10 +188,18 @@ object MediaControlGateway {
         notificationTextByPackage.clear()
     }
 
-    fun finishVoiceNote(context: Context, delayMs: Long = 1_500L) {
+    fun finishVoiceNote(
+        context: Context,
+        delayMs: Long = 1_500L,
+        deferForCall: Boolean = false
+    ) {
         val savedContext = voiceNoteContext
         voiceNoteContext = null
         if (savedContext?.wasPlaying != true || savedContext.packageName == null) return
+        if (deferForCall) {
+            deferredResumeContext = savedContext
+            return
+        }
 
         val appContext = context.applicationContext
         Handler(Looper.getMainLooper()).postDelayed({
@@ -208,6 +217,13 @@ object MediaControlGateway {
                 // Audio is already safe; a failed resume must not delete the note.
             }
         }, delayMs)
+    }
+
+    fun resumeDeferredAfterCall(context: Context) {
+        val saved = deferredResumeContext ?: return
+        deferredResumeContext = null
+        voiceNoteContext = saved
+        finishVoiceNote(context)
     }
 
     fun togglePlayPause(context: Context): Result {

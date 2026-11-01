@@ -3,6 +3,7 @@ package com.praveen.ridernotes.media
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.praveen.ridernotes.call.CallControlGateway
+import com.praveen.ridernotes.recording.RecordingController
 
 /**
  * Android grants media-session discovery through notification-listener access.
@@ -16,6 +17,9 @@ class RiderNotificationListenerService : NotificationListenerService() {
             MediaControlGateway.updateNotificationMetadata(it)
             CallControlGateway.updateNotification(it)
         }
+        if (CallControlGateway.hasNotificationCall()) {
+            RecordingController.interruptForCall(this)
+        }
         MediaControlGateway.observeActivePlayback(this)
     }
 
@@ -23,6 +27,9 @@ class RiderNotificationListenerService : NotificationListenerService() {
         sbn?.let {
             MediaControlGateway.removeNotificationMetadata(it)
             CallControlGateway.removeNotification(it)
+        }
+        if (!CallControlGateway.hasNotificationCall()) {
+            MediaControlGateway.resumeDeferredAfterCall(this)
         }
     }
 
