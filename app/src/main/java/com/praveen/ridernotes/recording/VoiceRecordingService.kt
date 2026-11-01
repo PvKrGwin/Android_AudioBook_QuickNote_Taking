@@ -575,9 +575,9 @@ class VoiceRecordingService : Service() {
         private const val NOTIFICATION_ID = 2001
         private const val MAX_RECORDING_MS = 40_000L
         private const val WARNING_WINDOW_MS = 4_000L
-        private const val WARNING_BEEP_COUNT = 4
+        private const val WARNING_BEEP_COUNT = 8
         private const val WARNING_BEEP_MS = 160
-        private const val WARNING_BEEP_STEP_MS = 1_000L
+        private const val WARNING_BEEP_STEP_MS = 500L
         private const val GESTURE_RESOLUTION_GRACE_MS = 1_100L
         private const val WAKE_LOCK_SAFETY_MS = 10_000L
         private const val START_BEEP_GAP_MS = 400L
