@@ -75,6 +75,7 @@ import java.util.zip.ZipOutputStream
 class MainActivity : ComponentActivity() {
     private val detectorEnabled = mutableStateOf(false)
     private val microphoneEnabled = mutableStateOf(false)
+    private val phoneCallEnabled = mutableStateOf(false)
     private val scribStatus = mutableStateOf("")
     private val backupStatus = mutableStateOf("")
     private var pendingExportNotes: List<SavedVoiceNote> = emptyList()
@@ -108,6 +109,8 @@ class MainActivity : ComponentActivity() {
                     },
                     microphoneEnabled = microphoneEnabled,
                     onRequestMicrophone = ::requestRecordingPermissions,
+                    phoneCallEnabled = phoneCallEnabled,
+                    onRequestPhoneCall = ::requestPhoneCallPermissions,
                     scribStatus = scribStatus,
                     onEnableScrib = ::enableScrib,
                     savedNotes = savedNotes,
@@ -129,6 +132,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
+        phoneCallEnabled.value = hasPhoneCallPermissions()
         scribStatus.value = ScribTranscriber.status(this)
         refreshSavedNotes()
         diagnosticMediaSession.isActive = true
@@ -235,6 +239,23 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
 
+    private fun hasPhoneCallPermissions(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_PHONE_STATE) ==
+            PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ANSWER_PHONE_CALLS) ==
+                PackageManager.PERMISSION_GRANTED
+
+    private fun requestPhoneCallPermissions() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(
+                Manifest.permission.READ_PHONE_STATE,
+                Manifest.permission.ANSWER_PHONE_CALLS
+            ),
+            PHONE_CALL_PERMISSION_REQUEST
+        )
+    }
+
     private fun requestRecordingPermissions() {
         val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -255,6 +276,8 @@ class MainActivity : ComponentActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == RECORDING_PERMISSION_REQUEST) {
             microphoneEnabled.value = hasMicrophonePermission()
+        } else if (requestCode == PHONE_CALL_PERMISSION_REQUEST) {
+            phoneCallEnabled.value = hasPhoneCallPermissions()
         }
     }
 
@@ -388,6 +411,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         private const val RECORDING_PERMISSION_REQUEST = 4102
+        private const val PHONE_CALL_PERMISSION_REQUEST = 4103
     }
 }
 
@@ -397,6 +421,8 @@ private fun DetectorScreen(
     onOpenAccessibilitySettings: () -> Unit,
     microphoneEnabled: State<Boolean>,
     onRequestMicrophone: () -> Unit,
+    phoneCallEnabled: State<Boolean>,
+    onRequestPhoneCall: () -> Unit,
     scribStatus: State<String>,
     onEnableScrib: () -> Unit,
     savedNotes: State<List<SavedVoiceNote>>,
@@ -519,6 +545,12 @@ private fun DetectorScreen(
                             MicrophoneCard(
                                 enabled = microphoneEnabled.value,
                                 onRequestPermission = onRequestMicrophone
+                            )
+                        }
+                        item {
+                            PhoneCallCard(
+                                enabled = phoneCallEnabled.value,
+                                onRequestPermission = onRequestPhoneCall
                             )
                         }
                         item {
@@ -832,6 +864,40 @@ private fun StatusCard(enabled: Boolean, onOpenSettings: () -> Unit) {
             if (!enabled) {
                 Button(onClick = onOpenSettings) {
                     Text("Open Accessibility settings")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PhoneCallCard(enabled: Boolean, onRequestPermission: () -> Unit) {
+    val background = if (enabled) Color(0xFFE7F4EA) else Color(0xFFFFF3E0)
+    Card(colors = CardDefaults.cardColors(containerColor = background)) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = if (enabled) {
+                    "Cellular call controls ready"
+                } else {
+                    "Phone-call permission required"
+                },
+                fontWeight = FontWeight.Bold
+            )
+            Text(
+                if (enabled) {
+                    "Incoming cellular call: single answers, double rejects. " +
+                        "During a call, single or double ends it."
+                } else {
+                    "Allow phone-state and answer-call access for normal SIM calls. " +
+                        "Rider Notes does not read contacts or call history."
+                }
+            )
+            if (!enabled) {
+                Button(onClick = onRequestPermission) {
+                    Text("Enable cellular call controls")
                 }
             }
         }
