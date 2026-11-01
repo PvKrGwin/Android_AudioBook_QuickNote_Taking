@@ -34,6 +34,17 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private var lastScreenOffBeepAt = 0L
     private var screenOffObserved = false
     private var lastScreenWakeAt = 0L
+    private var warningPressCount = 0
+
+    private val warningSinglePress = Runnable {
+        val shouldStop = warningPressCount == 1 &&
+            RecordingController.isRecordingOrStarting
+        warningPressCount = 0
+        if (shouldStop) {
+            val message = RecordingController.stop(this)
+            ButtonEventStore.record(ButtonEvent.recordingResult(message, true))
+        }
+    }
 
     private val screenOnReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -88,16 +99,25 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 return true
             }
 
-            // During the final four-second warning, wait for classification:
-            // single stops; double extends by another 40 seconds.
+            // Handle warning-window taps separately. The second tap extends
+            // immediately instead of waiting for the normal gesture timeout.
             RecordingController.holdAutoStopForGesture(this)
             lastDeviceId = event.deviceId
             lastDeviceName = event.device?.name ?: "Beauty-R1"
-            val receivedAt = SystemClock.uptimeMillis()
-            handler.removeCallbacks(resolvePendingGesture)
-            detector.onPress(receivedAt)?.let(::recordGesture)
-            detector.resolutionDeadlineMillis()?.let { deadline ->
-                handler.postAtTime(resolvePendingGesture, deadline)
+            if (warningPressCount == 0) {
+                warningPressCount = 1
+                handler.removeCallbacks(warningSinglePress)
+                handler.postDelayed(warningSinglePress, WARNING_DOUBLE_PRESS_MS)
+            } else {
+                warningPressCount = 0
+                handler.removeCallbacks(warningSinglePress)
+                val message = RecordingController.extend(this)
+                ButtonEventStore.record(
+                    ButtonEvent.recordingResult(
+                        message,
+                        message.startsWith("Recording extended")
+                    )
+                )
             }
             return true
         }
@@ -267,11 +287,15 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         handler.removeCallbacks(resolvePendingGesture)
+        handler.removeCallbacks(warningSinglePress)
+        warningPressCount = 0
         detector.cancel()
     }
 
     override fun onDestroy() {
         handler.removeCallbacks(resolvePendingGesture)
+        handler.removeCallbacks(warningSinglePress)
+        warningPressCount = 0
         detector.cancel()
         if (screenReceiverRegistered) {
             unregisterReceiver(screenOnReceiver)
@@ -281,6 +305,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val WARNING_DOUBLE_PRESS_MS = 800L
         private const val SCREEN_READY_BEEP_MS = 180
         private const val SCREEN_READY_VOLUME = 85
     }

@@ -56,11 +56,19 @@ object RecordingController {
         if (!isRecordingOrStarting || !isExtensionWindowOpen) {
             return "Recording extension is not available"
         }
-        context.startService(
-            Intent(context, VoiceRecordingService::class.java)
-                .setAction(VoiceRecordingService.ACTION_EXTEND)
-        )
-        return "Recording extension requested"
+        // Reserve this extension synchronously so a delayed gesture cannot
+        // become a new recording if the old deadline expires first.
+        isExtensionWindowOpen = false
+        return try {
+            context.startService(
+                Intent(context, VoiceRecordingService::class.java)
+                    .setAction(VoiceRecordingService.ACTION_EXTEND)
+            )
+            "Recording extended by another 40 seconds"
+        } catch (error: RuntimeException) {
+            isExtensionWindowOpen = true
+            "Recording extension failed: ${error.javaClass.simpleName}"
+        }
     }
 
     fun interruptForCall(context: Context) {

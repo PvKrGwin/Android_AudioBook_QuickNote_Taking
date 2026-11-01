@@ -44,6 +44,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -111,7 +112,20 @@ class MainActivity : ComponentActivity() {
     }
     private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
     private val playingFileName = mutableStateOf<String?>(null)
+    private val playingPositionMs = mutableStateOf(0L)
+    private val playingDurationMs = mutableStateOf(0L)
+    private val playbackHandler = Handler(Looper.getMainLooper())
     private var notePlayer: MediaPlayer? = null
+    private val playbackProgress = object : Runnable {
+        override fun run() {
+            val player = notePlayer ?: return
+            playingPositionMs.value = runCatching { player.currentPosition.toLong() }
+                .getOrDefault(playingPositionMs.value)
+            playingDurationMs.value = runCatching { player.duration.toLong() }
+                .getOrDefault(playingDurationMs.value)
+            playbackHandler.postDelayed(this, PLAYBACK_PROGRESS_STEP_MS)
+        }
+    }
     private lateinit var diagnosticMediaSession: MediaSession
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -133,8 +147,11 @@ class MainActivity : ComponentActivity() {
                     onSelectTranscriptionLanguage = ::selectTranscriptionLanguage,
                     savedNotes = savedNotes,
                     playingFileName = playingFileName,
+                    playingPositionMs = playingPositionMs,
+                    playingDurationMs = playingDurationMs,
                     onRefreshNotes = ::refreshSavedNotes,
                     onPlayNote = ::playOrStopNote,
+                    onSeekNote = ::seekNotePlayback,
                     onDeleteNotes = ::deleteNotes,
                     backupStatus = backupStatus,
                     onExportNotes = ::requestExport,
@@ -335,21 +352,35 @@ class MainActivity : ComponentActivity() {
                     true
                 }
                 prepare()
+                playingDurationMs.value = duration.toLong()
+                playingPositionMs.value = 0L
                 start()
             }
             playingFileName.value = note.audioFile.name
+            playbackHandler.removeCallbacks(playbackProgress)
+            playbackHandler.post(playbackProgress)
         } catch (_: Exception) {
             stopNotePlayback()
         }
     }
 
+    private fun seekNotePlayback(positionMs: Long) {
+        val player = notePlayer ?: return
+        val bounded = positionMs.coerceIn(0L, playingDurationMs.value)
+        runCatching { player.seekTo(bounded.toInt()) }
+        playingPositionMs.value = bounded
+    }
+
     private fun stopNotePlayback() {
+        playbackHandler.removeCallbacks(playbackProgress)
         notePlayer?.runCatching {
             if (isPlaying) stop()
             release()
         }
         notePlayer = null
         playingFileName.value = null
+        playingPositionMs.value = 0L
+        playingDurationMs.value = 0L
     }
 
     private fun requestExport(notes: List<SavedVoiceNote>) {
@@ -462,6 +493,7 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val RECORDING_PERMISSION_REQUEST = 4102
         private const val REMOTE_TRAINING_TIMEOUT_MS = 15_000L
+        private const val PLAYBACK_PROGRESS_STEP_MS = 250L
     }
 }
 
@@ -477,8 +509,11 @@ private fun DetectorScreen(
     onSelectTranscriptionLanguage: (String) -> Unit,
     savedNotes: State<List<SavedVoiceNote>>,
     playingFileName: State<String?>,
+    playingPositionMs: State<Long>,
+    playingDurationMs: State<Long>,
     onRefreshNotes: () -> Unit,
     onPlayNote: (SavedVoiceNote) -> Unit,
+    onSeekNote: (Long) -> Unit,
     onDeleteNotes: (List<SavedVoiceNote>) -> Unit,
     backupStatus: State<String>,
     onExportNotes: (List<SavedVoiceNote>) -> Unit,
@@ -828,7 +863,16 @@ private fun DetectorScreen(
                                                             note.audioFile.absolutePath
                                                     }
                                             },
-                                            onPlay = { onPlayNote(note) }
+                                            playbackPositionMs =
+                                                if (playingFileName.value == note.audioFile.name) {
+                                                    playingPositionMs.value
+                                                } else 0L,
+                                            playbackDurationMs =
+                                                if (playingFileName.value == note.audioFile.name) {
+                                                    playingDurationMs.value
+                                                } else 0L,
+                                            onPlay = { onPlayNote(note) },
+                                            onSeek = onSeekNote
                                         )
                                     }
                                 }
@@ -881,7 +925,10 @@ private fun SavedNoteCard(
     isPlaying: Boolean,
     isSelected: Boolean,
     onSelectionChange: (Boolean) -> Unit,
-    onPlay: () -> Unit
+    playbackPositionMs: Long,
+    playbackDurationMs: Long,
+    onPlay: () -> Unit,
+    onSeek: (Long) -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -915,6 +962,18 @@ private fun SavedNoteCard(
             Button(onClick = onPlay) {
                 Text(if (isPlaying) "Stop recording playback" else "Play recording")
             }
+            if (isPlaying && playbackDurationMs > 0L) {
+                Slider(
+                    value = playbackPositionMs.toFloat(),
+                    onValueChange = { onSeek(it.toLong()) },
+                    valueRange = 0f..playbackDurationMs.toFloat()
+                )
+                Text(
+                    "${formatPlaybackTime(playbackPositionMs)} / " +
+                        formatPlaybackTime(playbackDurationMs),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             Text(
                 "Audio: ${note.audioFile.name}",
                 style = MaterialTheme.typography.bodySmall
@@ -930,6 +989,16 @@ private fun SavedNoteCard(
             }
         }
     }
+}
+
+private fun formatPlaybackTime(milliseconds: Long): String {
+    val totalSeconds = milliseconds.coerceAtLeast(0L) / 1000L
+    return String.format(
+        Locale.US,
+        "%d:%02d",
+        totalSeconds / 60L,
+        totalSeconds % 60L
+    )
 }
 
 @Composable

@@ -44,6 +44,8 @@ class VoiceRecordingService : Service() {
     private var warningBeepCount = 0
     private var autoStopAtElapsedMs = 0L
     private var startCueCompleted = false
+    private var deferResumeUntilCallEnds = false
+    private var stopCompletionStarted = false
 
     private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
@@ -272,10 +274,9 @@ class VoiceRecordingService : Service() {
         }
         ButtonEventStore.record(ButtonEvent.recordingResult(message, saved))
 
-        MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS, deferForCall = deferMediaResume)
-        // Return output routing from the Soundcore communication profile BEFORE
-        // announcing that recording ended. Otherwise the confirmation tone may
-        // be silent when the standalone note releases its microphone.
+        deferResumeUntilCallEnds = deferMediaResume
+        // Release the microphone route first, but resume media only after the
+        // spoken completion announcement.
         releaseBluetoothRoute()
         playStopConfirmation(autoStopped = reason == "40-second auto-stop")
     }
@@ -372,7 +373,7 @@ class VoiceRecordingService : Service() {
     }
 
     private fun extendRecording() {
-        if (!recordingStarted || stopping || !RecordingController.isExtensionWindowOpen) {
+        if (!recordingStarted || stopping) {
             ButtonEventStore.record(
                 ButtonEvent.recordingResult("Recording extension ignored outside warning window", false)
             )
@@ -404,7 +405,7 @@ class VoiceRecordingService : Service() {
                 .getOrNull()
             if (tone == null) {
                 ButtonEventStore.record(ButtonEvent.recordingResult("RECORDING_END_BEEP: tone unavailable", false))
-                completeStop()
+                announceRecordEndedAndComplete()
                 return@postDelayed
             }
             repeat(count) { index ->
@@ -422,9 +423,62 @@ class VoiceRecordingService : Service() {
             }
             handler.postDelayed({
                 tone.release()
-                completeStop()
+                announceRecordEndedAndComplete()
             }, (count - 1) * END_BEEP_STEP_MS + END_BEEP_MS + 100L)
         }, ROUTE_SETTLE_MS)
+    }
+
+    private fun announceRecordEndedAndComplete() {
+        if (stopCompletionStarted) return
+        stopCompletionStarted = true
+        var engine: TextToSpeech? = null
+        engine = TextToSpeech(this) { status ->
+            if (status != TextToSpeech.SUCCESS) {
+                engine?.shutdown()
+                finishStopAfterAnnouncement()
+            } else {
+                textToSpeech = engine
+                engine?.setLanguage(Locale.ENGLISH)
+                engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) = Unit
+                    override fun onDone(utteranceId: String?) {
+                        handler.post {
+                            engine?.shutdown()
+                            if (textToSpeech === engine) textToSpeech = null
+                            finishStopAfterAnnouncement()
+                        }
+                    }
+                    @Deprecated("Deprecated in Java")
+                    override fun onError(utteranceId: String?) {
+                        handler.post {
+                            engine?.shutdown()
+                            if (textToSpeech === engine) textToSpeech = null
+                            finishStopAfterAnnouncement()
+                        }
+                    }
+                })
+                val result = engine?.speak(
+                    RECORD_ENDED_ANNOUNCEMENT,
+                    TextToSpeech.QUEUE_FLUSH,
+                    null,
+                    RECORD_ENDED_UTTERANCE_ID
+                )
+                if (result == TextToSpeech.ERROR) {
+                    engine?.shutdown()
+                    if (textToSpeech === engine) textToSpeech = null
+                    finishStopAfterAnnouncement()
+                }
+            }
+        }
+    }
+
+    private fun finishStopAfterAnnouncement() {
+        MediaControlGateway.finishVoiceNote(
+            this,
+            delayMs = RESUME_DELAY_MS,
+            deferForCall = deferResumeUntilCallEnds
+        )
+        completeStop()
     }
 
     private fun completeStop() {
@@ -610,6 +664,8 @@ class VoiceRecordingService : Service() {
         private const val PAUSE_RETRY_MS = 300L
         private const val MAX_PAUSE_ATTEMPTS = 3
         private const val INDIVIDUAL_MODE_ANNOUNCEMENT = "Individual recording mode"
+        private const val RECORD_ENDED_ANNOUNCEMENT = "Record ended"
+        private const val RECORD_ENDED_UTTERANCE_ID = "rider_notes_record_ended"
         private const val INDIVIDUAL_MODE_UTTERANCE_ID = "rider-notes-individual-mode"
     }
 }
