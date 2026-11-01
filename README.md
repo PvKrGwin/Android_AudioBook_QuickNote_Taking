@@ -1,27 +1,45 @@
 # Rider Notes for Android
 
 Rider Notes is a hands-free voice-note project for Praveen's Oppo phone and
-the `BLE-M3` six-button Bluetooth remote.
+the `Beauty-R1` six-button Bluetooth remote.
 
-## Current milestone: 1 — Identify the remote
+## Current milestone: 1.1 — Identify every remote signal
 
-This version does exactly one job: capture and display Android hardware-key
-events from the BLE-M3 remote.
+The original detector proved that Beauty-R1's Camera button is globally
+available as alternating `KEYCODE_VOLUME_DOWN` and `KEYCODE_VOLUME_UP`
+events, including while Audible is foregrounded and while the phone is locked.
 
-It currently **does not** record audio, pause and resume media automatically,
-transcribe speech, recognize a speaker, or sync to OneNote. Those features are
-deliberately postponed until the physical button is characterized reliably.
+Milestone 1.1 expands the foreground diagnostic to inspect three Android input
+routes:
 
-Start with [GETTING_STARTED.md](GETTING_STARTED.md), then read
-[docs/LESSON_01_ANDROID_KEY_EVENTS.md](docs/LESSON_01_ANDROID_KEY_EVENTS.md).
+- ordinary hardware `KeyEvent` signals;
+- external pointer/touch and scroll `MotionEvent` signals;
+- media-button events routed through a temporary diagnostic `MediaSession`.
+
+External remote signals are consumed only while the Rider Notes test screen is
+open. This prevents a remote action from accidentally pressing **Clear** during
+characterization. The Accessibility service still observes background key
+events without blocking them.
+
+This version **does not** record audio, control playback for production use,
+transcribe speech, recognize a speaker, or sync to OneNote. Those features
+remain postponed until the available physical buttons are characterized.
+
+## Confirmed Beauty-R1 Camera-button behavior
+
+- Device name: `Beauty-R1` (do not hard-code the temporary numeric device ID).
+- Each press produces one `DOWN` and one `UP`.
+- Successive presses alternate between key 25 / scan 114 and key 24 / scan 115.
+- Detection works in the foreground, in the background, over Audible, and while
+  the phone is locked.
+- After the remote sleeps, the first press wakes it and the second press is the
+  actionable event.
 
 ## Privacy of the test service
 
 The Accessibility service is narrowly configured to request hardware-key
 events. It cannot retrieve window content. The code does not read or store
 typed text, screen contents, audio, notifications, contacts, or location.
-It returns `false` from `onKeyEvent`, which means the observed key continues to
-the currently active app.
 
 ## Toolchain
 

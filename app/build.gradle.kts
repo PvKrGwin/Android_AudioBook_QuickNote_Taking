@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
 }
 
@@ -12,23 +11,20 @@ android {
         applicationId = "com.praveen.ridernotes"
         minSdk = 28
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.1.0-milestone1"
+        versionCode = 3
+        versionName = "0.2.0-milestone2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
         compose = true
+        aidl = true
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     buildTypes {

@@ -2,52 +2,234 @@ package com.praveen.ridernotes.input
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import com.praveen.ridernotes.media.MediaControlGateway
+import com.praveen.ridernotes.recording.RecordingController
 
 /**
- * Observes remote key events without consuming them.
- * A screen-off remote press produces a one-second audible acknowledgement.
- * Android must deliver the event for this feedback to be possible.
+ * Observes hardware keys globally and classifies Beauty-R1's usable camera
+ * button as a single, double, triple or four-press gesture.
  */
 class BleButtonAccessibilityService : AccessibilityService() {
-    private var lastBeepAt = 0L
+    private val detector = RemotePressPatternDetector()
+    private val handler = Handler(Looper.getMainLooper())
+
+    private var lastDeviceId = -1
+    private var lastDeviceName = "Beauty-R1"
+    private var screenReceiverRegistered = false
+    private var lastScreenOffBeepAt = 0L
+    private var screenOffObserved = false
+    private var lastScreenWakeAt = 0L
+
+    private val screenOnReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_OFF -> screenOffObserved = true
+                Intent.ACTION_SCREEN_ON -> {
+                    screenOffObserved = false
+                    lastScreenWakeAt = SystemClock.elapsedRealtime()
+                    playScreenReadyTone()
+                }
+            }
+        }
+    }
+
+    private val resolvePendingGesture = Runnable {
+        detector.resolve(SystemClock.uptimeMillis())?.let(::recordGesture)
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         serviceInfo = serviceInfo.apply {
             flags = flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
         }
+        screenOffObserved = !(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
+        registerScreenOnReceiver()
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         ButtonEventStore.record(ButtonEvent.from(event, route = "Accessibility service"))
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
-            (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
-             event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) &&
-            event.device?.name?.contains("Beauty-R1", ignoreCase = true) == true
+
+        if (!event.isBeautyCameraButton()) {
+            return false
+        }
+
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            acknowledgeScreenOffPress()
+        }
+
+        if (event.action == KeyEvent.ACTION_DOWN &&
+            event.repeatCount == 0 &&
+            RecordingController.isRecordingOrStarting
         ) {
-            val power = getSystemService(Context.POWER_SERVICE) as PowerManager
-            val now = SystemClock.elapsedRealtime()
-            if (!power.isInteractive && now - lastBeepAt >= 1200L) {
-                lastBeepAt = now
-                // Use the music stream so acknowledgement is audible with audiobook playback.
-                val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
-                tone.startTone(ToneGenerator.TONE_PROP_BEEP, 1000)
-                android.os.Handler(mainLooper).postDelayed({ tone.release() }, 1100L)
+            handler.removeCallbacks(resolvePendingGesture)
+            detector.cancel()
+            val message = RecordingController.stop(this)
+            ButtonEventStore.record(ButtonEvent.recordingResult(message, true))
+            return true
+        }
+
+        // Consume both halves of Beauty-R1's volume-shaped click so the gesture
+        // does not also change the phone's volume.
+        if (event.action == KeyEvent.ACTION_UP) {
+            return true
+        }
+
+        if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) {
+            return true
+        }
+
+        lastDeviceId = event.deviceId
+        lastDeviceName = event.device?.name ?: "Beauty-R1"
+
+        // Use receipt time rather than KeyEvent.eventTime. Beauty-R1 can report
+        // an event timestamp behind Android's clock, shortening the real window.
+        val receivedAt = SystemClock.uptimeMillis()
+        handler.removeCallbacks(resolvePendingGesture)
+        detector.onPress(receivedAt)?.let(::recordGesture)
+
+        detector.resolutionDeadlineMillis()?.let { deadline ->
+            handler.postAtTime(resolvePendingGesture, deadline)
+        }
+
+        return true
+    }
+
+    private fun recordGesture(gesture: RemotePressPatternDetector.Gesture) {
+        ButtonEventStore.record(
+            ButtonEvent.gesture(
+                gesture = gesture,
+                deviceId = lastDeviceId,
+                deviceName = lastDeviceName
+            )
+        )
+
+        val result = when (gesture) {
+            RemotePressPatternDetector.Gesture.SINGLE ->
+                MediaControlGateway.togglePlayPause(this)
+            RemotePressPatternDetector.Gesture.TRIPLE ->
+                MediaControlGateway.rewindTenSeconds(this)
+            RemotePressPatternDetector.Gesture.QUADRUPLE ->
+                MediaControlGateway.forwardTenSeconds(this)
+            RemotePressPatternDetector.Gesture.DOUBLE -> {
+                val message = RecordingController.start(this)
+                ButtonEventStore.record(
+                    ButtonEvent.recordingResult(
+                        message = message,
+                        successful = message.endsWith("recording start requested")
+                    )
+                )
+                null
             }
         }
-        return false
+
+        result?.let {
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    message = it.message,
+                    successful = it.successful
+                )
+            )
+        }
+    }
+
+    private fun KeyEvent.isBeautyCameraButton(): Boolean {
+        val isBeautyDevice = device?.name?.contains("Beauty-R1", ignoreCase = true) == true
+        val isAlternatingCameraKey =
+            keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        return isBeautyDevice && isAlternatingCameraKey
+    }
+
+    private fun registerScreenOnReceiver() {
+        if (screenReceiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(screenOnReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(screenOnReceiver, filter)
+        }
+        screenReceiverRegistered = true
+    }
+
+    private fun acknowledgeScreenOffPress() {
+        val power = getSystemService(Context.POWER_SERVICE) as PowerManager
+        val now = SystemClock.elapsedRealtime()
+        // Remote keys can wake the phone slightly before the accessibility callback.
+        val screenWasOff = !power.isInteractive || screenOffObserved ||
+            (lastScreenWakeAt > 0L && now - lastScreenWakeAt in 0L..350L)
+        if (!screenWasOff || now - lastScreenOffBeepAt < 1200L) return
+
+        lastScreenOffBeepAt = now
+        val outcome = runCatching {
+            val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            handler.post {
+                val firstStarted = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 160)
+                handler.postDelayed({
+                    val secondStarted = tone.startTone(ToneGenerator.TONE_PROP_BEEP, 160)
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            "SCREEN_OFF_BUTTON_BEEP: two short beeps requested (first=$firstStarted, second=$secondStarted)",
+                            firstStarted && secondStarted
+                        )
+                    )
+                    handler.postDelayed({ tone.release() }, 220L)
+                }, 320L)
+            }
+        }
+        if (outcome.isFailure) {
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "SCREEN_OFF_BUTTON_BEEP failed: ${outcome.exceptionOrNull()?.javaClass?.simpleName}",
+                    false
+                )
+            )
+        }
+    }
+
+    private fun playScreenReadyTone() {
+        ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_READY_VOLUME).apply {
+            startTone(ToneGenerator.TONE_PROP_ACK, SCREEN_READY_BEEP_MS)
+            handler.postDelayed({ release() }, SCREEN_READY_BEEP_MS + 50L)
+        }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Screen content is deliberately not inspected.
     }
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() {
+        handler.removeCallbacks(resolvePendingGesture)
+        detector.cancel()
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(resolvePendingGesture)
+        detector.cancel()
+        if (screenReceiverRegistered) {
+            unregisterReceiver(screenOnReceiver)
+            screenReceiverRegistered = false
+        }
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val SCREEN_READY_BEEP_MS = 180
+        private const val SCREEN_READY_VOLUME = 85
+    }
 }
