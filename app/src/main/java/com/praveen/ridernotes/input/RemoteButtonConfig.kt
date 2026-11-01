@@ -7,8 +7,18 @@ object RemoteButtonConfig {
     private const val PREFS = "rider_notes_remote"
     private const val DEVICE = "device_name"
     private const val SIGNALS = "signals"
+    private const val TRAINING = "training"
 
     data class Config(val deviceName: String, val signals: Set<String>)
+
+    fun setTraining(context: Context, active: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(TRAINING, active).apply()
+    }
+
+    fun isTraining(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(TRAINING, false)
 
     fun load(context: Context): Config {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

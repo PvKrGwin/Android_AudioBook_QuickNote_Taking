@@ -64,6 +64,8 @@ class BleButtonAccessibilityService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
         ButtonEventStore.record(ButtonEvent.from(event, route = "Accessibility service"))
 
+        if (RemoteButtonConfig.isTraining(this)) return false
+
         if (!RemoteButtonConfig.matches(this, event)) {
             return false
         }
@@ -192,13 +194,6 @@ class BleButtonAccessibilityService : AccessibilityService() {
         }
     }
 
-    private fun unusedLegacyBeautyMatcher(event: KeyEvent): Boolean {
-        val isBeautyDevice = event.device?.name?.contains("Beauty-R1", ignoreCase = true) == true
-        val isAlternatingCameraKey =
-            event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-        return isBeautyDevice && isAlternatingCameraKey
-    }
-
     private fun registerScreenOnReceiver() {
         if (screenReceiverRegistered) return
         val filter = IntentFilter().apply {
@@ -251,8 +246,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
     private fun isConfiguredRemoteConnected(): Boolean {
         val configuredName = RemoteButtonConfig.load(this).deviceName
-        return
-        InputDevice.getDeviceIds().any { id ->
+        return InputDevice.getDeviceIds().any { id ->
             InputDevice.getDevice(id)?.let { device ->
                 device.isEnabled &&
                     device.name.equals(configuredName, ignoreCase = true)

@@ -173,6 +173,7 @@ class MainActivity : ComponentActivity() {
                     "Detected $name: $remoteTrainingPresses/4 presses"
                 if (remoteTrainingPresses >= 4) {
                     RemoteButtonConfig.save(this, name, remoteTrainingSignals)
+                    RemoteButtonConfig.setTraining(this, false)
                     remoteTraining = false
                     remoteSetupStatus.value =
                         "Configured $name with ${remoteTrainingSignals.size} signal(s)"
@@ -419,6 +420,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startRemoteSetup() {
         remoteTraining = true
+        RemoteButtonConfig.setTraining(this, true)
         remoteTrainingDevice = null
         remoteTrainingSignals.clear()
         remoteTrainingPresses = 0
