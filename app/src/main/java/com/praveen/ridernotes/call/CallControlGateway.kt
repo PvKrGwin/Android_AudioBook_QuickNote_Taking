@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.telecom.TelecomManager
+import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import android.os.SystemClock
 import android.service.notification.StatusBarNotification
@@ -148,11 +149,39 @@ object CallControlGateway {
         if (!hasPhonePermission(context, Manifest.permission.READ_PHONE_STATE)) {
             return CallState.NONE
         }
-        val telephony = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-        return when (telephony.callState) {
-            TelephonyManager.CALL_STATE_RINGING -> CallState.RINGING
-            TelephonyManager.CALL_STATE_OFFHOOK -> CallState.ACTIVE
-            else -> CallState.NONE
+
+        val baseTelephony =
+            context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        val managers = mutableListOf(baseTelephony)
+
+        // On dual-SIM phones (including ColorOS/Oppo), the default manager can
+        // remain IDLE while the call belongs to the other subscription.
+        runCatching {
+            val subscriptions =
+                context.getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
+                    as SubscriptionManager
+            subscriptions.activeSubscriptionInfoList.orEmpty().forEach { info ->
+                managers += baseTelephony.createForSubscriptionId(info.subscriptionId)
+            }
+        }
+
+        val states = managers
+            .distinctBy { it.subscriptionId }
+            .mapNotNull { manager -> runCatching { manager.callState }.getOrNull() }
+
+        if (TelephonyManager.CALL_STATE_RINGING in states) return CallState.RINGING
+        if (TelephonyManager.CALL_STATE_OFFHOOK in states) return CallState.ACTIVE
+
+        // Telecom sees the complete phone account even when a vendor's
+        // TelephonyManager does not expose the subscription state correctly.
+        val telecom = context.getSystemService(Context.TELECOM_SERVICE) as TelecomManager
+        val telecomHasCall = runCatching { telecom.isInCall }.getOrDefault(false)
+        if (!telecomHasCall) return CallState.NONE
+
+        return when (audioCallState(context)) {
+            CallState.RINGING -> CallState.RINGING
+            CallState.ACTIVE -> CallState.ACTIVE
+            else -> CallState.RINGING
         }
     }
 
