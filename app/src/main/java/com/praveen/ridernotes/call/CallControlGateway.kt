@@ -78,7 +78,8 @@ object CallControlGateway {
     }
 
     fun hasOngoingCall(context: Context): Boolean =
-        currentCall()?.state != CallState.NONE || audioCallState(context) != CallState.NONE
+        (currentCall()?.state ?: CallState.NONE) != CallState.NONE ||
+            audioCallState(context) != CallState.NONE
 
     /**
      * Incoming call: single answers, double rejects.
