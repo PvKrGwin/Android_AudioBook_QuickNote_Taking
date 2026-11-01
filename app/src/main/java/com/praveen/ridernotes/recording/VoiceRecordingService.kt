@@ -36,8 +36,9 @@ class VoiceRecordingService : Service() {
     private var recordingWakeLock: PowerManager.WakeLock? = null
     private var communicationRouteRequested = false
     private var recorderStage = "not started"
+    private var stopping = false
 
-    private val autoStop = Runnable { stopAndSave("50-second auto-stop") }
+    private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
 
     override fun onCreate() {
@@ -54,7 +55,7 @@ class VoiceRecordingService : Service() {
     }
 
     private fun startRecordingFlow() {
-        if (recordingStarted || recorder != null) return
+        if (recordingStarted || recorder != null || stopping) return
         pauseCheckAttempts = 0
         acquireRecordingWakeLock()
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
@@ -187,6 +188,8 @@ class VoiceRecordingService : Service() {
     }
 
     private fun stopAndSave(reason: String) {
+        if (stopping) return
+        stopping = true
         handler.removeCallbacks(beginAfterBeep)
         handler.removeCallbacks(autoStop)
 
@@ -216,7 +219,6 @@ class VoiceRecordingService : Service() {
             ScribTranscriber.enqueue(this, file)
         }
 
-        playBeep()
         val source = if (mediaContext?.isStandalone == false) {
             " linked to ${mediaContext.appName}"
         } else {
@@ -230,7 +232,46 @@ class VoiceRecordingService : Service() {
         ButtonEventStore.record(ButtonEvent.recordingResult(message, saved))
 
         MediaControlGateway.finishVoiceNote(this, delayMs = RESUME_DELAY_MS)
+        // Return output routing from the Soundcore communication profile BEFORE
+        // announcing that recording ended. Otherwise the confirmation tone may
+        // be silent when the standalone note releases its microphone.
         releaseBluetoothRoute()
+        playStopConfirmation(autoStopped = reason == "40-second auto-stop")
+    }
+
+    private fun playStopConfirmation(autoStopped: Boolean) {
+        val count = if (autoStopped) 6 else 1
+        // Keep the foreground service and wake lock alive until every beep
+        // finishes, including when the screen is off.
+        handler.postDelayed({
+            val tone = runCatching { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
+                .getOrNull()
+            if (tone == null) {
+                ButtonEventStore.record(ButtonEvent.recordingResult("RECORDING_END_BEEP: tone unavailable", false))
+                completeStop()
+                return@postDelayed
+            }
+            repeat(count) { index ->
+                handler.postDelayed({
+                    val started = runCatching {
+                        tone.startTone(ToneGenerator.TONE_PROP_BEEP, END_BEEP_MS)
+                    }.getOrDefault(false)
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            "RECORDING_END_BEEP: ${index + 1}/$count, autoStop=$autoStopped, started=$started",
+                            started
+                        )
+                    )
+                }, index * END_BEEP_STEP_MS)
+            }
+            handler.postDelayed({
+                tone.release()
+                completeStop()
+            }, (count - 1) * END_BEEP_STEP_MS + END_BEEP_MS + 100L)
+        }, ROUTE_SETTLE_MS)
+    }
+
+    private fun completeStop() {
         releaseRecordingWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -380,11 +421,14 @@ class VoiceRecordingService : Service() {
 
         private const val CHANNEL_ID = "rider_notes_recording"
         private const val NOTIFICATION_ID = 2001
-        private const val MAX_RECORDING_MS = 50_000L
+        private const val MAX_RECORDING_MS = 40_000L
         private const val WAKE_LOCK_SAFETY_MS = 10_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 300
+        private const val ROUTE_SETTLE_MS = 300L
+        private const val END_BEEP_MS = 160
+        private const val END_BEEP_STEP_MS = 320L
         private const val PAUSE_RETRY_MS = 300L
         private const val MAX_PAUSE_ATTEMPTS = 3
     }

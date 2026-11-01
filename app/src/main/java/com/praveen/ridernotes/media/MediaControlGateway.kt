@@ -19,6 +19,9 @@ object MediaControlGateway {
     @Volatile var notificationAccessConnected: Boolean = false
 
     private const val SEEK_STEP_MS = 10_000L
+    private const val LINK_GRACE_MS = 12_000L
+    private val lastKnownPlayingAt = ConcurrentHashMap<String, Long>()
+    private val observedPlayingPackages = ConcurrentHashMap.newKeySet<String>()
 
     private val supportedAppNames = mapOf(
         "com.audible.application" to "Audible",
@@ -27,7 +30,8 @@ object MediaControlGateway {
         "com.google.android.apps.books" to "Google Play Books"
     )
 
-    private val supportedPackages = supportedAppNames.keys
+    private fun isMediaApp(context: Context, pkg: String): Boolean =
+        pkg != context.packageName && pkg != "com.android.systemui"
     private val notificationTextByPackage =
         ConcurrentHashMap<String, List<String>>()
 
@@ -55,14 +59,8 @@ object MediaControlGateway {
             // into a media-linked recording.
             findControllers(context)
                 .asSequence()
-                .filter { it.packageName in supportedPackages }
-                .filter { session ->
-                    session.playbackState?.state in listOf(
-                        PlaybackState.STATE_PLAYING,
-                        PlaybackState.STATE_BUFFERING,
-                        PlaybackState.STATE_CONNECTING
-                    )
-                }
+                .filter { isMediaApp(context, it.packageName) }
+                .filter { session -> isEligibleForLinkedRecording(session) }
                 .maxByOrNull(::priority)
         } catch (_: Exception) {
             // Standalone recording must work without notification access too.
@@ -137,8 +135,22 @@ object MediaControlGateway {
         return false
     }
 
+    fun observeActivePlayback(context: Context) {
+        runCatching {
+            findControllers(context)
+                .filter { isMediaApp(context, it.packageName) }
+                .forEach { controller ->
+                    val state = controller.playbackState
+                    if (state?.state == PlaybackState.STATE_PLAYING) {
+                        observedPlayingPackages.add(controller.packageName)
+                        lastKnownPlayingAt[controller.packageName] = SystemClock.elapsedRealtime()
+                    }
+                }
+        }
+    }
+
     fun updateNotificationMetadata(sbn: StatusBarNotification) {
-        if (sbn.packageName !in supportedPackages) return
+        if (sbn.packageName == "com.praveen.ridernotes") return
         val extras = sbn.notification.extras
         val values = buildList {
             listOf(
@@ -166,7 +178,7 @@ object MediaControlGateway {
     }
 
     fun removeNotificationMetadata(sbn: StatusBarNotification) {
-        if (sbn.packageName in supportedPackages) {
+        if (sbn.packageName != "com.praveen.ridernotes") {
             notificationTextByPackage.remove(sbn.packageName)
         }
     }
@@ -302,13 +314,35 @@ object MediaControlGateway {
     private fun findBestSupportedController(context: Context): MediaController? =
         findControllers(context)
             .asSequence()
-            .filter { it.packageName in supportedPackages }
+            .filter { isMediaApp(context, it.packageName) }
             .maxByOrNull(::priority)
 
     private fun findControllers(context: Context): List<MediaController> {
         val manager = context.getSystemService(MediaSessionManager::class.java)
         val listener = ComponentName(context, RiderNotificationListenerService::class.java)
         return manager.getActiveSessions(listener)
+    }
+
+    /**
+     * A paused media session is linked only when this process observed it playing
+     * within the previous 12 seconds. A stale paused session at app launch is not
+     * proof that playback happened during Rider Notes' lifetime.
+     */
+    private fun isEligibleForLinkedRecording(controller: MediaController): Boolean {
+        val pkg = controller.packageName
+        val state = controller.playbackState ?: return false
+        val now = SystemClock.elapsedRealtime()
+        if (state.state == PlaybackState.STATE_PLAYING) {
+            lastKnownPlayingAt[pkg] = now
+            observedPlayingPackages.add(pkg)
+            return true
+        }
+        if (state.state != PlaybackState.STATE_PAUSED ||
+            !observedPlayingPackages.contains(pkg)) return false
+        val observedAt = lastKnownPlayingAt[pkg] ?: return false
+        val pausedAt = state.lastPositionUpdateTime
+            .takeIf { it in observedAt..now } ?: observedAt
+        return now - pausedAt in 0L..LINK_GRACE_MS
     }
 
     private fun priority(controller: MediaController): Int =
