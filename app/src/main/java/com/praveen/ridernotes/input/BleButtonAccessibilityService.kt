@@ -72,15 +72,31 @@ class BleButtonAccessibilityService : AccessibilityService() {
             acknowledgeScreenOffPress()
         }
 
-        if (event.action == KeyEvent.ACTION_DOWN &&
-            event.repeatCount == 0 &&
-            RecordingController.isRecordingOrStarting &&
+        if (RecordingController.isRecordingOrStarting &&
             !CallControlGateway.hasOngoingCall(this)
         ) {
+            if (event.action == KeyEvent.ACTION_UP) return true
+            if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) return true
+
+            if (!RecordingController.isExtensionWindowOpen) {
+                handler.removeCallbacks(resolvePendingGesture)
+                detector.cancel()
+                val message = RecordingController.stop(this)
+                ButtonEventStore.record(ButtonEvent.recordingResult(message, true))
+                return true
+            }
+
+            // During the final four-second warning, wait for classification:
+            // single stops; double extends by another 40 seconds.
+            RecordingController.holdAutoStopForGesture(this)
+            lastDeviceId = event.deviceId
+            lastDeviceName = event.device?.name ?: "Beauty-R1"
+            val receivedAt = SystemClock.uptimeMillis()
             handler.removeCallbacks(resolvePendingGesture)
-            detector.cancel()
-            val message = RecordingController.stop(this)
-            ButtonEventStore.record(ButtonEvent.recordingResult(message, true))
+            detector.onPress(receivedAt)?.let(::recordGesture)
+            detector.resolutionDeadlineMillis()?.let { deadline ->
+                handler.postAtTime(resolvePendingGesture, deadline)
+            }
             return true
         }
 
@@ -118,6 +134,24 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 deviceName = lastDeviceName
             )
         )
+
+        if (RecordingController.isRecordingOrStarting) {
+            val message = when (gesture) {
+                RemotePressPatternDetector.Gesture.SINGLE ->
+                    RecordingController.stop(this)
+                RemotePressPatternDetector.Gesture.DOUBLE ->
+                    RecordingController.extend(this)
+                else -> "Recording warning: use single to stop or double to extend"
+            }
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    message,
+                    gesture == RemotePressPatternDetector.Gesture.SINGLE ||
+                        gesture == RemotePressPatternDetector.Gesture.DOUBLE
+                )
+            )
+            return
+        }
 
         CallControlGateway.handleGesture(this, gesture)?.let { callResult ->
             ButtonEventStore.record(

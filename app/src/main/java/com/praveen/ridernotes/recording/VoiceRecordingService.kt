@@ -9,11 +9,14 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.media.ToneGenerator
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.praveen.ridernotes.MainActivity
 import com.praveen.ridernotes.input.ButtonEvent
@@ -37,9 +40,20 @@ class VoiceRecordingService : Service() {
     private var communicationRouteRequested = false
     private var recorderStage = "not started"
     private var stopping = false
+    private var textToSpeech: TextToSpeech? = null
+    private var warningBeepCount = 0
+    private var autoStopAtElapsedMs = 0L
 
     private val autoStop = Runnable { stopAndSave("40-second auto-stop") }
     private val beginAfterBeep = Runnable { beginRecording() }
+    private val startWarning = Runnable {
+        if (!recordingStarted || stopping) return@Runnable
+        RecordingController.isExtensionWindowOpen = true
+        warningBeepCount = 0
+        updateNotification("Recording ends in 4 seconds — double press to extend")
+        playNextWarningBeep()
+    }
+    private val warningBeep = Runnable { playNextWarningBeep() }
 
     override fun onCreate() {
         super.onCreate()
@@ -50,6 +64,8 @@ class VoiceRecordingService : Service() {
         when (intent?.action) {
             ACTION_STOP -> stopAndSave("remote press")
             ACTION_START -> startRecordingFlow()
+            ACTION_EXTEND -> extendRecording()
+            ACTION_HOLD_AUTO_STOP -> holdAutoStopForGesture()
         }
         return START_NOT_STICKY
     }
@@ -59,8 +75,11 @@ class VoiceRecordingService : Service() {
         pauseCheckAttempts = 0
         acquireRecordingWakeLock()
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
-        playBeep()
-        handler.postDelayed(beginAfterBeep, START_BEEP_GAP_MS)
+        if (MediaControlGateway.currentVoiceNoteContext()?.isStandalone != false) {
+            announceIndividualRecordingMode()
+        } else {
+            playStartBeepAndSchedule()
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -166,7 +185,7 @@ class VoiceRecordingService : Service() {
                     true
                 )
             )
-            handler.postDelayed(autoStop, MAX_RECORDING_MS)
+            scheduleRecordingDeadline()
         } catch (error: Exception) {
             outputFile?.delete()
             outputFile = null
@@ -191,7 +210,10 @@ class VoiceRecordingService : Service() {
         if (stopping) return
         stopping = true
         handler.removeCallbacks(beginAfterBeep)
-        handler.removeCallbacks(autoStop)
+        cancelRecordingDeadline()
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
 
         val file = outputFile
         var saved = false
@@ -212,6 +234,7 @@ class VoiceRecordingService : Service() {
         recordingStarted = false
         outputFile = null
         RecordingController.isRecordingOrStarting = false
+        RecordingController.isExtensionWindowOpen = false
 
         val mediaContext = MediaControlGateway.currentVoiceNoteContext()
         if (saved && file != null) {
@@ -237,6 +260,120 @@ class VoiceRecordingService : Service() {
         // be silent when the standalone note releases its microphone.
         releaseBluetoothRoute()
         playStopConfirmation(autoStopped = reason == "40-second auto-stop")
+    }
+
+    private fun announceIndividualRecordingMode() {
+        var engine: TextToSpeech? = null
+        engine = TextToSpeech(this) { status ->
+            if (status != TextToSpeech.SUCCESS) {
+                engine?.shutdown()
+                textToSpeech = null
+                handler.post(::playStartBeepAndSchedule)
+                return@TextToSpeech
+            }
+            textToSpeech = engine
+            engine?.setLanguage(Locale.ENGLISH)
+            engine?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+                override fun onDone(utteranceId: String?) {
+                    handler.post {
+                        engine?.shutdown()
+                        if (textToSpeech === engine) textToSpeech = null
+                        playStartBeepAndSchedule()
+                    }
+                }
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    handler.post {
+                        engine?.shutdown()
+                        if (textToSpeech === engine) textToSpeech = null
+                        playStartBeepAndSchedule()
+                    }
+                }
+            })
+            val result = engine?.speak(
+                INDIVIDUAL_MODE_ANNOUNCEMENT,
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                INDIVIDUAL_MODE_UTTERANCE_ID
+            )
+            if (result == TextToSpeech.ERROR) {
+                engine?.shutdown()
+                textToSpeech = null
+                handler.post(::playStartBeepAndSchedule)
+            }
+        }
+    }
+
+    private fun playStartBeepAndSchedule() {
+        if (stopping || recorder != null || recordingStarted) return
+        playBeep()
+        handler.postDelayed(beginAfterBeep, START_BEEP_GAP_MS)
+    }
+
+    private fun scheduleRecordingDeadline() {
+        cancelRecordingDeadline()
+        RecordingController.isExtensionWindowOpen = false
+        autoStopAtElapsedMs = SystemClock.elapsedRealtime() + MAX_RECORDING_MS
+        handler.postDelayed(startWarning, MAX_RECORDING_MS - WARNING_WINDOW_MS)
+        handler.postDelayed(autoStop, MAX_RECORDING_MS)
+        refreshRecordingWakeLock()
+    }
+
+    private fun cancelRecordingDeadline() {
+        handler.removeCallbacks(startWarning)
+        handler.removeCallbacks(warningBeep)
+        handler.removeCallbacks(autoStop)
+        warningBeepCount = 0
+        autoStopAtElapsedMs = 0L
+        RecordingController.isExtensionWindowOpen = false
+    }
+
+    private fun playNextWarningBeep() {
+        if (!RecordingController.isExtensionWindowOpen ||
+            !recordingStarted ||
+            stopping ||
+            warningBeepCount >= WARNING_BEEP_COUNT
+        ) return
+
+        warningBeepCount += 1
+        ToneGenerator(AudioManager.STREAM_MUSIC, 100).apply {
+            startTone(ToneGenerator.TONE_PROP_BEEP, WARNING_BEEP_MS)
+            handler.postDelayed({ release() }, WARNING_BEEP_MS + 50L)
+        }
+        ButtonEventStore.record(
+            ButtonEvent.recordingResult(
+                "RECORDING_END_WARNING: $warningBeepCount/$WARNING_BEEP_COUNT",
+                true
+            )
+        )
+        if (warningBeepCount < WARNING_BEEP_COUNT) {
+            handler.postDelayed(warningBeep, WARNING_BEEP_STEP_MS)
+        }
+    }
+
+    private fun extendRecording() {
+        if (!recordingStarted || stopping || !RecordingController.isExtensionWindowOpen) {
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult("Recording extension ignored outside warning window", false)
+            )
+            return
+        }
+        scheduleRecordingDeadline()
+        updateNotification("Recording extended by 40 seconds")
+        ButtonEventStore.record(
+            ButtonEvent.recordingResult("Recording extended by another 40 seconds", true)
+        )
+    }
+
+    private fun holdAutoStopForGesture() {
+        if (!recordingStarted || stopping || !RecordingController.isExtensionWindowOpen) return
+        val now = SystemClock.elapsedRealtime()
+        val remaining = (autoStopAtElapsedMs - now).coerceAtLeast(0L)
+        val delay = maxOf(remaining, GESTURE_RESOLUTION_GRACE_MS)
+        handler.removeCallbacks(autoStop)
+        handler.postDelayed(autoStop, delay)
+        autoStopAtElapsedMs = now + delay
     }
 
     private fun playStopConfirmation(autoStopped: Boolean) {
@@ -328,6 +465,12 @@ class VoiceRecordingService : Service() {
             }
     }
 
+    private fun refreshRecordingWakeLock() {
+        recordingWakeLock?.takeIf { it.isHeld }?.release()
+        recordingWakeLock = null
+        acquireRecordingWakeLock()
+    }
+
     private fun releaseRecordingWakeLock() {
         recordingWakeLock?.takeIf { it.isHeld }?.release()
         recordingWakeLock = null
@@ -404,10 +547,14 @@ class VoiceRecordingService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(beginAfterBeep)
-        handler.removeCallbacks(autoStop)
+        cancelRecordingDeadline()
+        textToSpeech?.stop()
+        textToSpeech?.shutdown()
+        textToSpeech = null
         recorder?.release()
         recorder = null
         RecordingController.isRecordingOrStarting = false
+        RecordingController.isExtensionWindowOpen = false
         releaseBluetoothRoute()
         releaseRecordingWakeLock()
         super.onDestroy()
@@ -418,10 +565,18 @@ class VoiceRecordingService : Service() {
     companion object {
         const val ACTION_START = "com.praveen.ridernotes.action.START_RECORDING"
         const val ACTION_STOP = "com.praveen.ridernotes.action.STOP_RECORDING"
+        const val ACTION_EXTEND = "com.praveen.ridernotes.action.EXTEND_RECORDING"
+        const val ACTION_HOLD_AUTO_STOP =
+            "com.praveen.ridernotes.action.HOLD_RECORDING_AUTO_STOP"
 
         private const val CHANNEL_ID = "rider_notes_recording"
         private const val NOTIFICATION_ID = 2001
         private const val MAX_RECORDING_MS = 40_000L
+        private const val WARNING_WINDOW_MS = 4_000L
+        private const val WARNING_BEEP_COUNT = 4
+        private const val WARNING_BEEP_MS = 160
+        private const val WARNING_BEEP_STEP_MS = 1_000L
+        private const val GESTURE_RESOLUTION_GRACE_MS = 1_100L
         private const val WAKE_LOCK_SAFETY_MS = 10_000L
         private const val START_BEEP_GAP_MS = 250L
         private const val RESUME_DELAY_MS = 1_500L
@@ -431,5 +586,7 @@ class VoiceRecordingService : Service() {
         private const val END_BEEP_STEP_MS = 320L
         private const val PAUSE_RETRY_MS = 300L
         private const val MAX_PAUSE_ATTEMPTS = 3
+        private const val INDIVIDUAL_MODE_ANNOUNCEMENT = "Individual recording mode"
+        private const val INDIVIDUAL_MODE_UTTERANCE_ID = "rider-notes-individual-mode"
     }
 }

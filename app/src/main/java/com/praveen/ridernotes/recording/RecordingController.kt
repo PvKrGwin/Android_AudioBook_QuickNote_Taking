@@ -12,6 +12,10 @@ object RecordingController {
     var isRecordingOrStarting: Boolean = false
         internal set
 
+    @Volatile
+    var isExtensionWindowOpen: Boolean = false
+        internal set
+
     fun start(context: Context): String {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
@@ -38,6 +42,25 @@ object RecordingController {
             MediaControlGateway.finishVoiceNote(context, delayMs = 0L)
             "Recording could not start: ${error.javaClass.simpleName}"
         }
+    }
+
+    fun holdAutoStopForGesture(context: Context) {
+        if (!isExtensionWindowOpen) return
+        context.startService(
+            Intent(context, VoiceRecordingService::class.java)
+                .setAction(VoiceRecordingService.ACTION_HOLD_AUTO_STOP)
+        )
+    }
+
+    fun extend(context: Context): String {
+        if (!isRecordingOrStarting || !isExtensionWindowOpen) {
+            return "Recording extension is not available"
+        }
+        context.startService(
+            Intent(context, VoiceRecordingService::class.java)
+                .setAction(VoiceRecordingService.ACTION_EXTEND)
+        )
+        return "Recording extension requested"
     }
 
     fun stop(context: Context): String {
