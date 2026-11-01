@@ -12,6 +12,7 @@ import android.telephony.TelephonyManager
 import android.os.SystemClock
 import android.service.notification.StatusBarNotification
 import android.view.KeyEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.content.ContextCompat
 import com.praveen.ridernotes.input.RemotePressPatternDetector
 import java.util.concurrent.ConcurrentHashMap
@@ -87,6 +88,58 @@ object CallControlGateway {
         (currentCall()?.state ?: CallState.NONE) != CallState.NONE ||
             cellularCallState(context) != CallState.NONE ||
             audioCallState(context) != CallState.NONE
+
+    /**
+     * Uses the visible native call screen when ColorOS hides call state from
+     * TelephonyManager and TelecomManager. Only call-specific controls in a
+     * dialer/incall/system UI window are considered.
+     */
+    fun handleVisibleCallScreen(
+        root: AccessibilityNodeInfo?,
+        gesture: RemotePressPatternDetector.Gesture
+    ): Result? {
+        root ?: return null
+        val nodes = root.descendants()
+        val answer = nodes.firstOrNull { it.matchesCallControl(ANSWER_TOKENS) }
+        val reject = nodes.firstOrNull { it.matchesCallControl(REJECT_TOKENS) }
+        val hangUp = nodes.firstOrNull { it.matchesCallControl(HANG_UP_TOKENS) }
+
+        val hasRingingControls = answer != null || reject != null
+        val hasActiveControl = hangUp != null
+        if (!hasRingingControls && !hasActiveControl) return null
+
+        val target = if (hasRingingControls) {
+            when (gesture) {
+                RemotePressPatternDetector.Gesture.SINGLE -> answer
+                RemotePressPatternDetector.Gesture.DOUBLE -> reject
+                else -> return Result(
+                    false,
+                    "Cellular call ringing: use single to answer or double to reject"
+                )
+            }
+        } else {
+            when (gesture) {
+                RemotePressPatternDetector.Gesture.SINGLE,
+                RemotePressPatternDetector.Gesture.DOUBLE -> hangUp
+                else -> return Result(
+                    false,
+                    "Cellular call active: use single or double to end"
+                )
+            }
+        }
+
+        if (target == null) {
+            return Result(false, "Requested cellular call button is not visible")
+        }
+        val clicked = target.clickSelfOrParent()
+        val action = when {
+            hasRingingControls && gesture == RemotePressPatternDetector.Gesture.SINGLE ->
+                "Answered cellular call"
+            hasRingingControls -> "Rejected cellular call"
+            else -> "Ended cellular call"
+        }
+        return Result(clicked, if (clicked) action else "Cellular call button could not be clicked")
+    }
 
     /**
      * Incoming call: single answers, double rejects.
@@ -256,6 +309,44 @@ object CallControlGateway {
         }
     }
 
+    private fun AccessibilityNodeInfo.descendants(): List<AccessibilityNodeInfo> {
+        val result = mutableListOf<AccessibilityNodeInfo>()
+        val pending = ArrayDeque<AccessibilityNodeInfo>()
+        pending.add(this)
+        while (pending.isNotEmpty() && result.size < MAX_CALL_UI_NODES) {
+            val node = pending.removeFirst()
+            result += node
+            for (index in 0 until node.childCount) {
+                node.getChild(index)?.let(pending::addLast)
+            }
+        }
+        return result
+    }
+
+    private fun AccessibilityNodeInfo.matchesCallControl(tokens: Set<String>): Boolean {
+        val combined = listOfNotNull(
+            text?.toString(),
+            contentDescription?.toString(),
+            viewIdResourceName
+        ).joinToString(" ").lowercase()
+        if (combined.isBlank()) return false
+        return tokens.any { token -> combined.contains(token) }
+    }
+
+    private fun AccessibilityNodeInfo.clickSelfOrParent(): Boolean {
+        var node: AccessibilityNodeInfo? = this
+        repeat(MAX_CLICK_PARENT_DEPTH) {
+            val current = node ?: return false
+            if (current.isClickable &&
+                current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            ) {
+                return true
+            }
+            node = current.parent
+        }
+        return false
+    }
+
     private fun List<Notification.Action>.firstByTitle(
         vararg labels: String
     ): PendingIntent? =
@@ -263,6 +354,18 @@ object CallControlGateway {
             val title = action.title?.toString()?.trim().orEmpty()
             labels.any { title.equals(it, ignoreCase = true) }
         }?.actionIntent
+
+    private val ANSWER_TOKENS = setOf(
+        "answer", "accept", "pick up", "pickup", "incoming_answer"
+    )
+    private val REJECT_TOKENS = setOf(
+        "decline", "reject", "incoming_reject", "decline_call"
+    )
+    private val HANG_UP_TOKENS = setOf(
+        "hang up", "hangup", "end call", "end_call", "disconnect"
+    )
+    private const val MAX_CALL_UI_NODES = 300
+    private const val MAX_CLICK_PARENT_DEPTH = 5
 
     private const val EXTRA_ANSWER_INTENT = "android.answerIntent"
     private const val EXTRA_DECLINE_INTENT = "android.declineIntent"

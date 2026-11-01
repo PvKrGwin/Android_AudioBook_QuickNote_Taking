@@ -119,6 +119,17 @@ class BleButtonAccessibilityService : AccessibilityService() {
             )
         )
 
+        CallControlGateway.handleVisibleCallScreen(rootInActiveWindow, gesture)
+            ?.let { callResult ->
+                ButtonEventStore.record(
+                    ButtonEvent.mediaResult(
+                        message = callResult.message,
+                        successful = callResult.successful
+                    )
+                )
+                return
+            }
+
         CallControlGateway.handleGesture(this, gesture)?.let { callResult ->
             ButtonEventStore.record(
                 ButtonEvent.mediaResult(
