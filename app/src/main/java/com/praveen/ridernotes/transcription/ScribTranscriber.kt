@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,6 +46,8 @@ object ScribTranscriber {
 
     private val queue = ArrayDeque<File>()
     private var activeJob: ActiveJob? = null
+    private val timeoutHandler = Handler(Looper.getMainLooper())
+    private var activeTimeout: Runnable? = null
 
     fun status(context: Context): String {
         val component = approvedComponent(context)
@@ -169,6 +173,7 @@ object ScribTranscriber {
                     }
 
                     updateMetadata(metadataFile, "TRANSCRIBING")
+                    scheduleTimeout(appContext, audioFile, metadataFile)
                     val audio = ParcelFileDescriptor.open(
                         audioFile,
                         ParcelFileDescriptor.MODE_READ_ONLY
@@ -185,10 +190,12 @@ object ScribTranscriber {
                     val timedSegments = mutableListOf<TimedSegment>()
                     val callback = object : ITranscriptionCallback.Stub() {
                         override fun onTranscriptionProgress(text: String?) {
+                            if (!isActive(audioFile)) return
                             updateMetadata(metadataFile, "TRANSCRIBING")
                         }
 
                         override fun onTranscriptionResult(text: String?) {
+                            if (!isActive(audioFile)) return
                             val transcript = text?.trim().orEmpty()
                             if (transcript.isBlank()) {
                                 updateMetadata(
@@ -219,6 +226,7 @@ object ScribTranscriber {
                             endMs: Long,
                             text: String?
                         ) {
+                            if (!isActive(audioFile)) return
                             val value = text?.trim().orEmpty()
                             if (value.isNotBlank() && startMs >= 0L && endMs > startMs) {
                                 synchronized(timedSegments) {
@@ -228,6 +236,7 @@ object ScribTranscriber {
                         }
 
                         override fun onTranscriptionError(error: TranscriptionError?) {
+                            if (!isActive(audioFile)) return
                             val detail = error?.message
                                 ?: error?.type?.toString()
                                 ?: "Unknown Scrib error"
@@ -259,6 +268,7 @@ object ScribTranscriber {
             }
 
             override fun onBindingDied(name: ComponentName?) {
+                if (!isActive(audioFile)) return
                 updateMetadata(
                     metadataFile,
                     "FAILED",
@@ -268,6 +278,7 @@ object ScribTranscriber {
             }
 
             override fun onNullBinding(name: ComponentName?) {
+                if (!isActive(audioFile)) return
                 updateMetadata(
                     metadataFile,
                     "FAILED",
@@ -295,6 +306,8 @@ object ScribTranscriber {
         val job = activeJob?.takeIf {
             it.file.absolutePath == expectedFile.absolutePath
         } ?: return
+        activeTimeout?.let(timeoutHandler::removeCallbacks)
+        activeTimeout = null
         activeJob = null
         try {
             appContext.unbindService(job.connection)
@@ -303,6 +316,31 @@ object ScribTranscriber {
         }
         if (startNext) startNext(appContext)
     }
+
+    @Synchronized
+    private fun scheduleTimeout(appContext: Context, audioFile: File, metadataFile: File) {
+        activeTimeout?.let(timeoutHandler::removeCallbacks)
+        val timeout = Runnable {
+            synchronized(this@ScribTranscriber) {
+                val job = activeJob?.takeIf {
+                    it.file.absolutePath == audioFile.absolutePath
+                } ?: return@synchronized
+                runCatching { job.session?.cancel() }
+                updateMetadata(
+                    metadataFile,
+                    "TIMED_OUT",
+                    error = "Scrib exceeded the 10-minute transcription limit"
+                )
+                finishActive(appContext, audioFile, startNext = true)
+            }
+        }
+        activeTimeout = timeout
+        timeoutHandler.postDelayed(timeout, TRANSCRIPTION_TIMEOUT_MS)
+    }
+
+    @Synchronized
+    private fun isActive(audioFile: File): Boolean =
+        activeJob?.file?.absolutePath == audioFile.absolutePath
 
     private fun findScrib(context: Context): ComponentName? {
         val services = context.packageManager.queryIntentServices(Intent(ACTION), 0)
@@ -322,6 +360,8 @@ object ScribTranscriber {
 
     private fun metadataFileFor(audioFile: File) =
         File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
+
+    private const val TRANSCRIPTION_TIMEOUT_MS = 10L * 60L * 1_000L
 
     @Synchronized
     private fun updateMetadata(
