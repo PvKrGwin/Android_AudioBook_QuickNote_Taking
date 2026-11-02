@@ -195,13 +195,17 @@ class BleButtonAccessibilityService : AccessibilityService() {
             GestureActionConfig.Action.FORWARD ->
                 MediaControlGateway.forwardTenSeconds(this)
             GestureActionConfig.Action.RECORD_NOTE -> {
-                val message = RecordingController.start(this)
-                ButtonEventStore.record(
-                    ButtonEvent.recordingResult(
-                        message = message,
-                        successful = message.endsWith("recording start requested")
+                // Let the two acknowledgement beeps finish before the spoken
+                // recording-mode announcement begins.
+                handler.postDelayed({
+                    val message = RecordingController.start(this)
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            message = message,
+                            successful = message.endsWith("recording start requested")
+                        )
                     )
-                )
+                }, 360L)
                 null
             }
             GestureActionConfig.Action.NONE -> null
