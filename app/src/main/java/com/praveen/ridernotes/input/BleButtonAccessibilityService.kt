@@ -205,7 +205,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
                             successful = message.endsWith("recording start requested")
                         )
                     )
-                }, 360L)
+                }, gesturePressCount(gesture) * ACK_BEEP_INTERVAL_MS)
                 null
             }
             GestureActionConfig.Action.NONE -> null
@@ -222,20 +222,23 @@ class BleButtonAccessibilityService : AccessibilityService() {
     }
 
     private fun acknowledgeGesture(gesture: RemotePressPatternDetector.Gesture) {
-        val count = when (gesture) {
-            RemotePressPatternDetector.Gesture.SINGLE -> 1
-            RemotePressPatternDetector.Gesture.DOUBLE -> 2
-            RemotePressPatternDetector.Gesture.TRIPLE -> 3
-            RemotePressPatternDetector.Gesture.QUADRUPLE -> 4
-        }
+        val count = gesturePressCount(gesture)
         val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
         repeat(count) { index ->
             handler.postDelayed({
                 tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
                 if (index == count - 1) handler.postDelayed({ tone.release() }, 180L)
-            }, index * 150L)
+            }, index * ACK_BEEP_INTERVAL_MS)
         }
     }
+
+    private fun gesturePressCount(gesture: RemotePressPatternDetector.Gesture): Int =
+        when (gesture) {
+            RemotePressPatternDetector.Gesture.SINGLE -> 1
+            RemotePressPatternDetector.Gesture.DOUBLE -> 2
+            RemotePressPatternDetector.Gesture.TRIPLE -> 3
+            RemotePressPatternDetector.Gesture.QUADRUPLE -> 4
+        }
 
     private fun registerScreenOnReceiver() {
         if (screenReceiverRegistered) return
@@ -328,6 +331,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val ACK_BEEP_INTERVAL_MS = 150L
         private const val WARNING_DOUBLE_PRESS_MS = 800L
         private const val SCREEN_READY_BEEP_MS = 180
         private const val SCREEN_READY_VOLUME = 85
