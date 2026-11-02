@@ -185,14 +185,16 @@ class BleButtonAccessibilityService : AccessibilityService() {
             return
         }
 
-        val result = when (gesture) {
-            RemotePressPatternDetector.Gesture.SINGLE ->
+        acknowledgeGesture(gesture)
+
+        val result = when (GestureActionConfig.actionFor(this, gesture)) {
+            GestureActionConfig.Action.PLAY_PAUSE ->
                 MediaControlGateway.togglePlayPause(this)
-            RemotePressPatternDetector.Gesture.TRIPLE ->
+            GestureActionConfig.Action.REWIND ->
                 MediaControlGateway.rewindTenSeconds(this)
-            RemotePressPatternDetector.Gesture.QUADRUPLE ->
+            GestureActionConfig.Action.FORWARD ->
                 MediaControlGateway.forwardTenSeconds(this)
-            RemotePressPatternDetector.Gesture.DOUBLE -> {
+            GestureActionConfig.Action.RECORD_NOTE -> {
                 val message = RecordingController.start(this)
                 ButtonEventStore.record(
                     ButtonEvent.recordingResult(
@@ -202,6 +204,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
                 )
                 null
             }
+            GestureActionConfig.Action.NONE -> null
         }
 
         result?.let {
@@ -211,6 +214,22 @@ class BleButtonAccessibilityService : AccessibilityService() {
                     successful = it.successful
                 )
             )
+        }
+    }
+
+    private fun acknowledgeGesture(gesture: RemotePressPatternDetector.Gesture) {
+        val count = when (gesture) {
+            RemotePressPatternDetector.Gesture.SINGLE -> 1
+            RemotePressPatternDetector.Gesture.DOUBLE -> 2
+            RemotePressPatternDetector.Gesture.TRIPLE -> 3
+            RemotePressPatternDetector.Gesture.QUADRUPLE -> 4
+        }
+        val tone = ToneGenerator(AudioManager.STREAM_MUSIC, 90)
+        repeat(count) { index ->
+            handler.postDelayed({
+                tone.startTone(ToneGenerator.TONE_PROP_BEEP, 90)
+                if (index == count - 1) handler.postDelayed({ tone.release() }, 180L)
+            }, index * 150L)
         }
     }
 

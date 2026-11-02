@@ -10,10 +10,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.opentranscribe.api.ITranscriptionCallback
 import org.opentranscribe.api.ITranscriptionService
+import org.opentranscribe.api.ITranscriptionSession
 import org.opentranscribe.api.TranscriptionError
 import org.opentranscribe.api.TranscriptionRequest
 import java.io.File
-import java.util.concurrent.ConcurrentHashMap
+import java.util.ArrayDeque
 
 /**
  * Sends saved Rider Notes recordings to a user-approved Open Transcribe engine.
@@ -35,7 +36,14 @@ object ScribTranscriber {
     const val LANGUAGE_ENGLISH = "ENGLISH"
     const val LANGUAGE_KANNADA = "KANNADA"
 
-    private val activeConnections = ConcurrentHashMap<String, ServiceConnection>()
+    private data class ActiveJob(
+        val file: File,
+        val connection: ServiceConnection,
+        var session: ITranscriptionSession? = null
+    )
+
+    private val queue = ArrayDeque<File>()
+    private var activeJob: ActiveJob? = null
 
     fun status(context: Context): String {
         val component = approvedComponent(context)
@@ -80,6 +88,7 @@ object ScribTranscriber {
         else -> "English"
     }
 
+    @Synchronized
     fun enqueue(context: Context, audioFile: File) {
         val appContext = context.applicationContext
         val metadataFile = metadataFileFor(audioFile)
@@ -94,22 +103,56 @@ object ScribTranscriber {
             return
         }
 
+        if (activeJob?.file?.absolutePath == audioFile.absolutePath ||
+            queue.any { it.absolutePath == audioFile.absolutePath }
+        ) return
         updateMetadata(metadataFile, "QUEUED")
+        queue.addLast(audioFile)
+        startNext(appContext)
+    }
 
-        val key = audioFile.absolutePath
-        lateinit var connection: ServiceConnection
+    @Synchronized
+    fun stop(context: Context, audioFile: File): String {
+        val queued = queue.firstOrNull { it.absolutePath == audioFile.absolutePath }
+        if (queued != null) {
+            queue.remove(queued)
+            updateMetadata(metadataFileFor(audioFile), "PAUSED", error = "Stopped by user")
+            return "Transcription stopped; the next queued recording can continue."
+        }
+        val job = activeJob
+        if (job?.file?.absolutePath != audioFile.absolutePath) {
+            return "This recording is not currently queued or transcribing."
+        }
+        runCatching { job.session?.cancel() }
+        updateMetadata(metadataFileFor(audioFile), "PAUSED", error = "Stopped by user")
+        finishActive(context.applicationContext, audioFile, startNext = true)
+        return "Transcription stopped; moving to the next queued recording."
+    }
 
-        fun finish() {
-            val stored = activeConnections.remove(key)
-            if (stored != null) {
-                try {
-                    appContext.unbindService(stored)
-                } catch (_: IllegalArgumentException) {
-                    // Service already disconnected.
-                }
-            }
+    @Synchronized
+    fun retry(context: Context, audioFile: File): String {
+        stop(context, audioFile)
+        enqueue(context, audioFile)
+        return "Transcription queued again."
+    }
+
+    @Synchronized
+    private fun startNext(appContext: Context) {
+        if (activeJob != null || queue.isEmpty()) return
+        val audioFile = queue.removeFirst()
+        if (!audioFile.exists()) {
+            startNext(appContext)
+            return
+        }
+        val metadataFile = metadataFileFor(audioFile)
+        val component = approvedComponent(appContext)
+        if (component == null) {
+            updateMetadata(metadataFile, "SCRIB_NOT_ENABLED", error = "Enable Scrib transcription")
+            startNext(appContext)
+            return
         }
 
+        lateinit var connection: ServiceConnection
         connection = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                 try {
@@ -121,7 +164,7 @@ object ScribTranscriber {
                             "MODEL_REQUIRED",
                             error = "Open Scrib and download/select a transcription model"
                         )
-                        finish()
+                        finishActive(appContext, audioFile, startNext = true)
                         return
                     }
 
@@ -168,7 +211,7 @@ object ScribTranscriber {
                                     audioFile.nameWithoutExtension + ".txt"
                                 ).writeText(transcript)
                             }
-                            finish()
+                            finishActive(appContext, audioFile, startNext = true)
                         }
 
                         override fun onTranscriptionSegment(
@@ -189,11 +232,16 @@ object ScribTranscriber {
                                 ?: error?.type?.toString()
                                 ?: "Unknown Scrib error"
                             updateMetadata(metadataFile, "FAILED", error = detail)
-                            finish()
+                            finishActive(appContext, audioFile, startNext = true)
                         }
                     }
 
-                    service.transcribe(audio, request, callback)
+                    val session = service.transcribe(audio, request, callback)
+                    synchronized(this@ScribTranscriber) {
+                        activeJob?.takeIf {
+                            it.file.absolutePath == audioFile.absolutePath
+                        }?.session = session
+                    }
                     audio.close()
                 } catch (error: Exception) {
                     updateMetadata(
@@ -202,12 +250,12 @@ object ScribTranscriber {
                         error = "Scrib connection failed: " +
                             error.javaClass.simpleName
                     )
-                    finish()
+                    finishActive(appContext, audioFile, startNext = true)
                 }
             }
 
             override fun onServiceDisconnected(name: ComponentName?) {
-                activeConnections.remove(key)
+                finishActive(appContext, audioFile, startNext = true)
             }
 
             override fun onBindingDied(name: ComponentName?) {
@@ -216,7 +264,7 @@ object ScribTranscriber {
                     "FAILED",
                     error = "Scrib service stopped unexpectedly"
                 )
-                finish()
+                finishActive(appContext, audioFile, startNext = true)
             }
 
             override fun onNullBinding(name: ComponentName?) {
@@ -225,20 +273,35 @@ object ScribTranscriber {
                     "FAILED",
                     error = "Scrib did not provide its transcription service"
                 )
-                finish()
+                finishActive(appContext, audioFile, startNext = true)
             }
         }
 
-        activeConnections[key] = connection
+        activeJob = ActiveJob(audioFile, connection)
         val intent = Intent(ACTION).setComponent(component)
         if (!appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)) {
-            activeConnections.remove(key)
             updateMetadata(
                 metadataFile,
                 "FAILED",
                 error = "Could not connect to Scrib"
             )
+            activeJob = null
+            startNext(appContext)
         }
+    }
+
+    @Synchronized
+    private fun finishActive(appContext: Context, expectedFile: File, startNext: Boolean) {
+        val job = activeJob?.takeIf {
+            it.file.absolutePath == expectedFile.absolutePath
+        } ?: return
+        activeJob = null
+        try {
+            appContext.unbindService(job.connection)
+        } catch (_: IllegalArgumentException) {
+            // Already disconnected.
+        }
+        if (startNext) startNext(appContext)
     }
 
     private fun findScrib(context: Context): ComponentName? {

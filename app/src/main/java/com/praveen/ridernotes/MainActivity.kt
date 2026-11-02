@@ -67,11 +67,14 @@ import com.praveen.ridernotes.input.BleButtonAccessibilityService
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
+import com.praveen.ridernotes.input.GestureActionConfig
+import com.praveen.ridernotes.input.RemotePressPatternDetector
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 import com.praveen.ridernotes.recording.TranscriptSegment
 import com.praveen.ridernotes.transcription.ScribTranscriber
 import java.io.File
+import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -87,6 +90,7 @@ class MainActivity : ComponentActivity() {
         mutableStateOf(ScribTranscriber.LANGUAGE_ENGLISH)
     private val backupStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
+    private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
     private var remoteTraining = false
     private var remoteTrainingDevice: String? = null
     private val remoteTrainingSignals = linkedSetOf<String>()
@@ -166,7 +170,12 @@ class MainActivity : ComponentActivity() {
                     onCopy = ::copyResults,
                     remoteSetupStatus = remoteSetupStatus,
                     onStartRemoteSetup = ::startRemoteSetup,
-                    onResetRemote = ::resetRemoteToBeauty
+                    onResetRemote = ::resetRemoteToBeauty,
+                    gestureActions = gestureActions,
+                    onSetGestureAction = ::setGestureAction,
+                    onResetGestureActions = ::resetGestureActions,
+                    onStopTranscription = ::stopTranscription,
+                    onRetryTranscription = ::retryTranscription
                 )
             }
         }
@@ -178,7 +187,11 @@ class MainActivity : ComponentActivity() {
         microphoneEnabled.value = hasMicrophonePermission()
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
+        refreshGestureActions()
         refreshSavedNotes()
+        savedNotes.value
+            .filter { it.transcriptionStatus in setOf("PENDING", "QUEUED", "TRANSCRIBING") }
+            .forEach { ScribTranscriber.enqueue(this, it.audioFile) }
         diagnosticMediaSession.isActive = true
     }
 
@@ -342,6 +355,36 @@ class MainActivity : ComponentActivity() {
         refreshSavedNotes()
     }
 
+    private fun stopTranscription(note: SavedVoiceNote) {
+        backupStatus.value = ScribTranscriber.stop(this, note.audioFile)
+        refreshSavedNotes()
+    }
+
+    private fun retryTranscription(note: SavedVoiceNote) {
+        backupStatus.value = ScribTranscriber.retry(this, note.audioFile)
+        refreshSavedNotes()
+    }
+
+    private fun refreshGestureActions() {
+        gestureActions.value = RemotePressPatternDetector.Gesture.values().associateWith {
+            GestureActionConfig.actionFor(this, it)
+        }
+    }
+
+    private fun setGestureAction(
+        gesture: RemotePressPatternDetector.Gesture,
+        action: GestureActionConfig.Action
+    ) {
+        GestureActionConfig.setAction(this, gesture, action)
+        refreshGestureActions()
+    }
+
+    private fun resetGestureActions() {
+        GestureActionConfig.reset(this)
+        refreshGestureActions()
+        remoteSetupStatus.value = "Gesture actions reset to Beauty-R1 defaults"
+    }
+
     private fun playOrPauseNote(note: SavedVoiceNote) {
         if (playingFileName.value == note.audioFile.name) {
             val player = notePlayer ?: return
@@ -417,7 +460,11 @@ class MainActivity : ComponentActivity() {
                         val base = note.audioFile.nameWithoutExtension
                         listOf("m4a", "json", "txt", "vtt", "srt").forEach { extension ->
                             val file = File(parent, "$base.$extension")
-                            if (file.exists() && added.add(file.name)) {
+                            if (extension == "txt" && added.add("$base.txt")) {
+                                zip.putNextEntry(ZipEntry("$base.txt"))
+                                zip.write(exportText(note).toByteArray(Charsets.UTF_8))
+                                zip.closeEntry()
+                            } else if (file.exists() && added.add(file.name)) {
                                 zip.putNextEntry(ZipEntry(file.name))
                                 file.inputStream().use { it.copyTo(zip) }
                                 zip.closeEntry()
@@ -441,9 +488,11 @@ class MainActivity : ComponentActivity() {
 
     private fun importBackup(source: android.net.Uri) {
         var importedFiles = 0
+        var importedNotes = 0
         try {
             val folder = File(filesDir, "voice_notes").apply { mkdirs() }
             val allowedExtensions = setOf("m4a", "json", "txt", "vtt", "srt")
+            val entries = linkedMapOf<String, ByteArray>()
             contentResolver.openInputStream(source)?.use { stream ->
                 ZipInputStream(stream).use { zip ->
                     var entry = zip.nextEntry
@@ -454,22 +503,53 @@ class MainActivity : ComponentActivity() {
                             safeName.isNotBlank() &&
                             extension in allowedExtensions
                         ) {
-                            File(folder, safeName).outputStream().use { output ->
-                                zip.copyTo(output)
-                            }
-                            importedFiles += 1
+                            val output = ByteArrayOutputStream()
+                            zip.copyTo(output)
+                            entries[safeName] = output.toByteArray()
                         }
                         zip.closeEntry()
                         entry = zip.nextEntry
                     }
                 }
             } ?: error("Backup could not be opened")
+            entries.keys.map { it.substringBeforeLast('.') }.distinct().forEach { base ->
+                if (entries["$base.m4a"] == null) return@forEach
+                var restoredBase = base
+                var copy = 2
+                while (File(folder, "$restoredBase.m4a").exists()) {
+                    restoredBase = "${base}_imported_$copy"
+                    copy += 1
+                }
+                allowedExtensions.forEach { extension ->
+                    entries["$base.$extension"]?.let { bytes ->
+                        File(folder, "$restoredBase.$extension").writeBytes(bytes)
+                        importedFiles += 1
+                    }
+                }
+                importedNotes += 1
+            }
             refreshSavedNotes()
             backupStatus.value =
-                "Backup restored: $importedFiles file(s) imported."
+                "Backup restored: $importedNotes note(s), $importedFiles file(s). " +
+                    "Expand its source heading to view it."
         } catch (error: Exception) {
             backupStatus.value = "Import failed: ${error.javaClass.simpleName}"
         }
+    }
+
+    private fun exportText(note: SavedVoiceNote): String = buildString {
+        appendLine("RIDER NOTES RECORDING")
+        appendLine("Source: ${note.sourceApp}")
+        appendLine("Title: ${note.title}")
+        note.author?.let { appendLine("Author: $it") }
+        note.chapter?.let { appendLine("Chapter / episode: $it") }
+        note.playbackPositionLabel?.let { appendLine("Media position: $it") }
+        appendLine("Recorded: ${note.recordedAtLabel}")
+        appendLine("Audio file: ${note.audioFile.name}")
+        appendLine("Transcription status: ${note.transcriptionStatus}")
+        appendLine()
+        appendLine("TRANSCRIPT")
+        appendLine(note.transcript ?: "Transcript not available.")
     }
 
     private fun enableScrib() {
@@ -541,7 +621,12 @@ private fun DetectorScreen(
     onCopy: () -> Unit,
     remoteSetupStatus: State<String>,
     onStartRemoteSetup: () -> Unit,
-    onResetRemote: () -> Unit
+    onResetRemote: () -> Unit,
+    gestureActions: State<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>,
+    onSetGestureAction: (RemotePressPatternDetector.Gesture, GestureActionConfig.Action) -> Unit,
+    onResetGestureActions: () -> Unit,
+    onStopTranscription: (SavedVoiceNote) -> Unit,
+    onRetryTranscription: (SavedVoiceNote) -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -743,6 +828,35 @@ private fun DetectorScreen(
                             Card {
                                 Column(
                                     modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                                ) {
+                                    Text("Gesture action settings", fontWeight = FontWeight.Bold)
+                                    Text("Tap an action to cycle through the available choices.")
+                                    RemotePressPatternDetector.Gesture.values().forEach { gesture ->
+                                        val action = gestureActions.value[gesture]
+                                            ?: GestureActionConfig.defaultFor(gesture)
+                                        OutlinedButton(
+                                            onClick = {
+                                                val choices = GestureActionConfig.Action.values()
+                                                val next = choices[(action.ordinal + 1) % choices.size]
+                                                onSetGestureAction(gesture, next)
+                                            },
+                                            modifier = Modifier.fillMaxWidth()
+                                        ) {
+                                            Text("${gestureLabel(gesture)}: ${action.label}")
+                                        }
+                                    }
+                                    TextButton(onClick = onResetGestureActions) {
+                                        Text("Reset gesture actions")
+                                    }
+                                    Text("Acknowledgement: 1–4 short beeps match the detected press count.")
+                                }
+                            }
+                        }
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
                                     verticalArrangement = Arrangement.spacedBy(5.dp)
                                 ) {
                                     Text(
@@ -895,7 +1009,9 @@ private fun DetectorScreen(
                                                     playbackPaused.value,
                                             onPlay = { onPlayNote(note) },
                                             onStop = onStopNote,
-                                            onSeek = onSeekNote
+                                            onSeek = onSeekNote,
+                                            onStopTranscription = { onStopTranscription(note) },
+                                            onRetryTranscription = { onRetryTranscription(note) }
                                         )
                                     }
                                 }
@@ -953,7 +1069,9 @@ private fun SavedNoteCard(
     isPaused: Boolean,
     onPlay: () -> Unit,
     onStop: () -> Unit,
-    onSeek: (Long) -> Unit
+    onSeek: (Long) -> Unit,
+    onStopTranscription: () -> Unit,
+    onRetryTranscription: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -1030,9 +1148,26 @@ private fun SavedNoteCard(
                     "Transcript: ${note.transcriptionStatus.lowercase().replace('_', ' ')}",
                     style = MaterialTheme.typography.bodySmall
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (note.transcriptionStatus in setOf("QUEUED", "TRANSCRIBING")) {
+                        OutlinedButton(onClick = onStopTranscription) {
+                            Text("Stop transcription")
+                        }
+                    }
+                    OutlinedButton(onClick = onRetryTranscription) {
+                        Text("Retry transcription")
+                    }
+                }
             }
         }
     }
+}
+
+private fun gestureLabel(gesture: RemotePressPatternDetector.Gesture): String = when (gesture) {
+    RemotePressPatternDetector.Gesture.SINGLE -> "Single press"
+    RemotePressPatternDetector.Gesture.DOUBLE -> "Double press"
+    RemotePressPatternDetector.Gesture.TRIPLE -> "Triple press"
+    RemotePressPatternDetector.Gesture.QUADRUPLE -> "Four presses"
 }
 
 @Composable
