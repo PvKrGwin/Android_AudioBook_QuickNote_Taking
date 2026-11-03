@@ -22,6 +22,11 @@ object YouTubeSourceLink {
         pattern = """(?i)(?:vnd\.youtube|youtube|ytmusic):(?://)?(?:watch\?v=)?([A-Za-z0-9_-]{6,20})"""
     )
 
+    data class SharedSource(
+        val packageName: String,
+        val sourceUrl: String
+    )
+
     fun fromMetadata(
         packageName: String,
         metadataValues: List<Pair<String, String>>
@@ -61,6 +66,21 @@ object YouTubeSourceLink {
         }
         val query = title.trim().takeIf { it.isNotBlank() } ?: return null
         return path + URLEncoder.encode(query, Charsets.UTF_8.name())
+    }
+
+    fun fromSharedText(text: String, preferredPackage: String?): SharedSource? {
+        val videoId = videoIdFromUrl(text) ?: return null
+        val packageName = when {
+            text.contains("music.youtube.com", ignoreCase = true) -> YOUTUBE_MUSIC_PACKAGE
+            preferredPackage in supportedPackages -> preferredPackage!!
+            else -> YOUTUBE_PACKAGE
+        }
+        val host = if (packageName == YOUTUBE_MUSIC_PACKAGE) {
+            "music.youtube.com"
+        } else {
+            "www.youtube.com"
+        }
+        return SharedSource(packageName, "https://$host/watch?v=$videoId")
     }
 
     private fun videoIdFromUrl(value: String): String? {

@@ -69,6 +69,9 @@ import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
 import com.praveen.ridernotes.input.GestureActionConfig
 import com.praveen.ridernotes.input.RemotePressPatternDetector
+import com.praveen.ridernotes.media.MediaControlGateway
+import com.praveen.ridernotes.media.SharedMediaLinkStore
+import com.praveen.ridernotes.media.YouTubeSourceLink
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 import com.praveen.ridernotes.recording.TranscriptSegment
@@ -182,6 +185,13 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        handleSharedMediaIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleSharedMediaIntent(intent)
     }
 
     override fun onResume() {
@@ -592,6 +602,44 @@ class MainActivity : ComponentActivity() {
         backupStatus.value = "Title copied: ${note.title}"
     }
 
+    private fun handleSharedMediaIntent(sharedIntent: Intent?) {
+        if (sharedIntent?.action != Intent.ACTION_SEND || sharedIntent.type != "text/plain") return
+        val sharedText = sharedIntent.getCharSequenceExtra(Intent.EXTRA_TEXT)
+            ?.toString()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+        if (sharedText == null) {
+            backupStatus.value = "No YouTube link was included in the shared item."
+            return
+        }
+
+        val identity = MediaControlGateway.currentYouTubeIdentity(this)
+        val sharedSource = YouTubeSourceLink.fromSharedText(
+            sharedText,
+            identity?.packageName
+        )
+        if (sharedSource == null) {
+            backupStatus.value = "The shared text did not contain a supported YouTube link."
+            return
+        }
+        if (identity == null || identity.packageName != sharedSource.packageName) {
+            backupStatus.value =
+                "Play the YouTube item first, then share it to Rider Notes again."
+            return
+        }
+
+        SharedMediaLinkStore.save(
+            context = this,
+            packageName = identity.packageName,
+            title = identity.title,
+            author = identity.author,
+            sourceUrl = sharedSource.sourceUrl
+        )
+        backupStatus.value =
+            "Link saved for ${identity.appName}: ${identity.title}. " +
+                "Autoplay videos with another title will not reuse it."
+    }
+
     private fun enableScrib() {
         scribStatus.value = ScribTranscriber.enableScrib(this)
     }
@@ -813,6 +861,7 @@ private fun DetectorScreen(
                                     Text("4. Triple press: rewind 10 seconds; four presses: forward 10 seconds.")
                                     Text("5. During the final recording warning, single stops and double extends by 40 seconds.")
                                     Text("6. Notes and offline Scrib transcripts appear under the Notes tab.")
+                                    Text("7. For an exact YouTube link, play the item and use Share → Rider Notes once.")
                                 }
                             }
                         }

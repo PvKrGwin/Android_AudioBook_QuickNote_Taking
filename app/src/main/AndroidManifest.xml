@@ -32,6 +32,11 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
 
         <service
@@ -49,8 +54,8 @@
 
         <!--
           Grants access to Android media-session controllers after the user
-          explicitly enables Notification access. Notification contents are
-          neither inspected nor stored.
+          explicitly enables Notification access. Relevant text metadata is
+          held in memory to identify the active media item.
         -->
         <service
             android:name=".recording.VoiceRecordingService"

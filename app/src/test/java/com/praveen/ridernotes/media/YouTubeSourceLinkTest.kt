@@ -70,4 +70,18 @@ class YouTubeSourceLinkTest {
             YouTubeSourceLink.searchUrl("YouTube Music", "Consciousness podcast")
         )
     }
+
+    @Test
+    fun sharedShortLink_usesCurrentlyPlayingApp() {
+        assertEquals(
+            YouTubeSourceLink.SharedSource(
+                YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE,
+                "https://music.youtube.com/watch?v=dQw4w9WgXcQ"
+            ),
+            YouTubeSourceLink.fromSharedText(
+                "https://youtu.be/dQw4w9WgXcQ",
+                YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE
+            )
+        )
+    }
 }

@@ -42,6 +42,13 @@ object MediaControlGateway {
 
     data class Result(val successful: Boolean, val message: String)
 
+    data class MediaIdentity(
+        val packageName: String,
+        val appName: String,
+        val title: String,
+        val author: String?
+    )
+
     data class VoiceNoteMediaContext(
         val packageName: String?,
         val appName: String?,
@@ -96,10 +103,30 @@ object MediaControlGateway {
             mediaLinkEntries(controller, metadata) +
                 notificationLinkEntriesByPackage[controller.packageName].orEmpty()
             ).distinctBy { it.first to it.second }
-        val sourceUrl = YouTubeSourceLink.fromMetadata(
+        val metadataSourceUrl = YouTubeSourceLink.fromMetadata(
             controller.packageName,
             metadataEntries
         )
+        val sharedSourceUrl = if (metadataSourceUrl == null) {
+            SharedMediaLinkStore.find(
+                context,
+                controller.packageName,
+                mediaTitle,
+                mediaAuthor
+            )
+        } else {
+            null
+        }
+        val sourceUrl = metadataSourceUrl ?: sharedSourceUrl
+        if (sharedSourceUrl != null) {
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Matched shared link for current ${appLabel(context, controller.packageName)} " +
+                        "title and channel",
+                    true
+                )
+            )
+        }
         if (
             controller.packageName in setOf(
                 YouTubeSourceLink.YOUTUBE_PACKAGE,
@@ -139,6 +166,33 @@ object MediaControlGateway {
     }
 
     fun currentVoiceNoteContext(): VoiceNoteMediaContext? = voiceNoteContext
+
+    fun currentYouTubeIdentity(context: Context): MediaIdentity? {
+        val controller = runCatching {
+            findControllers(context)
+                .asSequence()
+                .filter {
+                    it.packageName == YouTubeSourceLink.YOUTUBE_PACKAGE ||
+                        it.packageName == YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE
+                }
+                .maxWithOrNull(
+                    compareBy<MediaController> { priority(it) }
+                        .thenBy { lastKnownPlayingAt[it.packageName] ?: 0L }
+                )
+        }.getOrNull() ?: return null
+
+        val (title, _, author) = mediaFields(
+            controller.packageName,
+            controller.metadata,
+            notificationTextByPackage[controller.packageName].orEmpty()
+        )
+        return MediaIdentity(
+            packageName = controller.packageName,
+            appName = appLabel(context, controller.packageName),
+            title = title?.takeIf { it.isNotBlank() } ?: return null,
+            author = author
+        )
+    }
 
     fun ensureVoiceNoteMediaPaused(context: Context): Boolean {
         val savedContext = voiceNoteContext ?: return true
