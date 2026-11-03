@@ -10,6 +10,7 @@ import android.media.session.PlaybackState
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.os.Bundle
 import android.view.KeyEvent
 import android.service.notification.StatusBarNotification
 import com.praveen.ridernotes.input.ButtonEvent
@@ -46,6 +47,7 @@ object MediaControlGateway {
         val subtitle: String?,
         val author: String?,
         val playbackPositionMs: Long?,
+        val sourceUrl: String?,
         val wasPlaying: Boolean
     ) {
         val isStandalone: Boolean get() = packageName == null
@@ -71,7 +73,7 @@ object MediaControlGateway {
         }
 
         if (controller == null) {
-            return VoiceNoteMediaContext(null, null, null, null, null, null, false)
+            return VoiceNoteMediaContext(null, null, null, null, null, null, null, false)
                 .also { voiceNoteContext = it }
         }
 
@@ -88,6 +90,27 @@ object MediaControlGateway {
             metadata,
             notificationTextByPackage[controller.packageName].orEmpty()
         )
+        val metadataEntries = mediaLinkEntries(controller, metadata)
+        val sourceUrl = YouTubeSourceLink.fromMetadata(
+            controller.packageName,
+            metadataEntries
+        )
+        if (
+            controller.packageName in setOf(
+                YouTubeSourceLink.YOUTUBE_PACKAGE,
+                YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE
+            ) && sourceUrl == null
+        ) {
+            val diagnostic = metadataEntries.joinToString(" | ") { (key, value) ->
+                "$key=${value.take(120)}"
+            }.take(1_000)
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "YouTube link unavailable; media metadata=[$diagnostic]",
+                    false
+                )
+            )
+        }
         val noteContext = VoiceNoteMediaContext(
             packageName = controller.packageName,
             appName = appLabel(context, controller.packageName),
@@ -95,6 +118,7 @@ object MediaControlGateway {
             subtitle = mediaChapter,
             author = mediaAuthor,
             playbackPositionMs = state?.let(::estimatedPosition),
+            sourceUrl = sourceUrl,
             wasPlaying = wasPlaying
         )
         voiceNoteContext = noteContext
@@ -454,6 +478,10 @@ object MediaControlGateway {
     }
 
     private fun metadataTextValues(metadata: MediaMetadata?): List<String> {
+        return metadataTextEntries(metadata).map { (_, value) -> value }.distinct()
+    }
+
+    private fun metadataTextEntries(metadata: MediaMetadata?): List<Pair<String, String>> {
         if (metadata == null) return emptyList()
         return metadata.keySet()
             .mapNotNull { key ->
@@ -461,8 +489,52 @@ object MediaControlGateway {
                     .getOrNull()
                     ?.trim()
                     ?.takeIf { it.isNotBlank() }
+                    ?.let { value -> key to value }
             }
-            .distinct()
+            .distinctBy { it.first to it.second }
+    }
+
+    private fun mediaLinkEntries(
+        controller: MediaController,
+        metadata: MediaMetadata?
+    ): List<Pair<String, String>> {
+        val result = metadataTextEntries(metadata).toMutableList()
+
+        fun addDescription(prefix: String, description: android.media.MediaDescription?) {
+            description ?: return
+            description.mediaId?.trim()?.takeIf { it.isNotBlank() }?.let {
+                result += "$prefix.mediaId" to it
+            }
+            description.mediaUri?.toString()?.trim()?.takeIf { it.isNotBlank() }?.let {
+                result += "$prefix.mediaUri" to it
+            }
+            result += bundleTextEntries(description.extras, "$prefix.extra")
+        }
+
+        addDescription("metadata.description", metadata?.description)
+        result += bundleTextEntries(controller.extras, "session.extra")
+        result += bundleTextEntries(controller.playbackState?.extras, "playback.extra")
+
+        val activeQueueItemId = controller.playbackState?.activeQueueItemId
+        controller.queue
+            ?.firstOrNull { activeQueueItemId != null && it.queueId == activeQueueItemId }
+            ?.description
+            ?.let { addDescription("queue.description", it) }
+
+        return result.distinctBy { it.first to it.second }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun bundleTextEntries(bundle: Bundle?, prefix: String): List<Pair<String, String>> {
+        bundle ?: return emptyList()
+        return bundle.keySet().mapNotNull { key ->
+            val value = runCatching { bundle.get(key) }.getOrNull()
+            when (value) {
+                is String -> value
+                is CharSequence -> value.toString()
+                else -> null
+            }?.trim()?.takeIf { it.isNotBlank() }?.let { "$prefix.$key" to it }
+        }
     }
 
     private fun mediaFields(

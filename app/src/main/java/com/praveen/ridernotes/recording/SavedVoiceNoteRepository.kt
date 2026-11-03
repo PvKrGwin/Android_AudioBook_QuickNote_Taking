@@ -1,6 +1,7 @@
 package com.praveen.ridernotes.recording
 
 import android.content.Context
+import com.praveen.ridernotes.media.YouTubeSourceLink
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -21,6 +22,7 @@ data class SavedVoiceNote(
     val chapter: String?,
     val author: String?,
     val playbackPositionMs: Long?,
+    val sourceUrl: String?,
     val transcriptionStatus: String,
     val transcript: String?,
     val transcriptSegments: List<TranscriptSegment>
@@ -41,6 +43,9 @@ data class SavedVoiceNote(
                 String.format(Locale.US, "%d:%02d", minutes, seconds)
             }
         }
+
+    val sourceUrlAtPlaybackPosition: String?
+        get() = YouTubeSourceLink.atPosition(sourceUrl, playbackPositionMs)
 }
 
 object SavedVoiceNoteRepository {
@@ -79,6 +84,7 @@ object SavedVoiceNoteRepository {
                 chapter = null,
                 author = null,
                 playbackPositionMs = null,
+                sourceUrl = null,
                 transcriptionStatus = "NOT_STARTED",
                 transcript = null,
                 transcriptSegments = emptyList()
@@ -110,6 +116,7 @@ object SavedVoiceNoteRepository {
                 chapter = chapter,
                 author = json.optNullableString("author"),
                 playbackPositionMs = json.optNullableLong("playbackPositionMs"),
+                sourceUrl = json.optNullableString("sourceUrl"),
                 transcriptionStatus = json.optNullableString("transcriptionStatus") ?: "NOT_STARTED",
                 transcript = json.optNullableString("transcript"),
                 transcriptSegments = json.optJSONArray("transcriptSegments")?.let { array ->
@@ -135,6 +142,7 @@ object SavedVoiceNoteRepository {
                 chapter = null,
                 author = null,
                 playbackPositionMs = null,
+                sourceUrl = null,
                 transcriptionStatus = "UNKNOWN",
                 transcript = null,
                 transcriptSegments = emptyList()

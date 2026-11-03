@@ -535,7 +535,7 @@ class VoiceRecordingService : Service() {
 
             val json = JSONObject()
                 .put("audioFile", audioFile.name)
-                .put("metadataVersion", 2)
+                .put("metadataVersion", 3)
                 .put("recordedAtEpochMs", recordedAt)
                 .put("type", if (mediaContext?.isStandalone == false) "MEDIA_LINKED" else "STANDALONE")
                 .put("title", mediaContext?.title ?: standaloneTitle)
@@ -544,6 +544,7 @@ class VoiceRecordingService : Service() {
                 .put("subtitleOrChapter", mediaContext?.subtitle ?: JSONObject.NULL)
                 .put("author", mediaContext?.author ?: JSONObject.NULL)
                 .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
+                .put("sourceUrl", mediaContext?.sourceUrl ?: JSONObject.NULL)
                 .put("recordingInput", recordingInputLabel)
                 .put("transcriptionStatus", "PENDING")
 

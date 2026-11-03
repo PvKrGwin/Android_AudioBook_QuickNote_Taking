@@ -175,7 +175,8 @@ class MainActivity : ComponentActivity() {
                     onSetGestureAction = ::setGestureAction,
                     onResetGestureActions = ::resetGestureActions,
                     onStopTranscription = ::stopTranscription,
-                    onRetryTranscription = ::retryTranscription
+                    onRetryTranscription = ::retryTranscription,
+                    onOpenSource = ::openSourceAtTimestamp
                 )
             }
         }
@@ -544,12 +545,22 @@ class MainActivity : ComponentActivity() {
         note.author?.let { appendLine("Author: $it") }
         note.chapter?.let { appendLine("Chapter / episode: $it") }
         note.playbackPositionLabel?.let { appendLine("Media position: $it") }
+        note.sourceUrlAtPlaybackPosition?.let { appendLine("Open source at this time: $it") }
         appendLine("Recorded: ${note.recordedAtLabel}")
         appendLine("Audio file: ${note.audioFile.name}")
         appendLine("Transcription status: ${note.transcriptionStatus}")
         appendLine()
         appendLine("TRANSCRIPT")
         appendLine(note.transcript ?: "Transcript not available.")
+    }
+
+    private fun openSourceAtTimestamp(note: SavedVoiceNote) {
+        val url = note.sourceUrlAtPlaybackPosition ?: return
+        runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+        }.onFailure { error ->
+            backupStatus.value = "Could not open source: ${error.javaClass.simpleName}"
+        }
     }
 
     private fun enableScrib() {
@@ -626,7 +637,8 @@ private fun DetectorScreen(
     onSetGestureAction: (RemotePressPatternDetector.Gesture, GestureActionConfig.Action) -> Unit,
     onResetGestureActions: () -> Unit,
     onStopTranscription: (SavedVoiceNote) -> Unit,
-    onRetryTranscription: (SavedVoiceNote) -> Unit
+    onRetryTranscription: (SavedVoiceNote) -> Unit,
+    onOpenSource: (SavedVoiceNote) -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -660,7 +672,8 @@ private fun DetectorScreen(
             onStop = onStopNote,
             onSeek = onSeekNote,
             onStopTranscription = { onStopTranscription(note) },
-            onRetryTranscription = { onRetryTranscription(note) }
+            onRetryTranscription = { onRetryTranscription(note) },
+            onOpenSource = { onOpenSource(note) }
         )
     }
 
@@ -1113,7 +1126,8 @@ private fun SavedNoteCard(
     onStop: () -> Unit,
     onSeek: (Long) -> Unit,
     onStopTranscription: () -> Unit,
-    onRetryTranscription: () -> Unit
+    onRetryTranscription: () -> Unit,
+    onOpenSource: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -1144,6 +1158,11 @@ private fun SavedNoteCard(
                 Text("$label: $it")
             }
             note.playbackPositionLabel?.let { Text("Media position: $it") }
+            if (note.sourceUrlAtPlaybackPosition != null) {
+                OutlinedButton(onClick = onOpenSource) {
+                    Text("Open video at this time")
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onPlay) {
                     Text(
