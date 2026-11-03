@@ -40,11 +40,14 @@ object ScribTranscriber {
 
     private data class ActiveJob(
         val file: File,
+        val timeoutMs: Long,
         val connection: ServiceConnection,
         var session: ITranscriptionSession? = null
     )
 
-    private val queue = ArrayDeque<File>()
+    private data class QueuedJob(val file: File, val timeoutMs: Long)
+
+    private val queue = ArrayDeque<QueuedJob>()
     private var activeJob: ActiveJob? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var activeTimeout: Runnable? = null
@@ -94,6 +97,12 @@ object ScribTranscriber {
 
     @Synchronized
     fun enqueue(context: Context, audioFile: File) {
+        val savedTimeout = readTimeout(metadataFileFor(audioFile))
+        enqueue(context, audioFile, savedTimeout)
+    }
+
+    @Synchronized
+    private fun enqueue(context: Context, audioFile: File, timeoutMs: Long) {
         val appContext = context.applicationContext
         val metadataFile = metadataFileFor(audioFile)
         val component = approvedComponent(appContext)
@@ -108,16 +117,16 @@ object ScribTranscriber {
         }
 
         if (activeJob?.file?.absolutePath == audioFile.absolutePath ||
-            queue.any { it.absolutePath == audioFile.absolutePath }
+            queue.any { it.file.absolutePath == audioFile.absolutePath }
         ) return
-        updateMetadata(metadataFile, "QUEUED")
-        queue.addLast(audioFile)
+        updateMetadata(metadataFile, "QUEUED", timeoutMs = timeoutMs)
+        queue.addLast(QueuedJob(audioFile, timeoutMs))
         startNext(appContext)
     }
 
     @Synchronized
     fun stop(context: Context, audioFile: File): String {
-        val queued = queue.firstOrNull { it.absolutePath == audioFile.absolutePath }
+        val queued = queue.firstOrNull { it.file.absolutePath == audioFile.absolutePath }
         if (queued != null) {
             queue.remove(queued)
             updateMetadata(metadataFileFor(audioFile), "PAUSED", error = "Stopped by user")
@@ -135,15 +144,22 @@ object ScribTranscriber {
 
     @Synchronized
     fun retry(context: Context, audioFile: File): String {
+        val wasTimedOut = readStatus(metadataFileFor(audioFile)) == "TIMED_OUT"
         stop(context, audioFile)
-        enqueue(context, audioFile)
-        return "Transcription queued again."
+        val timeoutMs = if (wasTimedOut) RETRY_AFTER_TIMEOUT_MS else NORMAL_TIMEOUT_MS
+        enqueue(context, audioFile, timeoutMs)
+        return if (wasTimedOut) {
+            "Timed-out transcription queued again with a 30-minute limit."
+        } else {
+            "Transcription queued again with a 10-minute limit."
+        }
     }
 
     @Synchronized
     private fun startNext(appContext: Context) {
         if (activeJob != null || queue.isEmpty()) return
-        val audioFile = queue.removeFirst()
+        val queuedJob = queue.removeFirst()
+        val audioFile = queuedJob.file
         if (!audioFile.exists()) {
             startNext(appContext)
             return
@@ -172,8 +188,17 @@ object ScribTranscriber {
                         return
                     }
 
-                    updateMetadata(metadataFile, "TRANSCRIBING")
-                    scheduleTimeout(appContext, audioFile, metadataFile)
+                    updateMetadata(
+                        metadataFile,
+                        "TRANSCRIBING",
+                        timeoutMs = queuedJob.timeoutMs
+                    )
+                    scheduleTimeout(
+                        appContext,
+                        audioFile,
+                        metadataFile,
+                        queuedJob.timeoutMs
+                    )
                     val audio = ParcelFileDescriptor.open(
                         audioFile,
                         ParcelFileDescriptor.MODE_READ_ONLY
@@ -288,7 +313,7 @@ object ScribTranscriber {
             }
         }
 
-        activeJob = ActiveJob(audioFile, connection)
+        activeJob = ActiveJob(audioFile, queuedJob.timeoutMs, connection)
         val intent = Intent(ACTION).setComponent(component)
         if (!appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)) {
             updateMetadata(
@@ -318,7 +343,12 @@ object ScribTranscriber {
     }
 
     @Synchronized
-    private fun scheduleTimeout(appContext: Context, audioFile: File, metadataFile: File) {
+    private fun scheduleTimeout(
+        appContext: Context,
+        audioFile: File,
+        metadataFile: File,
+        timeoutMs: Long
+    ) {
         activeTimeout?.let(timeoutHandler::removeCallbacks)
         val timeout = Runnable {
             synchronized(this@ScribTranscriber) {
@@ -329,13 +359,14 @@ object ScribTranscriber {
                 updateMetadata(
                     metadataFile,
                     "TIMED_OUT",
-                    error = "Scrib exceeded the 10-minute transcription limit"
+                    error = "Scrib exceeded the ${timeoutMs / 60_000L}-minute transcription limit",
+                    timeoutMs = timeoutMs
                 )
                 finishActive(appContext, audioFile, startNext = true)
             }
         }
         activeTimeout = timeout
-        timeoutHandler.postDelayed(timeout, TRANSCRIPTION_TIMEOUT_MS)
+        timeoutHandler.postDelayed(timeout, timeoutMs)
     }
 
     @Synchronized
@@ -361,7 +392,18 @@ object ScribTranscriber {
     private fun metadataFileFor(audioFile: File) =
         File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
 
-    private const val TRANSCRIPTION_TIMEOUT_MS = 10L * 60L * 1_000L
+    private fun readStatus(metadataFile: File): String? = runCatching {
+        JSONObject(metadataFile.readText()).optString("transcriptionStatus")
+    }.getOrNull()
+
+    private fun readTimeout(metadataFile: File): Long = runCatching {
+        JSONObject(metadataFile.readText())
+            .optLong("transcriptionTimeoutMs", NORMAL_TIMEOUT_MS)
+            .coerceIn(NORMAL_TIMEOUT_MS, RETRY_AFTER_TIMEOUT_MS)
+    }.getOrDefault(NORMAL_TIMEOUT_MS)
+
+    private const val NORMAL_TIMEOUT_MS = 10L * 60L * 1_000L
+    private const val RETRY_AFTER_TIMEOUT_MS = 30L * 60L * 1_000L
 
     @Synchronized
     private fun updateMetadata(
@@ -369,7 +411,8 @@ object ScribTranscriber {
         status: String,
         transcript: String? = null,
         error: String? = null,
-        segments: List<TimedSegment>? = null
+        segments: List<TimedSegment>? = null,
+        timeoutMs: Long? = null
     ) {
         try {
             val json = if (metadataFile.exists()) {
@@ -378,6 +421,7 @@ object ScribTranscriber {
                 JSONObject()
             }
             json.put("transcriptionStatus", status)
+            if (timeoutMs != null) json.put("transcriptionTimeoutMs", timeoutMs)
             if (transcript != null) json.put("transcript", transcript)
             if (segments != null) {
                 val array = JSONArray()
