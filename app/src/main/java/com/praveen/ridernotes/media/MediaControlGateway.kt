@@ -37,6 +37,8 @@ object MediaControlGateway {
         pkg != context.packageName && pkg != "com.android.systemui"
     private val notificationTextByPackage =
         ConcurrentHashMap<String, List<String>>()
+    private val notificationLinkEntriesByPackage =
+        ConcurrentHashMap<String, List<Pair<String, String>>>()
 
     data class Result(val successful: Boolean, val message: String)
 
@@ -90,7 +92,10 @@ object MediaControlGateway {
             metadata,
             notificationTextByPackage[controller.packageName].orEmpty()
         )
-        val metadataEntries = mediaLinkEntries(controller, metadata)
+        val metadataEntries = (
+            mediaLinkEntries(controller, metadata) +
+                notificationLinkEntriesByPackage[controller.packageName].orEmpty()
+            ).distinctBy { it.first to it.second }
         val sourceUrl = YouTubeSourceLink.fromMetadata(
             controller.packageName,
             metadataEntries
@@ -201,17 +206,29 @@ object MediaControlGateway {
                 .filter { it.isNotBlank() }
                 .forEach(::add)
         }.distinct()
-        if (values.isNotEmpty()) notificationTextByPackage[sbn.packageName] = values
+        if (values.isNotEmpty()) {
+            notificationTextByPackage[sbn.packageName] = values
+        } else {
+            notificationTextByPackage.remove(sbn.packageName)
+        }
+        val linkEntries = bundleTextEntries(extras, "notification.extra")
+        if (linkEntries.isNotEmpty()) {
+            notificationLinkEntriesByPackage[sbn.packageName] = linkEntries
+        } else {
+            notificationLinkEntriesByPackage.remove(sbn.packageName)
+        }
     }
 
     fun removeNotificationMetadata(sbn: StatusBarNotification) {
         if (sbn.packageName != "com.praveen.ridernotes") {
             notificationTextByPackage.remove(sbn.packageName)
+            notificationLinkEntriesByPackage.remove(sbn.packageName)
         }
     }
 
     fun clearNotificationMetadata() {
         notificationTextByPackage.clear()
+        notificationLinkEntriesByPackage.clear()
     }
 
     fun finishVoiceNote(

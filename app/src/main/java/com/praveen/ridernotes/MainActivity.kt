@@ -176,7 +176,9 @@ class MainActivity : ComponentActivity() {
                     onResetGestureActions = ::resetGestureActions,
                     onStopTranscription = ::stopTranscription,
                     onRetryTranscription = ::retryTranscription,
-                    onOpenSource = ::openSourceAtTimestamp
+                    onCopyTitle = ::copyNoteTitle,
+                    onOpenSource = ::openSourceAtTimestamp,
+                    onSearchSource = ::searchSourceTitle
                 )
             }
         }
@@ -546,6 +548,9 @@ class MainActivity : ComponentActivity() {
         note.chapter?.let { appendLine("Chapter / episode: $it") }
         note.playbackPositionLabel?.let { appendLine("Media position: $it") }
         note.sourceUrlAtPlaybackPosition?.let { appendLine("Open source at this time: $it") }
+        if (note.sourceUrlAtPlaybackPosition == null) {
+            note.sourceSearchUrl?.let { appendLine("Search source by title: $it") }
+        }
         appendLine("Recorded: ${note.recordedAtLabel}")
         appendLine("Audio file: ${note.audioFile.name}")
         appendLine("Transcription status: ${note.transcriptionStatus}")
@@ -556,11 +561,35 @@ class MainActivity : ComponentActivity() {
 
     private fun openSourceAtTimestamp(note: SavedVoiceNote) {
         val url = note.sourceUrlAtPlaybackPosition ?: return
+        openMediaUrl(note, url)
+    }
+
+    private fun searchSourceTitle(note: SavedVoiceNote) {
+        val url = note.sourceSearchUrl ?: return
+        openMediaUrl(note, url)
+    }
+
+    private fun openMediaUrl(note: SavedVoiceNote, url: String) {
+        val preferredPackage = when (note.sourceApp) {
+            "YouTube" -> "com.google.android.youtube"
+            "YouTube Music" -> "com.google.android.apps.youtube.music"
+            else -> null
+        }
         runCatching {
+            val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            if (preferredPackage != null) intent.setPackage(preferredPackage)
+            startActivity(intent)
+        }.recoverCatching {
             startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
         }.onFailure { error ->
             backupStatus.value = "Could not open source: ${error.javaClass.simpleName}"
         }
+    }
+
+    private fun copyNoteTitle(note: SavedVoiceNote) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Rider Notes title", note.title))
+        backupStatus.value = "Title copied: ${note.title}"
     }
 
     private fun enableScrib() {
@@ -638,7 +667,9 @@ private fun DetectorScreen(
     onResetGestureActions: () -> Unit,
     onStopTranscription: (SavedVoiceNote) -> Unit,
     onRetryTranscription: (SavedVoiceNote) -> Unit,
-    onOpenSource: (SavedVoiceNote) -> Unit
+    onCopyTitle: (SavedVoiceNote) -> Unit,
+    onOpenSource: (SavedVoiceNote) -> Unit,
+    onSearchSource: (SavedVoiceNote) -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -673,7 +704,9 @@ private fun DetectorScreen(
             onSeek = onSeekNote,
             onStopTranscription = { onStopTranscription(note) },
             onRetryTranscription = { onRetryTranscription(note) },
-            onOpenSource = { onOpenSource(note) }
+            onCopyTitle = { onCopyTitle(note) },
+            onOpenSource = { onOpenSource(note) },
+            onSearchSource = { onSearchSource(note) }
         )
     }
 
@@ -1127,7 +1160,9 @@ private fun SavedNoteCard(
     onSeek: (Long) -> Unit,
     onStopTranscription: () -> Unit,
     onRetryTranscription: () -> Unit,
-    onOpenSource: () -> Unit
+    onCopyTitle: () -> Unit,
+    onOpenSource: () -> Unit,
+    onSearchSource: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -1158,9 +1193,23 @@ private fun SavedNoteCard(
                 Text("$label: $it")
             }
             note.playbackPositionLabel?.let { Text("Media position: $it") }
+            OutlinedButton(onClick = onCopyTitle) {
+                Text("Copy title")
+            }
             if (note.sourceUrlAtPlaybackPosition != null) {
                 OutlinedButton(onClick = onOpenSource) {
                     Text("Open video at this time")
+                }
+            }
+            if (note.sourceSearchUrl != null) {
+                OutlinedButton(onClick = onSearchSource) {
+                    Text(
+                        if (note.sourceApp == "YouTube Music") {
+                            "Search title in YouTube Music"
+                        } else {
+                            "Search title in YouTube"
+                        }
+                    )
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

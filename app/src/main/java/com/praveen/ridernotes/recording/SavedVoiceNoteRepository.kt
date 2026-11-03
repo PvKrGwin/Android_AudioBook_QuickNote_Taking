@@ -46,6 +46,9 @@ data class SavedVoiceNote(
 
     val sourceUrlAtPlaybackPosition: String?
         get() = YouTubeSourceLink.atPosition(sourceUrl, playbackPositionMs)
+
+    val sourceSearchUrl: String?
+        get() = YouTubeSourceLink.searchUrl(sourceApp, title)
 }
 
 object SavedVoiceNoteRepository {

@@ -1,5 +1,7 @@
 package com.praveen.ridernotes.media
 
+import java.net.URLEncoder
+
 /**
  * Extracts a stable public YouTube link from media-session metadata.
  *
@@ -47,6 +49,18 @@ object YouTubeSourceLink {
         val position = playbackPositionMs?.takeIf { it >= 0L } ?: return url
         val separator = if ('?' in url) '&' else '?'
         return "$url${separator}t=${position / 1_000L}s"
+    }
+
+    fun searchUrl(sourceApp: String, title: String): String? {
+        val path = when {
+            sourceApp.equals("YouTube", ignoreCase = true) ->
+                "https://www.youtube.com/results?search_query="
+            sourceApp.equals("YouTube Music", ignoreCase = true) ->
+                "https://music.youtube.com/search?q="
+            else -> return null
+        }
+        val query = title.trim().takeIf { it.isNotBlank() } ?: return null
+        return path + URLEncoder.encode(query, Charsets.UTF_8.name())
     }
 
     private fun videoIdFromUrl(value: String): String? {

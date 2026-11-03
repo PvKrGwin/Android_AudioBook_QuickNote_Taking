@@ -49,4 +49,25 @@ class YouTubeSourceLinkTest {
             )
         )
     }
+
+    @Test
+    fun youtubeTitle_hasSearchFallback() {
+        assertEquals(
+            "https://www.youtube.com/results?search_query=A+Brief+History+of+Intelligence",
+            YouTubeSourceLink.searchUrl("YouTube", "A Brief History of Intelligence")
+        )
+    }
+
+    @Test
+    fun nonYouTubeTitle_hasNoSearchFallback() {
+        assertNull(YouTubeSourceLink.searchUrl("Audible", "A Brief History of Intelligence"))
+    }
+
+    @Test
+    fun youtubeMusicTitle_usesMusicSearch() {
+        assertEquals(
+            "https://music.youtube.com/search?q=Consciousness+podcast",
+            YouTubeSourceLink.searchUrl("YouTube Music", "Consciousness podcast")
+        )
+    }
 }
