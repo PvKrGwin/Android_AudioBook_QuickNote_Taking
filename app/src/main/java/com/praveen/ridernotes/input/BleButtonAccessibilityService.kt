@@ -304,26 +304,63 @@ class BleButtonAccessibilityService : AccessibilityService() {
     }
 
     private fun playScreenReadyTone() {
-        ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_READY_VOLUME).apply {
-            startTone(ToneGenerator.TONE_PROP_ACK, SCREEN_READY_BEEP_MS)
-            handler.postDelayed({ release() }, SCREEN_READY_BEEP_MS + 50L)
-        }
+        playScreenTransitionTone(
+            tones = intArrayOf(
+                ToneGenerator.TONE_DTMF_1,
+                ToneGenerator.TONE_DTMF_5,
+                ToneGenerator.TONE_DTMF_9
+            ),
+            volume = SCREEN_READY_VOLUME,
+            failureLabel = "SCREEN_ON_ASCENDING_TONE"
+        )
     }
 
     private fun playScreenOffTone() {
-        runCatching {
-            ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_OFF_VOLUME).apply {
-                startTone(ToneGenerator.TONE_PROP_BEEP, SCREEN_OFF_BEEP_MS)
-                handler.postDelayed({ release() }, SCREEN_OFF_BEEP_MS + 80L)
-            }
-        }.onFailure { error ->
+        playScreenTransitionTone(
+            tones = intArrayOf(
+                ToneGenerator.TONE_DTMF_9,
+                ToneGenerator.TONE_DTMF_5,
+                ToneGenerator.TONE_DTMF_1
+            ),
+            volume = SCREEN_OFF_VOLUME,
+            failureLabel = "SCREEN_OFF_DESCENDING_TONE"
+        )
+    }
+
+    private fun playScreenTransitionTone(
+        tones: IntArray,
+        volume: Int,
+        failureLabel: String
+    ) {
+        val generator = runCatching {
+            ToneGenerator(AudioManager.STREAM_MUSIC, volume)
+        }.getOrElse { error ->
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
-                    "SCREEN_OFF_TONE failed: ${error.javaClass.simpleName}",
+                    "$failureLabel failed: ${error.javaClass.simpleName}",
                     false
                 )
             )
+            return
         }
+
+        tones.forEachIndexed { index, toneType ->
+            handler.postDelayed({
+                runCatching {
+                    generator.startTone(toneType, SCREEN_TRANSITION_NOTE_MS)
+                }.onFailure { error ->
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            "$failureLabel failed: ${error.javaClass.simpleName}",
+                            false
+                        )
+                    )
+                }
+            }, index * SCREEN_TRANSITION_STEP_MS)
+        }
+        val releaseAfter =
+            (tones.lastIndex * SCREEN_TRANSITION_STEP_MS) + SCREEN_TRANSITION_NOTE_MS + 80L
+        handler.postDelayed({ generator.release() }, releaseAfter)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -352,9 +389,9 @@ class BleButtonAccessibilityService : AccessibilityService() {
     companion object {
         private const val ACK_BEEP_INTERVAL_MS = 150L
         private const val WARNING_DOUBLE_PRESS_MS = 800L
-        private const val SCREEN_READY_BEEP_MS = 180
         private const val SCREEN_READY_VOLUME = 85
-        private const val SCREEN_OFF_BEEP_MS = 700
         private const val SCREEN_OFF_VOLUME = 90
+        private const val SCREEN_TRANSITION_NOTE_MS = 150
+        private const val SCREEN_TRANSITION_STEP_MS = 205L
     }
 }
