@@ -49,7 +49,10 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private val screenOnReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                Intent.ACTION_SCREEN_OFF -> screenOffObserved = true
+                Intent.ACTION_SCREEN_OFF -> {
+                    screenOffObserved = true
+                    if (isConfiguredRemoteConnected()) playScreenOffTone()
+                }
                 Intent.ACTION_SCREEN_ON -> {
                     screenOffObserved = false
                     lastScreenWakeAt = SystemClock.elapsedRealtime()
@@ -307,6 +310,22 @@ class BleButtonAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun playScreenOffTone() {
+        runCatching {
+            ToneGenerator(AudioManager.STREAM_MUSIC, SCREEN_OFF_VOLUME).apply {
+                startTone(ToneGenerator.TONE_PROP_BEEP, SCREEN_OFF_BEEP_MS)
+                handler.postDelayed({ release() }, SCREEN_OFF_BEEP_MS + 80L)
+            }
+        }.onFailure { error ->
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "SCREEN_OFF_TONE failed: ${error.javaClass.simpleName}",
+                    false
+                )
+            )
+        }
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // Screen content is deliberately not inspected.
     }
@@ -335,5 +354,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
         private const val WARNING_DOUBLE_PRESS_MS = 800L
         private const val SCREEN_READY_BEEP_MS = 180
         private const val SCREEN_READY_VOLUME = 85
+        private const val SCREEN_OFF_BEEP_MS = 700
+        private const val SCREEN_OFF_VOLUME = 90
     }
 }
