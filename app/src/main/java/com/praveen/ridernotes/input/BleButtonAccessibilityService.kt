@@ -399,7 +399,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
         val noteSamples = millisecondsToSamples(SCREEN_TRANSITION_NOTE_MS)
         val shortGapSamples = millisecondsToSamples(SCREEN_TRANSITION_REPEAT_GAP_MS)
         val phraseGapSamples = millisecondsToSamples(SCREEN_TRANSITION_PHRASE_GAP_MS)
-        val gapSamples = frequencies.indices.dropLast(1).sumOf { index ->
+        val gapSamples = (0 until (frequencies.size - 1)).sumOf { index: Int ->
             if (index % 2 == 1) phraseGapSamples else shortGapSamples
         }
         val output = ShortArray((noteSamples * frequencies.size) + gapSamples)
