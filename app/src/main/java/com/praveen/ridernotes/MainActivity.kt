@@ -631,10 +631,37 @@ private fun DetectorScreen(
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
     val expandedSources = remember { mutableStateOf<Set<String>>(emptySet()) }
+    val expandedTitles = remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectedNotePaths = remember { mutableStateOf<Set<String>>(emptySet()) }
     val showDeleteConfirmation = remember { mutableStateOf(false) }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
+    }
+    val noteCard: @Composable (SavedVoiceNote) -> Unit = { note ->
+        SavedNoteCard(
+            note = note,
+            isPlaying = playingFileName.value == note.audioFile.name,
+            isSelected = note.audioFile.absolutePath in selectedNotePaths.value,
+            onSelectionChange = { selected ->
+                selectedNotePaths.value = if (selected) {
+                    selectedNotePaths.value + note.audioFile.absolutePath
+                } else {
+                    selectedNotePaths.value - note.audioFile.absolutePath
+                }
+            },
+            playbackPositionMs = if (playingFileName.value == note.audioFile.name) {
+                playingPositionMs.value
+            } else 0L,
+            playbackDurationMs = if (playingFileName.value == note.audioFile.name) {
+                playingDurationMs.value
+            } else 0L,
+            isPaused = playingFileName.value == note.audioFile.name && playbackPaused.value,
+            onPlay = { onPlayNote(note) },
+            onStop = onStopNote,
+            onSeek = onSeekNote,
+            onStopTranscription = { onStopTranscription(note) },
+            onRetryTranscription = { onRetryTranscription(note) }
+        )
     }
 
     if (showDeleteConfirmation.value) {
@@ -976,43 +1003,52 @@ private fun DetectorScreen(
                                 }
 
                                 if (source in expandedSources.value) {
-                                    items(
-                                        items = sourceNotes,
-                                        key = { it.audioFile.absolutePath }
-                                    ) { note ->
-                                        SavedNoteCard(
-                                            note = note,
-                                            isPlaying =
-                                                playingFileName.value == note.audioFile.name,
-                                            isSelected =
-                                                note.audioFile.absolutePath in selectedNotePaths.value,
-                                            onSelectionChange = { selected ->
-                                                selectedNotePaths.value =
-                                                    if (selected) {
-                                                        selectedNotePaths.value +
-                                                            note.audioFile.absolutePath
-                                                    } else {
-                                                        selectedNotePaths.value -
-                                                            note.audioFile.absolutePath
-                                                    }
+                                    if (supportsTitleGrouping(source)) {
+                                        val notesByTitle = sourceNotes
+                                            .groupBy { it.title.trim().ifBlank { "Untitled" } }
+                                            .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                                        notesByTitle.forEach { (title, titleNotes) ->
+                                            val titleKey = "$source::$title"
+                                            item(key = "title-$titleKey") {
+                                                val expanded = titleKey in expandedTitles.value
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        expandedTitles.value = if (expanded) {
+                                                            expandedTitles.value - titleKey
+                                                        } else {
+                                                            expandedTitles.value + titleKey
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 12.dp)
+                                                ) {
+                                                    Text(
+                                                        if (expanded) {
+                                                            "▼  $title (${titleNotes.size})"
+                                                        } else {
+                                                            "▶  $title (${titleNotes.size})"
+                                                        },
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                }
+                                            }
+                                            if (titleKey in expandedTitles.value) {
+                                                items(
+                                                    items = titleNotes.sortedByDescending {
+                                                        it.recordedAtEpochMs
+                                                    },
+                                                    key = { it.audioFile.absolutePath }
+                                                ) { note -> noteCard(note) }
+                                            }
+                                        }
+                                    } else {
+                                        items(
+                                            items = sourceNotes.sortedByDescending {
+                                                it.recordedAtEpochMs
                                             },
-                                            playbackPositionMs =
-                                                if (playingFileName.value == note.audioFile.name) {
-                                                    playingPositionMs.value
-                                                } else 0L,
-                                            playbackDurationMs =
-                                                if (playingFileName.value == note.audioFile.name) {
-                                                    playingDurationMs.value
-                                                } else 0L,
-                                            isPaused =
-                                                playingFileName.value == note.audioFile.name &&
-                                                    playbackPaused.value,
-                                            onPlay = { onPlayNote(note) },
-                                            onStop = onStopNote,
-                                            onSeek = onSeekNote,
-                                            onStopTranscription = { onStopTranscription(note) },
-                                            onRetryTranscription = { onRetryTranscription(note) }
-                                        )
+                                            key = { it.audioFile.absolutePath }
+                                        ) { note -> noteCard(note) }
                                     }
                                 }
                             }
@@ -1057,6 +1093,12 @@ private fun DetectorScreen(
         }
     }
 }
+
+private fun supportsTitleGrouping(source: String): Boolean =
+    source.equals("Audible", ignoreCase = true) ||
+        source.equals("YouTube", ignoreCase = true) ||
+        source.equals("YouTube Music", ignoreCase = true) ||
+        source.equals("Google Play Books", ignoreCase = true)
 
 @Composable
 private fun SavedNoteCard(
