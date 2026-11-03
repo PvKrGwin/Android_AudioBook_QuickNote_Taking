@@ -6,7 +6,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioAttributes
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTrack
 import android.media.ToneGenerator
 import android.os.Build
 import android.os.Handler
@@ -19,6 +22,8 @@ import android.view.accessibility.AccessibilityEvent
 import com.praveen.ridernotes.call.CallControlGateway
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.recording.RecordingController
+import kotlin.math.PI
+import kotlin.math.sin
 
 /**
  * Observes hardware keys globally and classifies Beauty-R1's usable camera
@@ -35,6 +40,7 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private var screenOffObserved = false
     private var lastScreenWakeAt = 0L
     private var warningPressCount = 0
+    private var screenTransitionTrack: AudioTrack? = null
 
     private val warningSinglePress = Runnable {
         val shouldStop = warningPressCount == 1 &&
@@ -305,35 +311,62 @@ class BleButtonAccessibilityService : AccessibilityService() {
 
     private fun playScreenReadyTone() {
         playScreenTransitionTone(
-            tones = intArrayOf(
-                ToneGenerator.TONE_DTMF_1,
-                ToneGenerator.TONE_DTMF_5,
-                ToneGenerator.TONE_DTMF_9
+            frequencies = doubleArrayOf(
+                SA_HZ,
+                SA_HZ,
+                PA_HZ,
+                PA_HZ,
+                UPPER_SA_HZ,
+                UPPER_SA_HZ
             ),
-            volume = SCREEN_READY_VOLUME,
             failureLabel = "SCREEN_ON_ASCENDING_TONE"
         )
     }
 
     private fun playScreenOffTone() {
         playScreenTransitionTone(
-            tones = intArrayOf(
-                ToneGenerator.TONE_DTMF_9,
-                ToneGenerator.TONE_DTMF_5,
-                ToneGenerator.TONE_DTMF_1
+            frequencies = doubleArrayOf(
+                UPPER_SA_HZ,
+                UPPER_SA_HZ,
+                PA_HZ,
+                PA_HZ,
+                SA_HZ,
+                SA_HZ
             ),
-            volume = SCREEN_OFF_VOLUME,
             failureLabel = "SCREEN_OFF_DESCENDING_TONE"
         )
     }
 
     private fun playScreenTransitionTone(
-        tones: IntArray,
-        volume: Int,
+        frequencies: DoubleArray,
         failureLabel: String
     ) {
-        val generator = runCatching {
-            ToneGenerator(AudioManager.STREAM_MUSIC, volume)
+        val track = runCatching {
+            val samples = createMusicalCue(frequencies)
+            AudioTrack.Builder()
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setLegacyStreamType(AudioManager.STREAM_MUSIC)
+                        .build()
+                )
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(SCREEN_TONE_SAMPLE_RATE)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(samples.size * Short.SIZE_BYTES)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
+                .also { audioTrack ->
+                    check(audioTrack.state == AudioTrack.STATE_INITIALIZED) {
+                        "AudioTrack initialization failed"
+                    }
+                    check(audioTrack.write(samples, 0, samples.size) == samples.size) {
+                        "Musical cue was not fully written"
+                    }
+                }
         }.getOrElse { error ->
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
@@ -344,23 +377,79 @@ class BleButtonAccessibilityService : AccessibilityService() {
             return
         }
 
-        tones.forEachIndexed { index, toneType ->
-            handler.postDelayed({
-                runCatching {
-                    generator.startTone(toneType, SCREEN_TRANSITION_NOTE_MS)
-                }.onFailure { error ->
-                    ButtonEventStore.record(
-                        ButtonEvent.recordingResult(
-                            "$failureLabel failed: ${error.javaClass.simpleName}",
-                            false
-                        )
-                    )
-                }
-            }, index * SCREEN_TRANSITION_STEP_MS)
+        screenTransitionTrack?.let(::releaseScreenTransitionTrack)
+        screenTransitionTrack = track
+        runCatching { track.play() }.onFailure { error ->
+            releaseScreenTransitionTrack(track)
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "$failureLabel failed: ${error.javaClass.simpleName}",
+                    false
+                )
+            )
+            return
         }
-        val releaseAfter =
-            (tones.lastIndex * SCREEN_TRANSITION_STEP_MS) + SCREEN_TRANSITION_NOTE_MS + 80L
-        handler.postDelayed({ generator.release() }, releaseAfter)
+        handler.postDelayed(
+            { releaseScreenTransitionTrack(track) },
+            musicalCueDurationMs(frequencies.size) + SCREEN_TONE_RELEASE_MARGIN_MS
+        )
+    }
+
+    private fun createMusicalCue(frequencies: DoubleArray): ShortArray {
+        val noteSamples = millisecondsToSamples(SCREEN_TRANSITION_NOTE_MS)
+        val shortGapSamples = millisecondsToSamples(SCREEN_TRANSITION_REPEAT_GAP_MS)
+        val phraseGapSamples = millisecondsToSamples(SCREEN_TRANSITION_PHRASE_GAP_MS)
+        val gapSamples = frequencies.indices.dropLast(1).sumOf { index ->
+            if (index % 2 == 1) phraseGapSamples else shortGapSamples
+        }
+        val output = ShortArray((noteSamples * frequencies.size) + gapSamples)
+        val fadeSamples = millisecondsToSamples(SCREEN_TRANSITION_FADE_MS).coerceAtLeast(1)
+        var outputIndex = 0
+
+        frequencies.forEachIndexed { noteIndex, frequency ->
+            repeat(noteSamples) { sampleIndex ->
+                val fadeIn = sampleIndex.toDouble() / fadeSamples
+                val fadeOut = (noteSamples - 1 - sampleIndex).toDouble() / fadeSamples
+                val envelope = minOf(1.0, fadeIn, fadeOut).coerceAtLeast(0.0)
+                val timeSeconds = sampleIndex.toDouble() / SCREEN_TONE_SAMPLE_RATE
+                // A quiet second harmonic makes the cue warmer than a plain beep.
+                val wave =
+                    (0.84 * sin(2.0 * PI * frequency * timeSeconds)) +
+                        (0.16 * sin(4.0 * PI * frequency * timeSeconds))
+                output[outputIndex++] =
+                    (wave * envelope * SCREEN_TONE_AMPLITUDE * Short.MAX_VALUE)
+                        .toInt()
+                        .toShort()
+            }
+
+            if (noteIndex < frequencies.lastIndex) {
+                val gap = if (noteIndex % 2 == 1) phraseGapSamples else shortGapSamples
+                outputIndex += gap
+            }
+        }
+        return output
+    }
+
+    private fun musicalCueDurationMs(noteCount: Int): Long {
+        val gaps = (0 until (noteCount - 1)).sumOf { index ->
+            if (index % 2 == 1) {
+                SCREEN_TRANSITION_PHRASE_GAP_MS
+            } else {
+                SCREEN_TRANSITION_REPEAT_GAP_MS
+            }
+        }
+        return ((noteCount * SCREEN_TRANSITION_NOTE_MS) + gaps).toLong()
+    }
+
+    private fun millisecondsToSamples(milliseconds: Int): Int =
+        (SCREEN_TONE_SAMPLE_RATE * milliseconds) / 1_000
+
+    private fun releaseScreenTransitionTrack(track: AudioTrack) {
+        if (screenTransitionTrack === track) screenTransitionTrack = null
+        runCatching {
+            if (track.playState == AudioTrack.PLAYSTATE_PLAYING) track.stop()
+        }
+        runCatching { track.release() }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -383,15 +472,22 @@ class BleButtonAccessibilityService : AccessibilityService() {
             unregisterReceiver(screenOnReceiver)
             screenReceiverRegistered = false
         }
+        screenTransitionTrack?.let(::releaseScreenTransitionTrack)
         super.onDestroy()
     }
 
     companion object {
         private const val ACK_BEEP_INTERVAL_MS = 150L
         private const val WARNING_DOUBLE_PRESS_MS = 800L
-        private const val SCREEN_READY_VOLUME = 85
-        private const val SCREEN_OFF_VOLUME = 90
-        private const val SCREEN_TRANSITION_NOTE_MS = 150
-        private const val SCREEN_TRANSITION_STEP_MS = 205L
+        private const val SA_HZ = 329.63
+        private const val PA_HZ = 493.88
+        private const val UPPER_SA_HZ = 659.25
+        private const val SCREEN_TONE_SAMPLE_RATE = 44_100
+        private const val SCREEN_TONE_AMPLITUDE = 0.48
+        private const val SCREEN_TRANSITION_NOTE_MS = 135
+        private const val SCREEN_TRANSITION_REPEAT_GAP_MS = 45
+        private const val SCREEN_TRANSITION_PHRASE_GAP_MS = 85
+        private const val SCREEN_TRANSITION_FADE_MS = 12
+        private const val SCREEN_TONE_RELEASE_MARGIN_MS = 120L
     }
 }
