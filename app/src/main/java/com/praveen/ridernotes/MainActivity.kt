@@ -622,22 +622,21 @@ class MainActivity : ComponentActivity() {
             backupStatus.value = "The shared text did not contain a supported YouTube link."
             return
         }
-        if (identity == null || identity.packageName != sharedSource.packageName) {
-            backupStatus.value =
-                "Play the YouTube item first, then share it to Rider Notes again."
-            return
-        }
 
-        SharedMediaLinkStore.save(
+        val currentlyPlayingIdentity = identity?.takeIf {
+            it.packageName == sharedSource.packageName && it.isPlaying
+        }
+        SharedMediaLinkStore.stage(
             context = this,
-            packageName = identity.packageName,
-            title = identity.title,
-            author = identity.author,
-            sourceUrl = sharedSource.sourceUrl
+            packageName = sharedSource.packageName,
+            sourceUrl = sharedSource.sourceUrl,
+            currentlyPlayingTitle = currentlyPlayingIdentity?.title,
+            currentlyPlayingAuthor = currentlyPlayingIdentity?.author
         )
         backupStatus.value =
-            "Link saved for ${identity.appName}: ${identity.title}. " +
-                "Autoplay videos with another title will not reuse it."
+            "Link queued for ${if (sharedSource.packageName == YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE) "YouTube Music" else "YouTube"}. " +
+                "It will attach when that item plays, survive other media apps, " +
+                "and clear when this YouTube service changes to another title."
     }
 
     private fun enableScrib() {
@@ -861,7 +860,7 @@ private fun DetectorScreen(
                                     Text("4. Triple press: rewind 10 seconds; four presses: forward 10 seconds.")
                                     Text("5. During the final recording warning, single stops and double extends by 40 seconds.")
                                     Text("6. Notes and offline Scrib transcripts appear under the Notes tab.")
-                                    Text("7. For an exact YouTube link, play the item and use Share → Rider Notes once.")
+                                    Text("7. For an exact YouTube link, share the item to Rider Notes before playing it. The temporary link survives other media and clears when YouTube changes videos; links already saved in notes remain permanent.")
                                 }
                             }
                         }

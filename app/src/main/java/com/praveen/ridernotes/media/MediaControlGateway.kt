@@ -46,7 +46,8 @@ object MediaControlGateway {
         val packageName: String,
         val appName: String,
         val title: String,
-        val author: String?
+        val author: String?,
+        val isPlaying: Boolean
     )
 
     data class VoiceNoteMediaContext(
@@ -106,6 +107,12 @@ object MediaControlGateway {
         val metadataSourceUrl = YouTubeSourceLink.fromMetadata(
             controller.packageName,
             metadataEntries
+        )
+        observeTemporarySharedLink(
+            context = context,
+            controller = controller,
+            title = mediaTitle,
+            author = mediaAuthor
         )
         val sharedSourceUrl = if (metadataSourceUrl == null) {
             SharedMediaLinkStore.find(
@@ -190,7 +197,8 @@ object MediaControlGateway {
             packageName = controller.packageName,
             appName = appLabel(context, controller.packageName),
             title = title?.takeIf { it.isNotBlank() } ?: return null,
-            author = author
+            author = author,
+            isPlaying = isPlayingState(controller.playbackState)
         )
     }
 
@@ -227,11 +235,53 @@ object MediaControlGateway {
                 .filter { isMediaApp(context, it.packageName) }
                 .forEach { controller ->
                     val state = controller.playbackState
-                    if (state?.state == PlaybackState.STATE_PLAYING) {
+                    if (isPlayingState(state)) {
                         observedPlayingPackages.add(controller.packageName)
                         lastKnownPlayingAt[controller.packageName] = SystemClock.elapsedRealtime()
                     }
+                    if (controller.packageName == YouTubeSourceLink.YOUTUBE_PACKAGE ||
+                        controller.packageName == YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE
+                    ) {
+                        val (title, _, author) = mediaFields(
+                            controller.packageName,
+                            controller.metadata,
+                            notificationTextByPackage[controller.packageName].orEmpty()
+                        )
+                        observeTemporarySharedLink(context, controller, title, author)
+                    }
                 }
+        }
+    }
+
+    private fun observeTemporarySharedLink(
+        context: Context,
+        controller: MediaController,
+        title: String?,
+        author: String?
+    ) {
+        val observation = SharedMediaLinkStore.observe(
+            context = context,
+            packageName = controller.packageName,
+            title = title,
+            author = author,
+            isPlaying = isPlayingState(controller.playbackState)
+        )
+        when (observation) {
+            SharedMediaLinkStore.Observation.BOUND -> ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Shared link attached temporarily to current " +
+                        "${appLabel(context, controller.packageName)} item",
+                    true
+                )
+            )
+            SharedMediaLinkStore.Observation.CLEARED -> ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Cleared temporary ${appLabel(context, controller.packageName)} link " +
+                        "after the title changed; saved recording links were preserved",
+                    true
+                )
+            )
+            else -> Unit
         }
     }
 
@@ -522,6 +572,14 @@ object MediaControlGateway {
             PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING -> 3
             PlaybackState.STATE_PAUSED -> 2
             else -> 1
+        }
+
+    private fun isPlayingState(state: PlaybackState?): Boolean =
+        when (state?.state) {
+            PlaybackState.STATE_PLAYING,
+            PlaybackState.STATE_BUFFERING,
+            PlaybackState.STATE_CONNECTING -> true
+            else -> false
         }
 
     private fun estimatedPosition(state: PlaybackState): Long {
