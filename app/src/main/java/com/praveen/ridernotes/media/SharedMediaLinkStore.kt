@@ -64,7 +64,7 @@ object SharedMediaLinkStore {
      * actually playing; an already-bound link clears as soon as the identity
      * changes, even if the replacement item is still paused or buffering.
      */
-    fun observe(
+    internal fun observe(
         context: Context,
         packageName: String,
         title: String?,
