@@ -78,12 +78,45 @@ object SharedMediaLinkStore {
             identityKey(packageName, usableTitle, author),
             isPlaying
         )
+        applyTransition(context, packageName, previous, transition)
+        return transition.observation
+    }
+
+    /**
+     * A recording request is definitive evidence that the current item is the
+     * one the user wants to annotate. Bind a still-pending shared link here so
+     * it is copied into the recording metadata before the temporary cache can
+     * be cleared by a later autoplay item.
+     */
+    internal fun bindForRecording(
+        context: Context,
+        packageName: String,
+        title: String?,
+        author: String?
+    ): Observation? {
+        val usableTitle = title?.takeIf { it.isNotBlank() } ?: return null
+        val previous = read(context, packageName) ?: return null
+        val transition = transition(
+            state = previous,
+            currentIdentity = identityKey(packageName, usableTitle, author),
+            isPlaying = true,
+            allowBlockedBinding = true
+        )
+        applyTransition(context, packageName, previous, transition)
+        return transition.observation
+    }
+
+    private fun applyTransition(
+        context: Context,
+        packageName: String,
+        previous: CacheState,
+        transition: Transition
+    ) {
         if (transition.state == null) {
             clear(context, packageName)
         } else if (transition.state != previous) {
             write(context, packageName, transition.state)
         }
-        return transition.observation
     }
 
     /** Return the link only for the item to which the temporary cache bound. */
@@ -113,7 +146,8 @@ object SharedMediaLinkStore {
     internal fun transition(
         state: CacheState,
         currentIdentity: String,
-        isPlaying: Boolean
+        isPlaying: Boolean,
+        allowBlockedBinding: Boolean = false
     ): Transition {
         val activeIdentity = state.activeIdentity
         if (activeIdentity != null) {
@@ -131,7 +165,9 @@ object SharedMediaLinkStore {
 
         val blockedIdentity = state.blockedIdentity
         if (!isPlaying ||
-            (blockedIdentity != null && sameIdentity(blockedIdentity, currentIdentity))
+            (!allowBlockedBinding &&
+                blockedIdentity != null &&
+                sameIdentity(blockedIdentity, currentIdentity))
         ) {
             return Transition(state, Observation.PENDING)
         }

@@ -112,7 +112,8 @@ object MediaControlGateway {
             context = context,
             controller = controller,
             title = mediaTitle,
-            author = mediaAuthor
+            author = mediaAuthor,
+            recordingRequested = metadataSourceUrl == null
         )
         val sharedSourceUrl = if (metadataSourceUrl == null) {
             SharedMediaLinkStore.find(
@@ -257,15 +258,25 @@ object MediaControlGateway {
         context: Context,
         controller: MediaController,
         title: String?,
-        author: String?
+        author: String?,
+        recordingRequested: Boolean = false
     ) {
-        val observation = SharedMediaLinkStore.observe(
-            context = context,
-            packageName = controller.packageName,
-            title = title,
-            author = author,
-            isPlaying = isPlayingState(controller.playbackState)
-        )
+        val observation = if (recordingRequested) {
+            SharedMediaLinkStore.bindForRecording(
+                context = context,
+                packageName = controller.packageName,
+                title = title,
+                author = author
+            )
+        } else {
+            SharedMediaLinkStore.observe(
+                context = context,
+                packageName = controller.packageName,
+                title = title,
+                author = author,
+                isPlaying = isPlayingState(controller.playbackState)
+            )
+        }
         when (observation) {
             SharedMediaLinkStore.Observation.BOUND -> ButtonEventStore.record(
                 ButtonEvent.mediaResult(

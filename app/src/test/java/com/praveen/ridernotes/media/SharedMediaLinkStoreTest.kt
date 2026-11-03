@@ -117,6 +117,30 @@ class SharedMediaLinkStoreTest {
     }
 
     @Test
+    fun recordingRequest_bindsQueuedLinkEvenWhenPlaybackObservationWasBlocked() {
+        val currentIdentity = SharedMediaLinkStore.identityKey(
+            YouTubeSourceLink.YOUTUBE_PACKAGE,
+            "Shared video now being recorded",
+            "Channel"
+        )
+        val pending = SharedMediaLinkStore.CacheState(
+            sourceUrl = "https://www.youtube.com/watch?v=video123",
+            blockedIdentity = currentIdentity,
+            activeIdentity = null
+        )
+
+        val transition = SharedMediaLinkStore.transition(
+            state = pending,
+            currentIdentity = currentIdentity,
+            isPlaying = true,
+            allowBlockedBinding = true
+        )
+
+        assertEquals(SharedMediaLinkStore.Observation.BOUND, transition.observation)
+        assertEquals(currentIdentity, transition.state?.activeIdentity)
+    }
+
+    @Test
     fun autoplayChange_clearsOnlyTemporaryCache() {
         val firstIdentity = SharedMediaLinkStore.identityKey(
             YouTubeSourceLink.YOUTUBE_PACKAGE,
