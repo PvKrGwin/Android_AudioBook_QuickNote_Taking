@@ -742,6 +742,7 @@ private fun DetectorScreen(
     val expandedTitles = remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectedNotePaths = remember { mutableStateOf<Set<String>>(emptySet()) }
     val showDeleteConfirmation = remember { mutableStateOf(false) }
+    val showLinkGuide = remember { mutableStateOf(false) }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
     }
@@ -799,6 +800,28 @@ private fun DetectorScreen(
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirmation.value = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    if (showLinkGuide.value) {
+        AlertDialog(
+            onDismissRequest = { showLinkGuide.value = false },
+            title = { Text("📝 YouTube link guide") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("• Share a YouTube or YT Music item to Rider Notes before playing it. Rider Notes temporarily keeps that exact link.")
+                    Text("• Sharing another item from the same service replaces its previous temporary link.")
+                    Text("• Playing another item in that same service without sharing clears its temporary link.")
+                    Text("• YouTube and YT Music have separate temporary slots, so both links can be kept at the same time.")
+                    Text("• Audible, Play Books and other media do not clear either temporary link.")
+                    Text("• Once a link is saved with a recording, it is permanent for that note. Later temporary-link changes cannot alter it.")
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLinkGuide.value = false }) {
+                    Text("Got it")
                 }
             }
         )
@@ -894,7 +917,10 @@ private fun DetectorScreen(
                                     Text("4. Triple press: rewind 10 seconds; four presses: forward 10 seconds.")
                                     Text("5. During the final recording warning, single stops and double extends by 40 seconds.")
                                     Text("6. Notes and offline Scrib transcripts appear under the Notes tab.")
-                                    Text("7. For an exact YouTube link, share the item to Rider Notes before playing it. The temporary link survives other media and clears when YouTube changes videos; links already saved in notes remain permanent.")
+                                    Text("7. For an exact YouTube or YT Music link, share the item to Rider Notes before playing it. Links already saved in notes remain permanent.")
+                                    TextButton(onClick = { showLinkGuide.value = true }) {
+                                        Text("📝 Link guide: cleared vs replaced")
+                                    }
                                 }
                             }
                         }
