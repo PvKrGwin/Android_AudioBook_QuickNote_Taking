@@ -631,12 +631,20 @@ class MainActivity : ComponentActivity() {
         val currentlyPlayingIdentity = identity?.takeIf {
             it.packageName == sharedSource.packageName && it.isPlaying
         }
+        val sharedTitle = sharedIntent.getCharSequenceExtra(Intent.EXTRA_SUBJECT)
+            ?.toString()
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: identity
+                ?.takeIf { it.packageName == sharedSource.packageName }
+                ?.title
         SharedMediaLinkStore.stage(
             context = this,
             packageName = sharedSource.packageName,
             sourceUrl = sharedSource.sourceUrl,
             currentlyPlayingTitle = currentlyPlayingIdentity?.title,
-            currentlyPlayingAuthor = currentlyPlayingIdentity?.author
+            currentlyPlayingAuthor = currentlyPlayingIdentity?.author,
+            sharedTitle = sharedTitle
         )
         refreshSharedLinkStatus()
     }
@@ -652,7 +660,8 @@ class MainActivity : ComponentActivity() {
                     "YouTube"
                 }
                 val state = if (link.isBoundToCurrentItem) "Current" else "Queued"
-                "$state $source link: ${link.sourceUrl}"
+                val title = link.title ?: "Waiting for playback title"
+                "$state $source link\nTitle: $title\nLink: ${link.sourceUrl}"
             }
     }
 

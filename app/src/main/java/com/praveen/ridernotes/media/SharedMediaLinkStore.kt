@@ -17,18 +17,21 @@ object SharedMediaLinkStore {
     private const val FIELD_URL = "url"
     private const val FIELD_BLOCKED_IDENTITY = "blocked_identity"
     private const val FIELD_ACTIVE_IDENTITY = "active_identity"
+    private const val FIELD_DISPLAY_TITLE = "display_title"
     private const val IDENTITY_SEPARATOR = "\u001F"
 
     internal data class CacheState(
         val sourceUrl: String,
         val blockedIdentity: String?,
-        val activeIdentity: String?
+        val activeIdentity: String?,
+        val displayTitle: String? = null
     )
 
     data class CachedLink(
         val packageName: String,
         val sourceUrl: String,
-        val isBoundToCurrentItem: Boolean
+        val isBoundToCurrentItem: Boolean,
+        val title: String?
     )
 
     internal enum class Observation {
@@ -49,7 +52,8 @@ object SharedMediaLinkStore {
         packageName: String,
         sourceUrl: String,
         currentlyPlayingTitle: String? = null,
-        currentlyPlayingAuthor: String? = null
+        currentlyPlayingAuthor: String? = null,
+        sharedTitle: String? = null
     ) {
         val blockedIdentity = currentlyPlayingTitle
             ?.takeIf { it.isNotBlank() }
@@ -60,7 +64,8 @@ object SharedMediaLinkStore {
             CacheState(
                 sourceUrl = sourceUrl,
                 blockedIdentity = blockedIdentity,
-                activeIdentity = null
+                activeIdentity = null,
+                displayTitle = sharedTitle?.trim()?.takeIf { it.isNotBlank() }
             )
         )
     }
@@ -83,7 +88,7 @@ object SharedMediaLinkStore {
             previous,
             identityKey(packageName, usableTitle, author),
             isPlaying
-        )
+        ).withDisplayTitle(usableTitle)
         applyTransition(context, packageName, previous, transition)
         return transition.observation
     }
@@ -107,7 +112,7 @@ object SharedMediaLinkStore {
             currentIdentity = identityKey(packageName, usableTitle, author),
             isPlaying = true,
             allowBlockedBinding = true
-        )
+        ).withDisplayTitle(usableTitle)
         applyTransition(context, packageName, previous, transition)
         return transition.observation
     }
@@ -150,7 +155,8 @@ object SharedMediaLinkStore {
                 CachedLink(
                     packageName = packageName,
                     sourceUrl = state.sourceUrl,
-                    isBoundToCurrentItem = state.activeIdentity != null
+                    isBoundToCurrentItem = state.activeIdentity != null,
+                    title = state.displayTitle
                 )
             }
         }
@@ -161,6 +167,7 @@ object SharedMediaLinkStore {
             .remove(key(packageName, FIELD_URL))
             .remove(key(packageName, FIELD_BLOCKED_IDENTITY))
             .remove(key(packageName, FIELD_ACTIVE_IDENTITY))
+            .remove(key(packageName, FIELD_DISPLAY_TITLE))
             .apply()
     }
 
@@ -235,7 +242,8 @@ object SharedMediaLinkStore {
                 key(packageName, FIELD_BLOCKED_IDENTITY),
                 null
             ),
-            activeIdentity = preferences.getString(key(packageName, FIELD_ACTIVE_IDENTITY), null)
+            activeIdentity = preferences.getString(key(packageName, FIELD_ACTIVE_IDENTITY), null),
+            displayTitle = preferences.getString(key(packageName, FIELD_DISPLAY_TITLE), null)
         )
     }
 
@@ -253,8 +261,20 @@ object SharedMediaLinkStore {
         } else {
             editor.putString(key(packageName, FIELD_ACTIVE_IDENTITY), state.activeIdentity)
         }
+        if (state.displayTitle == null) {
+            editor.remove(key(packageName, FIELD_DISPLAY_TITLE))
+        } else {
+            editor.putString(key(packageName, FIELD_DISPLAY_TITLE), state.displayTitle)
+        }
         editor.apply()
     }
+
+    private fun Transition.withDisplayTitle(title: String): Transition =
+        if (state == null || observation == Observation.PENDING) {
+            this
+        } else {
+            copy(state = state.copy(displayTitle = title))
+        }
 
     private fun key(packageName: String, field: String): String = "$packageName.$field"
 
