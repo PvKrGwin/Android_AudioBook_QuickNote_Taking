@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
     private val transcriptionLanguage =
         mutableStateOf(ScribTranscriber.LANGUAGE_ENGLISH)
     private val backupStatus = mutableStateOf("")
+    private val sharedLinkStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
     private var remoteTraining = false
@@ -167,6 +168,7 @@ class MainActivity : ComponentActivity() {
                     onSeekNote = ::seekNotePlayback,
                     onDeleteNotes = ::deleteNotes,
                     backupStatus = backupStatus,
+                    sharedLinkStatus = sharedLinkStatus,
                     onExportNotes = ::requestExport,
                     onImportBackup = ::requestImport,
                     onClear = ButtonEventStore::clear,
@@ -200,6 +202,8 @@ class MainActivity : ComponentActivity() {
         microphoneEnabled.value = hasMicrophonePermission()
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
+        MediaControlGateway.observeActivePlayback(this)
+        refreshSharedLinkStatus()
         refreshGestureActions()
         refreshSavedNotes()
         savedNotes.value
@@ -609,7 +613,7 @@ class MainActivity : ComponentActivity() {
             ?.trim()
             ?.takeIf { it.isNotBlank() }
         if (sharedText == null) {
-            backupStatus.value = "No YouTube link was included in the shared item."
+            sharedLinkStatus.value = "No YouTube link was included in the shared item."
             return
         }
 
@@ -619,7 +623,8 @@ class MainActivity : ComponentActivity() {
             identity?.packageName
         )
         if (sharedSource == null) {
-            backupStatus.value = "The shared text did not contain a supported YouTube link."
+            sharedLinkStatus.value =
+                "The shared text did not contain a supported YouTube link."
             return
         }
 
@@ -633,10 +638,22 @@ class MainActivity : ComponentActivity() {
             currentlyPlayingTitle = currentlyPlayingIdentity?.title,
             currentlyPlayingAuthor = currentlyPlayingIdentity?.author
         )
-        backupStatus.value =
-            "Link queued for ${if (sharedSource.packageName == YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE) "YouTube Music" else "YouTube"}. " +
-                "It will attach when that item plays, survive other media apps, " +
-                "and clear when this YouTube service changes to another title."
+        refreshSharedLinkStatus()
+    }
+
+    private fun refreshSharedLinkStatus() {
+        sharedLinkStatus.value = SharedMediaLinkStore.currentLinks(this)
+            .joinToString("\n\n") { link ->
+                val source = if (
+                    link.packageName == YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE
+                ) {
+                    "YouTube Music"
+                } else {
+                    "YouTube"
+                }
+                val state = if (link.isBoundToCurrentItem) "Current" else "Queued"
+                "$state $source link: ${link.sourceUrl}"
+            }
     }
 
     private fun enableScrib() {
@@ -702,6 +719,7 @@ private fun DetectorScreen(
     onSeekNote: (Long) -> Unit,
     onDeleteNotes: (List<SavedVoiceNote>) -> Unit,
     backupStatus: State<String>,
+    sharedLinkStatus: State<String>,
     onExportNotes: (List<SavedVoiceNote>) -> Unit,
     onImportBackup: () -> Unit,
     onClear: () -> Unit,
@@ -830,6 +848,22 @@ private fun DetectorScreen(
                 }
             }
             Spacer(Modifier.height(12.dp))
+
+            if (sharedLinkStatus.value.isNotBlank()) {
+                Card(
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Text(
+                        text = sharedLinkStatus.value,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+            }
 
             when (selectedTab.value) {
                 0 -> {

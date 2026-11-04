@@ -25,6 +25,12 @@ object SharedMediaLinkStore {
         val activeIdentity: String?
     )
 
+    data class CachedLink(
+        val packageName: String,
+        val sourceUrl: String,
+        val isBoundToCurrentItem: Boolean
+    )
+
     internal enum class Observation {
         PENDING,
         BOUND,
@@ -133,6 +139,21 @@ object SharedMediaLinkStore {
             state.activeIdentity?.let { active -> sameIdentity(active, currentIdentity) } == true
         }
     }
+
+    /** Snapshot used only for displaying the real temporary-cache status. */
+    fun currentLinks(context: Context): List<CachedLink> =
+        listOf(
+            YouTubeSourceLink.YOUTUBE_PACKAGE,
+            YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE
+        ).mapNotNull { packageName ->
+            read(context, packageName)?.let { state ->
+                CachedLink(
+                    packageName = packageName,
+                    sourceUrl = state.sourceUrl,
+                    isBoundToCurrentItem = state.activeIdentity != null
+                )
+            }
+        }
 
     fun clear(context: Context, packageName: String) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
