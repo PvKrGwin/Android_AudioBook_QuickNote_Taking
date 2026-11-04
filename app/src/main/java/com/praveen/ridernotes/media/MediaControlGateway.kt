@@ -15,6 +15,7 @@ import android.view.KeyEvent
 import android.service.notification.StatusBarNotification
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
+import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
@@ -125,7 +126,22 @@ object MediaControlGateway {
         } else {
             null
         }
-        val sourceUrl = metadataSourceUrl ?: sharedSourceUrl
+        val sourceApp = appLabel(context, controller.packageName)
+        val reusableSourceUrl = if (
+            metadataSourceUrl == null &&
+            sharedSourceUrl == null &&
+            YouTubeSourceLink.isSupportedSourceApp(sourceApp)
+        ) {
+            SavedVoiceNoteRepository.findReusableSourceUrl(
+                context = context,
+                sourceApp = sourceApp,
+                title = mediaTitle,
+                author = mediaAuthor
+            )
+        } else {
+            null
+        }
+        val sourceUrl = metadataSourceUrl ?: sharedSourceUrl ?: reusableSourceUrl
         if (sharedSourceUrl != null) {
             ButtonEventStore.record(
                 ButtonEvent.mediaResult(
@@ -133,6 +149,23 @@ object MediaControlGateway {
                         "title and channel",
                     true
                 )
+            )
+        }
+        if (reusableSourceUrl != null) {
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Reused the saved link for the same $sourceApp title and channel",
+                    true
+                )
+            )
+        }
+        if (sourceUrl != null && YouTubeSourceLink.isSupportedSourceApp(sourceApp)) {
+            SavedVoiceNoteRepository.applySourceUrlToMatchingNotes(
+                context = context,
+                sourceApp = sourceApp,
+                title = mediaTitle,
+                author = mediaAuthor,
+                sourceUrl = sourceUrl
             )
         }
         if (
@@ -153,7 +186,7 @@ object MediaControlGateway {
         }
         val noteContext = VoiceNoteMediaContext(
             packageName = controller.packageName,
-            appName = appLabel(context, controller.packageName),
+            appName = sourceApp,
             title = mediaTitle,
             subtitle = mediaChapter,
             author = mediaAuthor,
@@ -278,13 +311,29 @@ object MediaControlGateway {
             )
         }
         when (observation) {
-            SharedMediaLinkStore.Observation.BOUND -> ButtonEventStore.record(
-                ButtonEvent.mediaResult(
-                    "Shared link attached temporarily to current " +
-                        "${appLabel(context, controller.packageName)} item",
-                    true
+            SharedMediaLinkStore.Observation.BOUND -> {
+                val sourceApp = appLabel(context, controller.packageName)
+                SharedMediaLinkStore.find(
+                    context = context,
+                    packageName = controller.packageName,
+                    title = title,
+                    author = author
+                )?.let { sourceUrl ->
+                    SavedVoiceNoteRepository.applySourceUrlToMatchingNotes(
+                        context = context,
+                        sourceApp = sourceApp,
+                        title = title,
+                        author = author,
+                        sourceUrl = sourceUrl
+                    )
+                }
+                ButtonEventStore.record(
+                    ButtonEvent.mediaResult(
+                        "Shared link attached temporarily to current $sourceApp item",
+                        true
+                    )
                 )
-            )
+            }
             SharedMediaLinkStore.Observation.CLEARED -> ButtonEventStore.record(
                 ButtonEvent.mediaResult(
                     "Cleared temporary ${appLabel(context, controller.packageName)} link " +

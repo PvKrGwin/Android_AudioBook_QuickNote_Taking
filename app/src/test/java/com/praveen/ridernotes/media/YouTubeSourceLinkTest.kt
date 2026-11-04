@@ -84,4 +84,26 @@ class YouTubeSourceLinkTest {
             )
         )
     }
+
+    @Test
+    fun manualYoutubeLink_removesOldTimestampAndPlaylist() {
+        assertEquals(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            YouTubeSourceLink.canonicalUrl(
+                "YouTube",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=83s&list=example"
+            )
+        )
+    }
+
+    @Test
+    fun manualYoutubeMusicLink_usesMusicHost() {
+        assertEquals(
+            "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+            YouTubeSourceLink.canonicalUrl(
+                "YouTube Music",
+                "https://youtu.be/dQw4w9WgXcQ?t=12"
+            )
+        )
+    }
 }

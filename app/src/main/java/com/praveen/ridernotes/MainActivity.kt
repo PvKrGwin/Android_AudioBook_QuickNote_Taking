@@ -43,6 +43,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
@@ -183,7 +184,8 @@ class MainActivity : ComponentActivity() {
                     onRetryTranscription = ::retryTranscription,
                     onCopyTitle = ::copyNoteTitle,
                     onOpenSource = ::openSourceAtTimestamp,
-                    onSearchSource = ::searchSourceTitle
+                    onSearchSource = ::searchSourceTitle,
+                    onSetManualSourceLink = ::setManualSourceLink
                 )
             }
         }
@@ -361,6 +363,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshSavedNotes() {
+        SavedVoiceNoteRepository.synchronizeYouTubeLinks(this)
         savedNotes.value = SavedVoiceNoteRepository.load(this)
     }
 
@@ -558,7 +561,7 @@ class MainActivity : ComponentActivity() {
         appendLine("RIDER NOTES RECORDING")
         appendLine("Source: ${note.sourceApp}")
         appendLine("Title: ${note.title}")
-        note.author?.let { appendLine("Author: $it") }
+        note.author?.let { appendLine("${creatorLabel(note.sourceApp)}: $it") }
         note.chapter?.let { appendLine("Chapter / episode: $it") }
         note.playbackPositionLabel?.let { appendLine("Media position: $it") }
         note.sourceUrlAtPlaybackPosition?.let { appendLine("Open source at this time: $it") }
@@ -604,6 +607,38 @@ class MainActivity : ComponentActivity() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("Rider Notes title", note.title))
         backupStatus.value = "Title copied: ${note.title}"
+    }
+
+    private fun setManualSourceLink(note: SavedVoiceNote, enteredUrl: String): Boolean {
+        val canonicalUrl = YouTubeSourceLink.canonicalUrl(note.sourceApp, enteredUrl)
+        if (canonicalUrl == null) {
+            backupStatus.value = "Please enter a valid ${note.sourceApp} video link."
+            return false
+        }
+        val updated = SavedVoiceNoteRepository.applySourceUrlToMatchingNotes(
+            context = this,
+            sourceApp = note.sourceApp,
+            title = note.title,
+            author = note.author,
+            sourceUrl = canonicalUrl
+        )
+        val savedUrl = SavedVoiceNoteRepository.findReusableSourceUrl(
+            context = this,
+            sourceApp = note.sourceApp,
+            title = note.title,
+            author = note.author
+        )
+        if (savedUrl != canonicalUrl) {
+            backupStatus.value = "The link could not be saved to this title group."
+            return false
+        }
+        refreshSavedNotes()
+        backupStatus.value = if (updated > 0) {
+            "Link saved to $updated ${note.sourceApp} recording(s) with the same title and channel."
+        } else {
+            "This link is already saved for the title and channel."
+        }
+        return true
     }
 
     private fun handleSharedMediaIntent(sharedIntent: Intent?) {
@@ -743,7 +778,8 @@ private fun DetectorScreen(
     onRetryTranscription: (SavedVoiceNote) -> Unit,
     onCopyTitle: (SavedVoiceNote) -> Unit,
     onOpenSource: (SavedVoiceNote) -> Unit,
-    onSearchSource: (SavedVoiceNote) -> Unit
+    onSearchSource: (SavedVoiceNote) -> Unit,
+    onSetManualSourceLink: (SavedVoiceNote, String) -> Boolean
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -752,6 +788,9 @@ private fun DetectorScreen(
     val selectedNotePaths = remember { mutableStateOf<Set<String>>(emptySet()) }
     val showDeleteConfirmation = remember { mutableStateOf(false) }
     val showLinkGuide = remember { mutableStateOf(false) }
+    val showSharedLinkDetails = remember { mutableStateOf(false) }
+    val manualLinkTarget = remember { mutableStateOf<SavedVoiceNote?>(null) }
+    val manualLinkText = remember { mutableStateOf("") }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
     }
@@ -825,12 +864,75 @@ private fun DetectorScreen(
                     Text("• Playing another item in that same service without sharing clears its temporary link.")
                     Text("• YouTube and YT Music have separate temporary slots, so both links can be kept at the same time.")
                     Text("• Audible, Play Books and other media do not clear either temporary link.")
-                    Text("• Once a link is saved with a recording, it is permanent for that note. Later temporary-link changes cannot alter it.")
+                    Text("• Saved links are reused for recordings with the same YouTube/YT Music title and channel; every recording keeps its own timestamp.")
+                    Text("• A missing link can be added manually from its title heading in Notes.")
                 }
             },
             confirmButton = {
                 TextButton(onClick = { showLinkGuide.value = false }) {
                     Text("Got it")
+                }
+            }
+        )
+    }
+
+    if (showSharedLinkDetails.value && sharedLinkStatus.value.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = { showSharedLinkDetails.value = false },
+            title = { Text("Temporary YouTube links") },
+            text = { Text(sharedLinkStatus.value) },
+            confirmButton = {
+                TextButton(onClick = { showSharedLinkDetails.value = false }) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
+    manualLinkTarget.value?.let { note ->
+        AlertDialog(
+            onDismissRequest = {
+                manualLinkTarget.value = null
+                manualLinkText.value = ""
+            },
+            title = { Text("🔗 Add link for this title") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(note.title, fontWeight = FontWeight.Bold)
+                    note.author?.let { Text("Channel: $it") }
+                    Text(
+                        "The base link will be applied to all matching recordings. " +
+                            "Each recording keeps its own playback timestamp."
+                    )
+                    OutlinedTextField(
+                        value = manualLinkText.value,
+                        onValueChange = { manualLinkText.value = it },
+                        label = { Text("YouTube or YT Music link") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (onSetManualSourceLink(note, manualLinkText.value)) {
+                            manualLinkTarget.value = null
+                            manualLinkText.value = ""
+                        }
+                    }
+                ) {
+                    Text("Save link")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        manualLinkTarget.value = null
+                        manualLinkText.value = ""
+                    }
+                ) {
+                    Text("Cancel")
                 }
             }
         )
@@ -881,22 +983,6 @@ private fun DetectorScreen(
             }
             Spacer(Modifier.height(12.dp))
 
-            if (sharedLinkStatus.value.isNotBlank()) {
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    )
-                ) {
-                    Text(
-                        text = sharedLinkStatus.value,
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-            }
-
             when (selectedTab.value) {
                 0 -> {
                     LazyColumn(
@@ -926,7 +1012,7 @@ private fun DetectorScreen(
                                     Text("4. Triple press: rewind 10 seconds; four presses: forward 10 seconds.")
                                     Text("5. During the final recording warning, single stops and double extends by 40 seconds.")
                                     Text("6. Notes and offline Scrib transcripts appear under the Notes tab.")
-                                    Text("7. For an exact YouTube or YT Music link, share the item to Rider Notes before playing it. Links already saved in notes remain permanent.")
+                                    Text("7. For an exact YouTube or YT Music link, share the item to Rider Notes before playing it. Temporary-link status is shown in Notes.")
                                     TextButton(onClick = { showLinkGuide.value = true }) {
                                         Text("📝 Link guide: cleared vs replaced")
                                     }
@@ -1082,6 +1168,35 @@ private fun DetectorScreen(
                         .groupBy { it.sourceApp }
                         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
 
+                    if (sharedLinkStatus.value.isNotBlank()) {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    "Temporary media link",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    compactSharedLinkStatus(sharedLinkStatus.value),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                TextButton(onClick = { showSharedLinkDetails.value = true }) {
+                                    Text("View full link")
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+
                     Text(
                         "Saved notes",
                         style = MaterialTheme.typography.titleMedium,
@@ -1168,32 +1283,52 @@ private fun DetectorScreen(
                                 if (source in expandedSources.value) {
                                     if (supportsTitleGrouping(source)) {
                                         val notesByTitle = sourceNotes
-                                            .groupBy { it.title.trim().ifBlank { "Untitled" } }
+                                            .groupBy { titleGroupKey(source, it) }
                                             .toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                                        notesByTitle.forEach { (title, titleNotes) ->
-                                            val titleKey = "$source::$title"
+                                        notesByTitle.forEach { (groupKey, titleNotes) ->
+                                            val title = titleGroupLabel(source, groupKey)
+                                            val titleKey = "$source::$groupKey"
                                             item(key = "title-$titleKey") {
                                                 val expanded = titleKey in expandedTitles.value
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        expandedTitles.value = if (expanded) {
-                                                            expandedTitles.value - titleKey
-                                                        } else {
-                                                            expandedTitles.value + titleKey
-                                                        }
-                                                    },
+                                                Column(
                                                     modifier = Modifier
                                                         .fillMaxWidth()
                                                         .padding(horizontal = 12.dp)
                                                 ) {
-                                                    Text(
-                                                        if (expanded) {
-                                                            "▼  $title (${titleNotes.size})"
-                                                        } else {
-                                                            "▶  $title (${titleNotes.size})"
+                                                    OutlinedButton(
+                                                        onClick = {
+                                                            expandedTitles.value = if (expanded) {
+                                                                expandedTitles.value - titleKey
+                                                            } else {
+                                                                expandedTitles.value + titleKey
+                                                            }
                                                         },
-                                                        fontWeight = FontWeight.SemiBold
-                                                    )
+                                                        modifier = Modifier.fillMaxWidth()
+                                                    ) {
+                                                        Text(
+                                                            if (expanded) {
+                                                                "▼  $title (${titleNotes.size})"
+                                                            } else {
+                                                                "▶  $title (${titleNotes.size})"
+                                                            },
+                                                            fontWeight = FontWeight.SemiBold
+                                                        )
+                                                    }
+                                                    if (YouTubeSourceLink.isSupportedSourceApp(source)) {
+                                                        TextButton(
+                                                            onClick = {
+                                                                val target = titleNotes.first()
+                                                                manualLinkTarget.value = target
+                                                                manualLinkText.value = titleNotes
+                                                                    .asSequence()
+                                                                    .mapNotNull { it.sourceUrl }
+                                                                    .firstOrNull()
+                                                                    .orEmpty()
+                                                            }
+                                                        ) {
+                                                            Text("🔗 Add or edit link for this title")
+                                                        }
+                                                    }
                                                 }
                                             }
                                             if (titleKey in expandedTitles.value) {
@@ -1263,6 +1398,35 @@ private fun supportsTitleGrouping(source: String): Boolean =
         source.equals("YouTube Music", ignoreCase = true) ||
         source.equals("Google Play Books", ignoreCase = true)
 
+private fun creatorLabel(source: String): String =
+    if (YouTubeSourceLink.isSupportedSourceApp(source)) "Channel" else "Author"
+
+private fun titleGroupKey(source: String, note: SavedVoiceNote): String {
+    val title = note.title.trim().ifBlank { "Untitled" }
+    return if (YouTubeSourceLink.isSupportedSourceApp(source)) {
+        "$title\u001F${note.author?.trim().orEmpty()}"
+    } else {
+        title
+    }
+}
+
+private fun titleGroupLabel(source: String, key: String): String {
+    if (!YouTubeSourceLink.isSupportedSourceApp(source)) return key
+    val title = key.substringBefore('\u001F')
+    val channel = key.substringAfter('\u001F', "")
+    return if (channel.isBlank()) title else "$title · $channel"
+}
+
+private fun compactSharedLinkStatus(status: String): String =
+    status.lineSequence().joinToString("\n") { line ->
+        if (line.startsWith("Link: ")) {
+            val url = line.removePrefix("Link: ")
+            "Link: " + if (url.length > 30) url.take(27) + "…" else url
+        } else {
+            line
+        }
+    }
+
 @Composable
 private fun SavedNoteCard(
     note: SavedVoiceNote,
@@ -1300,7 +1464,7 @@ private fun SavedNoteCard(
                 Text(note.title, fontWeight = FontWeight.Bold)
             }
             Text("${note.sourceApp} · ${note.recordedAtLabel}")
-            note.author?.let { Text("Author: $it") }
+            note.author?.let { Text("${creatorLabel(note.sourceApp)}: $it") }
             note.chapter?.let {
                 val label = if (note.sourceApp == "Audible") {
                     "Chapter / episode"

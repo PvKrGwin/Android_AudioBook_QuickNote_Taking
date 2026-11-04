@@ -74,6 +74,103 @@ object SavedVoiceNoteRepository {
         return note.audioFile.delete() || !note.audioFile.exists()
     }
 
+    /** Find a previously verified link for the same YouTube title and channel. */
+    fun findReusableSourceUrl(
+        context: Context,
+        sourceApp: String,
+        title: String?,
+        author: String?
+    ): String? {
+        if (!YouTubeSourceLink.isSupportedSourceApp(sourceApp) || title.isNullOrBlank()) {
+            return null
+        }
+        return load(context)
+            .asSequence()
+            .filter { sameMediaIdentity(it, sourceApp, title, author) }
+            .mapNotNull { note ->
+                note.sourceUrl?.let { YouTubeSourceLink.canonicalUrl(sourceApp, it) }
+            }
+            .firstOrNull()
+    }
+
+    /**
+     * Apply one validated base URL to every recording with the same service,
+     * title and channel. Each note retains its own playback position.
+     */
+    fun applySourceUrlToMatchingNotes(
+        context: Context,
+        sourceApp: String,
+        title: String?,
+        author: String?,
+        sourceUrl: String
+    ): Int {
+        if (title.isNullOrBlank()) return 0
+        val canonical = YouTubeSourceLink.canonicalUrl(sourceApp, sourceUrl) ?: return 0
+        var updated = 0
+        load(context)
+            .filter { sameMediaIdentity(it, sourceApp, title, author) }
+            .forEach { note ->
+                if (note.sourceUrl != canonical && writeSourceUrl(note, canonical)) {
+                    updated += 1
+                }
+            }
+        return updated
+    }
+
+    /** Backfill imported and existing note groups whenever one member has a link. */
+    fun synchronizeYouTubeLinks(context: Context): Int {
+        val notes = load(context).filter {
+            YouTubeSourceLink.isSupportedSourceApp(it.sourceApp)
+        }
+        val knownLinks = linkedMapOf<String, String>()
+        notes.forEach { note ->
+            val canonical = note.sourceUrl?.let {
+                YouTubeSourceLink.canonicalUrl(note.sourceApp, it)
+            } ?: return@forEach
+            val key = mediaIdentityKey(note.sourceApp, note.title, note.author)
+            if (key !in knownLinks) knownLinks[key] = canonical
+        }
+
+        var updated = 0
+        notes.forEach { note ->
+            val canonical = knownLinks[
+                mediaIdentityKey(note.sourceApp, note.title, note.author)
+            ] ?: return@forEach
+            if (note.sourceUrl != canonical && writeSourceUrl(note, canonical)) {
+                updated += 1
+            }
+        }
+        return updated
+    }
+
+    private fun sameMediaIdentity(
+        note: SavedVoiceNote,
+        sourceApp: String,
+        title: String,
+        author: String?
+    ): Boolean =
+        mediaIdentityKey(note.sourceApp, note.title, note.author) ==
+            mediaIdentityKey(sourceApp, title, author)
+
+    private fun mediaIdentityKey(sourceApp: String, title: String, author: String?): String =
+        listOf(sourceApp, title, author.orEmpty())
+            .joinToString("\u001F") { value ->
+                value.trim().replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
+            }
+
+    private fun writeSourceUrl(note: SavedVoiceNote, canonicalUrl: String): Boolean =
+        runCatching {
+            val metadataFile = File(
+                note.audioFile.parentFile,
+                note.audioFile.nameWithoutExtension + ".json"
+            )
+            if (!metadataFile.exists()) return@runCatching false
+            val json = JSONObject(metadataFile.readText())
+            json.put("sourceUrl", canonicalUrl)
+            metadataFile.writeText(json.toString(2))
+            true
+        }.getOrDefault(false)
+
     private fun loadOne(audioFile: File): SavedVoiceNote {
         val metadataFile = File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
         val fallbackTime = audioFile.lastModified().takeIf { it > 0L } ?: System.currentTimeMillis()

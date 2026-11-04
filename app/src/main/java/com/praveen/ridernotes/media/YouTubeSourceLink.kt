@@ -68,6 +68,21 @@ object YouTubeSourceLink {
         return path + URLEncoder.encode(query, Charsets.UTF_8.name())
     }
 
+    /** Convert any supported YouTube URL to the stable base URL saved in note metadata. */
+    fun canonicalUrl(sourceApp: String, value: String): String? {
+        val videoId = videoIdFromUrl(value) ?: return null
+        val host = when {
+            sourceApp.equals("YouTube Music", ignoreCase = true) -> "music.youtube.com"
+            sourceApp.equals("YouTube", ignoreCase = true) -> "www.youtube.com"
+            else -> return null
+        }
+        return "https://$host/watch?v=$videoId"
+    }
+
+    fun isSupportedSourceApp(sourceApp: String): Boolean =
+        sourceApp.equals("YouTube", ignoreCase = true) ||
+            sourceApp.equals("YouTube Music", ignoreCase = true)
+
     fun fromSharedText(text: String, preferredPackage: String?): SharedSource? {
         val videoId = videoIdFromUrl(text) ?: return null
         val packageName = when {
