@@ -41,6 +41,8 @@ android {
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.work.runtime)
+    implementation(libs.androidx.documentfile)
 
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)

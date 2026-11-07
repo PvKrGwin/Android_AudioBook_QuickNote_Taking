@@ -19,6 +19,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.praveen.ridernotes.MainActivity
+import com.praveen.ridernotes.cloud.CloudSyncManager
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
@@ -275,6 +276,7 @@ class VoiceRecordingService : Service() {
         if (saved && file != null) {
             saveMetadata(file, mediaContext)
             ScribTranscriber.enqueue(this, file)
+            CloudSyncManager.enqueueNow(this)
         }
 
         val source = if (mediaContext?.isStandalone == false) {

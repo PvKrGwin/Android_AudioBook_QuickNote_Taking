@@ -65,6 +65,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
+import com.praveen.ridernotes.cloud.CloudSyncManager
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
@@ -93,6 +94,9 @@ class MainActivity : ComponentActivity() {
     private val transcriptionLanguage =
         mutableStateOf(ScribTranscriber.LANGUAGE_ENGLISH)
     private val backupStatus = mutableStateOf("")
+    private val cloudSyncStatus = mutableStateOf(
+        CloudSyncManager.Status(null, CloudSyncManager.Mode.OFF, "")
+    )
     private val sharedLinkStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
@@ -121,6 +125,27 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.OpenDocument()
     ) { source ->
         if (source != null) importBackup(source)
+    }
+    private val cloudFolderLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { destination ->
+        if (destination != null) {
+            val previous = CloudSyncManager.destinationUri(this)
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching {
+                contentResolver.takePersistableUriPermission(destination, flags)
+                CloudSyncManager.setDestination(this, destination)
+                if (previous != null && previous != destination) {
+                    runCatching {
+                        contentResolver.releasePersistableUriPermission(previous, flags)
+                    }
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }.onFailure { error ->
+                backupStatus.value = "Cloud folder failed: ${error.javaClass.simpleName}"
+            }
+        }
     }
     private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
     private val playingFileName = mutableStateOf<String?>(null)
@@ -185,7 +210,12 @@ class MainActivity : ComponentActivity() {
                     onCopyTitle = ::copyNoteTitle,
                     onOpenSource = ::openSourceAtTimestamp,
                     onSearchSource = ::searchSourceTitle,
-                    onSetManualSourceLink = ::setManualSourceLink
+                    onSetManualSourceLink = ::setManualSourceLink,
+                    cloudSyncStatus = cloudSyncStatus,
+                    onChooseCloudFolder = ::chooseCloudFolder,
+                    onRemoveCloudFolder = ::removeCloudFolder,
+                    onSetCloudSyncMode = ::setCloudSyncMode,
+                    onSyncNow = ::syncCloudNow
                 )
             }
         }
@@ -208,6 +238,7 @@ class MainActivity : ComponentActivity() {
         refreshSharedLinkStatus()
         refreshGestureActions()
         refreshSavedNotes()
+        cloudSyncStatus.value = CloudSyncManager.status(this)
         savedNotes.value
             .filter { it.transcriptionStatus in setOf("PENDING", "QUEUED", "TRANSCRIBING") }
             .forEach { ScribTranscriber.enqueue(this, it.audioFile) }
@@ -373,6 +404,32 @@ class MainActivity : ComponentActivity() {
         }
         notes.forEach { SavedVoiceNoteRepository.delete(it) }
         refreshSavedNotes()
+    }
+
+    private fun chooseCloudFolder() {
+        cloudFolderLauncher.launch(CloudSyncManager.destinationUri(this))
+    }
+
+    private fun removeCloudFolder() {
+        val uri = CloudSyncManager.destinationUri(this)
+        CloudSyncManager.removeDestination(this)
+        if (uri != null) {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching { contentResolver.releasePersistableUriPermission(uri, flags) }
+        }
+        cloudSyncStatus.value = CloudSyncManager.status(this)
+        backupStatus.value = "Cloud folder removed; local notes were kept"
+    }
+
+    private fun setCloudSyncMode(mode: CloudSyncManager.Mode) {
+        CloudSyncManager.setMode(this, mode)
+        cloudSyncStatus.value = CloudSyncManager.status(this)
+    }
+
+    private fun syncCloudNow() {
+        CloudSyncManager.enqueueNow(this)
+        cloudSyncStatus.value = CloudSyncManager.status(this)
     }
 
     private fun stopTranscription(note: SavedVoiceNote) {
@@ -549,6 +606,7 @@ class MainActivity : ComponentActivity() {
                 importedNotes += 1
             }
             refreshSavedNotes()
+            CloudSyncManager.enqueueNow(this)
             backupStatus.value =
                 "Backup restored: $importedNotes note(s), $importedFiles file(s). " +
                     "Expand its source heading to view it."
@@ -633,6 +691,7 @@ class MainActivity : ComponentActivity() {
             return false
         }
         refreshSavedNotes()
+        CloudSyncManager.enqueueNow(this)
         backupStatus.value = if (updated > 0) {
             "Link saved to $updated ${note.sourceApp} recording(s) with the same title and channel."
         } else {
@@ -779,7 +838,12 @@ private fun DetectorScreen(
     onCopyTitle: (SavedVoiceNote) -> Unit,
     onOpenSource: (SavedVoiceNote) -> Unit,
     onSearchSource: (SavedVoiceNote) -> Unit,
-    onSetManualSourceLink: (SavedVoiceNote, String) -> Boolean
+    onSetManualSourceLink: (SavedVoiceNote, String) -> Boolean,
+    cloudSyncStatus: State<CloudSyncManager.Status>,
+    onChooseCloudFolder: () -> Unit,
+    onRemoveCloudFolder: () -> Unit,
+    onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
+    onSyncNow: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -1151,6 +1215,68 @@ private fun DetectorScreen(
                             }
                         }
                         item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                                ) {
+                                    Text("Automatic cloud sync", fontWeight = FontWeight.Bold)
+                                    Text(
+                                        cloudSyncStatus.value.destinationName?.let {
+                                            "Cloud folder: $it"
+                                        } ?: "No cloud folder selected"
+                                    )
+                                    Text(
+                                        "Choose a folder from Google Drive, OneDrive, or another " +
+                                            "provider shown by Android. The choice remains after restart."
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = onChooseCloudFolder) {
+                                            Text(if (cloudSyncStatus.value.destinationName == null) "Choose folder" else "Replace folder")
+                                        }
+                                        if (cloudSyncStatus.value.destinationName != null) {
+                                            OutlinedButton(onClick = onRemoveCloudFolder) {
+                                                Text("Remove")
+                                            }
+                                        }
+                                    }
+                                    CloudSyncManager.Mode.values().forEach { mode ->
+                                        val selected = cloudSyncStatus.value.mode == mode
+                                        if (selected) {
+                                            Button(
+                                                onClick = { onSetCloudSyncMode(mode) },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) { Text(mode.label) }
+                                        } else {
+                                            OutlinedButton(
+                                                onClick = { onSetCloudSyncMode(mode) },
+                                                modifier = Modifier.fillMaxWidth()
+                                            ) { Text(mode.label) }
+                                        }
+                                    }
+                                    Button(
+                                        onClick = onSyncNow,
+                                        enabled = cloudSyncStatus.value.destinationName != null &&
+                                            cloudSyncStatus.value.mode != CloudSyncManager.Mode.OFF
+                                    ) {
+                                        Text("Sync now")
+                                    }
+                                    if (cloudSyncStatus.value.message.isNotBlank()) {
+                                        Text(
+                                            cloudSyncStatus.value.message,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Text(
+                                        "New and locally changed recordings, metadata, and transcripts " +
+                                            "are uploaded automatically. Cloud copies are not deleted " +
+                                            "when a local note is deleted."
+                                    )
+                                }
+                            }
+                        }
+                        item {
                             Text(
                                 text = "Created by Praveen Kumar V",
                                 modifier = Modifier
@@ -1211,6 +1337,23 @@ private fun DetectorScreen(
                             OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
                             OutlinedButton(onClick = onImportBackup) {
                                 Text("Import backup")
+                            }
+                        }
+                        if (savedNotes.value.isNotEmpty()) {
+                            val allSelected = selectedNotes.size == savedNotes.value.size
+                            OutlinedButton(
+                                onClick = {
+                                    selectedNotePaths.value = if (allSelected) {
+                                        emptySet()
+                                    } else {
+                                        savedNotes.value.mapTo(mutableSetOf()) {
+                                            it.audioFile.absolutePath
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(if (allSelected) "Clear selection" else "Select all (${savedNotes.value.size})")
                             }
                         }
                         if (selectedNotes.isNotEmpty()) {

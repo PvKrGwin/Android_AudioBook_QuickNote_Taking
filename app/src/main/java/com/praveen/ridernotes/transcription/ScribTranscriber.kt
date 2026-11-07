@@ -8,6 +8,7 @@ import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import com.praveen.ridernotes.cloud.CloudSyncManager
 import org.json.JSONArray
 import org.json.JSONObject
 import org.opentranscribe.api.ITranscriptionCallback
@@ -243,6 +244,7 @@ object ScribTranscriber {
                                     audioFile.nameWithoutExtension + ".txt"
                                 ).writeText(transcript)
                             }
+                            CloudSyncManager.enqueueNow(appContext)
                             finishActive(appContext, audioFile, startNext = true)
                         }
 
@@ -266,6 +268,7 @@ object ScribTranscriber {
                                 ?: error?.type?.toString()
                                 ?: "Unknown Scrib error"
                             updateMetadata(metadataFile, "FAILED", error = detail)
+                            CloudSyncManager.enqueueNow(appContext)
                             finishActive(appContext, audioFile, startNext = true)
                         }
                     }
