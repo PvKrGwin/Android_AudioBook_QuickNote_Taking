@@ -619,6 +619,7 @@ class MainActivity : ComponentActivity() {
         appendLine("RIDER NOTES RECORDING")
         appendLine("Source: ${note.sourceApp}")
         appendLine("Title: ${note.title}")
+        note.module?.let { appendLine("Module: $it") }
         note.author?.let { appendLine("${creatorLabel(note.sourceApp)}: $it") }
         note.chapter?.let { appendLine("Chapter / episode: $it") }
         note.playbackPositionLabel?.let { appendLine("Media position: $it") }
@@ -1539,10 +1540,15 @@ private fun supportsTitleGrouping(source: String): Boolean =
     source.equals("Audible", ignoreCase = true) ||
         source.equals("YouTube", ignoreCase = true) ||
         source.equals("YouTube Music", ignoreCase = true) ||
-        source.equals("Google Play Books", ignoreCase = true)
+        source.equals("Google Play Books", ignoreCase = true) ||
+        source.equals("Coursera", ignoreCase = true) ||
+        source.equals("Netflix", ignoreCase = true)
 
-private fun creatorLabel(source: String): String =
-    if (YouTubeSourceLink.isSupportedSourceApp(source)) "Channel" else "Author"
+private fun creatorLabel(source: String): String = when {
+    YouTubeSourceLink.isSupportedSourceApp(source) -> "Channel"
+    source.equals("Coursera", ignoreCase = true) -> "University"
+    else -> "Author"
+}
 
 private fun titleGroupKey(source: String, note: SavedVoiceNote): String {
     val title = note.title.trim().ifBlank { "Untitled" }
@@ -1607,6 +1613,7 @@ private fun SavedNoteCard(
                 Text(note.title, fontWeight = FontWeight.Bold)
             }
             Text("${note.sourceApp} · ${note.recordedAtLabel}")
+            note.module?.let { Text("Module: $it") }
             note.author?.let { Text("${creatorLabel(note.sourceApp)}: $it") }
             note.chapter?.let {
                 val label = if (note.sourceApp == "Audible") {

@@ -31,7 +31,9 @@ object MediaControlGateway {
         "com.audible.application" to "Audible",
         "com.google.android.youtube" to "YouTube",
         "com.google.android.apps.youtube.music" to "YouTube Music",
-        "com.google.android.apps.books" to "Google Play Books"
+        "com.google.android.apps.books" to "Google Play Books",
+        "com.netflix.mediaclient" to "Netflix",
+        "org.coursera.android" to "Coursera"
     )
 
     private fun isMediaApp(context: Context, pkg: String): Boolean =
@@ -55,6 +57,7 @@ object MediaControlGateway {
         val packageName: String?,
         val appName: String?,
         val title: String?,
+        val module: String?,
         val subtitle: String?,
         val author: String?,
         val playbackPositionMs: Long?,
@@ -84,7 +87,17 @@ object MediaControlGateway {
         }
 
         if (controller == null) {
-            return VoiceNoteMediaContext(null, null, null, null, null, null, null, false)
+            return VoiceNoteMediaContext(
+                packageName = null,
+                appName = null,
+                title = null,
+                module = null,
+                subtitle = null,
+                author = null,
+                playbackPositionMs = null,
+                sourceUrl = null,
+                wasPlaying = false
+            )
                 .also { voiceNoteContext = it }
         }
 
@@ -96,11 +109,30 @@ object MediaControlGateway {
             else -> false
         }
         val metadata = controller.metadata
-        val (mediaTitle, mediaChapter, mediaAuthor) = mediaFields(
+        val (mediaTitle, mediaModule, mediaChapter, mediaAuthor) = mediaFields(
             controller.packageName,
             metadata,
             notificationTextByPackage[controller.packageName].orEmpty()
         )
+        if (controller.packageName == "org.coursera.android") {
+            val diagnostic = (
+                metadataTextEntries(metadata) +
+                    notificationTextByPackage[controller.packageName].orEmpty()
+                        .mapIndexed { index, value -> "notification.$index" to value }
+                )
+                .distinctBy { it.first to it.second }
+                .joinToString(" | ") { (key, value) -> "$key=${value.take(120)}" }
+                .take(1_200)
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Coursera metadata: course=${mediaTitle.orEmpty()}, " +
+                        "module=${mediaModule.orEmpty()}, " +
+                        "chapter=${mediaChapter.orEmpty()}, " +
+                        "university=${mediaAuthor.orEmpty()}; raw=[$diagnostic]",
+                    true
+                )
+            )
+        }
         val metadataEntries = (
             mediaLinkEntries(controller, metadata) +
                 notificationLinkEntriesByPackage[controller.packageName].orEmpty()
@@ -188,6 +220,7 @@ object MediaControlGateway {
             packageName = controller.packageName,
             appName = sourceApp,
             title = mediaTitle,
+            module = mediaModule,
             subtitle = mediaChapter,
             author = mediaAuthor,
             playbackPositionMs = state?.let(::estimatedPosition),
@@ -222,7 +255,7 @@ object MediaControlGateway {
                 )
         }.getOrNull() ?: return null
 
-        val (title, _, author) = mediaFields(
+        val (title, _, _, author) = mediaFields(
             controller.packageName,
             controller.metadata,
             notificationTextByPackage[controller.packageName].orEmpty()
@@ -276,7 +309,7 @@ object MediaControlGateway {
                     if (controller.packageName == YouTubeSourceLink.YOUTUBE_PACKAGE ||
                         controller.packageName == YouTubeSourceLink.YOUTUBE_MUSIC_PACKAGE
                     ) {
-                        val (title, _, author) = mediaFields(
+                        val (title, _, _, author) = mediaFields(
                             controller.packageName,
                             controller.metadata,
                             notificationTextByPackage[controller.packageName].orEmpty()
@@ -726,11 +759,18 @@ object MediaControlGateway {
         }
     }
 
+    private data class MappedMediaFields(
+        val title: String?,
+        val module: String?,
+        val chapter: String?,
+        val author: String?
+    )
+
     private fun mediaFields(
         packageName: String,
         metadata: MediaMetadata?,
         notificationText: List<String>
-    ): Triple<String?, String?, String?> {
+    ): MappedMediaFields {
         fun value(key: String): String? =
             metadata?.getString(key)?.trim()?.takeIf { it.isNotBlank() }
 
@@ -739,8 +779,10 @@ object MediaControlGateway {
         val displaySubtitle = value(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE)
         val displayDescription = value(MediaMetadata.METADATA_KEY_DISPLAY_DESCRIPTION)
         val album = value(MediaMetadata.METADATA_KEY_ALBUM)
-        val author = value(MediaMetadata.METADATA_KEY_AUTHOR)
-            ?: value(MediaMetadata.METADATA_KEY_ARTIST)
+        val rawAuthor = value(MediaMetadata.METADATA_KEY_AUTHOR)
+        val artist = value(MediaMetadata.METADATA_KEY_ARTIST)
+        val albumArtist = value(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
+        val author = rawAuthor ?: artist
 
         return when (packageName) {
             "com.google.android.apps.books" -> {
@@ -749,7 +791,7 @@ object MediaControlGateway {
                 val bookTitle = displaySubtitle ?: album ?: displayTitle ?: title
                 val chapter = title
                     ?.takeUnless { it.equals(bookTitle, ignoreCase = true) }
-                Triple(bookTitle, chapter, author)
+                MappedMediaFields(bookTitle, null, chapter, author)
             }
 
             "com.audible.application" -> {
@@ -799,12 +841,41 @@ object MediaControlGateway {
                     }
                     .firstOrNull()
 
-                Triple(bookOrEpisodeTitle, chapterOrEpisode, author)
+                MappedMediaFields(bookOrEpisodeTitle, null, chapterOrEpisode, author)
+            }
+
+            "org.coursera.android" -> {
+                // Coursera uses ARTIST for the module on current Android builds.
+                // Keep that separate from the institution and lesson/chapter.
+                val courseTitle = title ?: album ?: displaySubtitle ?: displayTitle
+                    ?: notificationText.firstOrNull()
+                val university = rawAuthor ?: albumArtist
+                val module = artist?.takeUnless {
+                    it.equals(courseTitle, ignoreCase = true) ||
+                        it.equals(university, ignoreCase = true)
+                }
+                val excluded = listOfNotNull(
+                    courseTitle,
+                    module,
+                    university,
+                    "Coursera"
+                )
+                val chapter = (
+                    listOfNotNull(displayTitle, displayDescription, displaySubtitle, album) +
+                        notificationText
+                    )
+                    .map { it.trim() }
+                    .firstOrNull { candidate ->
+                        candidate.isNotBlank() &&
+                            candidate.length <= 200 &&
+                            excluded.none { it.equals(candidate, ignoreCase = true) }
+                    }
+                MappedMediaFields(courseTitle, module, chapter, university)
             }
 
             else -> {
                 val chapter = displaySubtitle ?: album
-                Triple(title, chapter, author)
+                MappedMediaFields(title, null, chapter, author)
             }
         }
     }
