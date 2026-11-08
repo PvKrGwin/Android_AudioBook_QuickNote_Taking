@@ -25,6 +25,7 @@ import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -55,6 +56,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -76,8 +78,11 @@ import com.praveen.ridernotes.media.SharedMediaLinkStore
 import com.praveen.ridernotes.media.YouTubeSourceLink
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
+import com.praveen.ridernotes.recording.RecordingController
 import com.praveen.ridernotes.recording.TranscriptSegment
 import com.praveen.ridernotes.transcription.ScribTranscriber
+import com.praveen.ridernotes.topics.TopicLibraryRepository
+import com.praveen.ridernotes.topics.TopicLibraryScreen
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
@@ -215,7 +220,8 @@ class MainActivity : ComponentActivity() {
                     onChooseCloudFolder = ::chooseCloudFolder,
                     onRemoveCloudFolder = ::removeCloudFolder,
                     onSetCloudSyncMode = ::setCloudSyncMode,
-                    onSyncNow = ::syncCloudNow
+                    onSyncNow = ::syncCloudNow,
+                    onStartTopicRecording = ::startTopicRecording
                 )
             }
         }
@@ -430,6 +436,15 @@ class MainActivity : ComponentActivity() {
     private fun syncCloudNow() {
         CloudSyncManager.enqueueNow(this)
         cloudSyncStatus.value = CloudSyncManager.status(this)
+    }
+
+    private fun startTopicRecording(groupId: String) {
+        TopicLibraryRepository.setPendingRecordingGroup(this, groupId)
+        val result = RecordingController.start(this)
+        if (!result.contains("requested", ignoreCase = true)) {
+            TopicLibraryRepository.clearPendingRecordingGroup(this)
+        }
+        backupStatus.value = result
     }
 
     private fun stopTranscription(note: SavedVoiceNote) {
@@ -844,7 +859,8 @@ private fun DetectorScreen(
     onChooseCloudFolder: () -> Unit,
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
-    onSyncNow: () -> Unit
+    onSyncNow: () -> Unit,
+    onStartTopicRecording: (String) -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -1023,7 +1039,7 @@ private fun DetectorScreen(
 
             Spacer(Modifier.height(12.dp))
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (selectedTab.value == 0) {
@@ -1044,6 +1060,11 @@ private fun DetectorScreen(
                     Button(onClick = { selectedTab.value = 2 }) { Text("Log") }
                 } else {
                     OutlinedButton(onClick = { selectedTab.value = 2 }) { Text("Log") }
+                }
+                if (selectedTab.value == 3) {
+                    Button(onClick = { selectedTab.value = 3 }) { Text("Topics") }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 3 }) { Text("Topics") }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -1496,6 +1517,15 @@ private fun DetectorScreen(
                             }
                         }
                     }
+                }
+
+                3 -> {
+                    TopicLibraryScreen(
+                        savedNotes = savedNotes.value,
+                        onPlayRecording = onPlayNote,
+                        onStartRecording = onStartTopicRecording,
+                        onRefreshNotes = onRefreshNotes
+                    )
                 }
 
                 else -> {

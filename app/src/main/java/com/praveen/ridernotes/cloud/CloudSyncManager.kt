@@ -86,8 +86,10 @@ object CloudSyncManager {
 
     fun noteFiles(context: Context): List<File> {
         val folder = File(context.filesDir, "voice_notes")
-        return folder.listFiles().orEmpty()
+        val voiceFiles = folder.listFiles().orEmpty()
             .filter { it.isFile && it.extension.lowercase() in SYNCED_EXTENSIONS }
+        val topicBackup = File(context.filesDir, "topic_library/RiderNotes_Topics_Backup.zip")
+        return (voiceFiles + listOfNotNull(topicBackup.takeIf(File::exists)))
             .sortedBy { it.name.lowercase() }
     }
 

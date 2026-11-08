@@ -24,6 +24,7 @@ import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.transcription.ScribTranscriber
+import com.praveen.ridernotes.topics.TopicLibraryRepository
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -275,8 +276,15 @@ class VoiceRecordingService : Service() {
         val mediaContext = MediaControlGateway.currentVoiceNoteContext()
         if (saved && file != null) {
             saveMetadata(file, mediaContext)
+            TopicLibraryRepository.attachPendingRecording(
+                this,
+                file.name,
+                mediaContext?.title ?: file.nameWithoutExtension
+            )
             ScribTranscriber.enqueue(this, file)
             CloudSyncManager.enqueueNow(this)
+        } else {
+            TopicLibraryRepository.clearPendingRecordingGroup(this)
         }
 
         val source = if (mediaContext?.isStandalone == false) {
