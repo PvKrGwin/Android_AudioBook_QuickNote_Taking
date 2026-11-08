@@ -131,19 +131,23 @@ object TopicLibraryRepository {
         save(context, current.copy(placements = current.placements.filterNot { it.groupId == placement.groupId } + normalized))
     }
 
-    fun setPendingRecordingGroup(context: Context, groupId: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(PENDING_GROUP, groupId).apply()
+    fun setPendingRecordingGroup(context: Context, groupId: String, index: Int? = null) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString(PENDING_GROUP, groupId)
+            .putInt(PENDING_INDEX, index ?: -1)
+            .apply()
     }
 
     fun clearPendingRecordingGroup(context: Context) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(PENDING_GROUP).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(PENDING_GROUP).remove(PENDING_INDEX).apply()
     }
 
     @Synchronized fun attachPendingRecording(context: Context, fileName: String, title: String) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val groupId = prefs.getString(PENDING_GROUP, null) ?: return
-        prefs.edit().remove(PENDING_GROUP).apply()
-        if (load(context).groups.any { it.id == groupId }) addRecording(context, groupId, fileName, title)
+        val index = prefs.getInt(PENDING_INDEX, -1).takeIf { it >= 0 }
+        prefs.edit().remove(PENDING_GROUP).remove(PENDING_INDEX).apply()
+        if (load(context).groups.any { it.id == groupId }) addRecording(context, groupId, fileName, title, index)
     }
 
     private fun addNewItem(context: Context, groupId: String, item: TopicItem, index: Int?) {
@@ -206,4 +210,5 @@ object TopicLibraryRepository {
     private fun JSONObject.nullable(key: String): String? = if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotBlank() } else null
     private const val PREFS = "rider_notes_topics"
     private const val PENDING_GROUP = "pending_recording_group"
+    private const val PENDING_INDEX = "pending_recording_index"
 }

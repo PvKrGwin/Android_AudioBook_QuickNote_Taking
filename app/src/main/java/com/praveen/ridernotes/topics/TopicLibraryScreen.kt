@@ -41,7 +41,7 @@ import com.praveen.ridernotes.recording.SavedVoiceNote
 fun TopicLibraryScreen(
     savedNotes: List<SavedVoiceNote>,
     onPlayRecording: (SavedVoiceNote) -> Unit,
-    onStartRecording: (String) -> Unit,
+    onStartRecording: (String, Int?) -> Unit,
     onRefreshNotes: () -> Unit
 ) {
     val context = LocalContext.current
@@ -113,6 +113,7 @@ fun TopicLibraryScreen(
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "link"; actionPlacement = null }) { Text("Insert web link after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; actionPlacement = null; filePicker.launch(arrayOf("*/*")) }) { Text("Insert file after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "recordings"; actionPlacement = null }) { Text("Insert existing recording after this point") }
+                TextButton(onClick = { onStartRecording(placement.groupId, pointIndex + 1); actionPlacement = null }) { Text("Record after this point") }
                 TextButton(onClick = { linkItemId = placement.itemId; actionPlacement = null }) { Text("Link this point to another group") }
                 TextButton(onClick = { TopicLibraryRepository.removePlacement(context, placement.id); actionPlacement = null; refresh() }) { Text("Remove from this group") }
             }
@@ -149,7 +150,7 @@ fun TopicLibraryScreen(
         if (currentGroup != null) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }) { Text("+ File") }
             OutlinedButton(onClick = { dialog = "recordings" }) { Text("+ Existing recording") }
-            OutlinedButton(onClick = { onStartRecording(currentGroup.id) }) { Text("+ Record") }
+            OutlinedButton(onClick = { onStartRecording(currentGroup.id, null) }) { Text("+ Record") }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
             items(childGroups, key = { "group-${it.id}" }) { group ->

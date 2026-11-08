@@ -438,8 +438,8 @@ class MainActivity : ComponentActivity() {
         cloudSyncStatus.value = CloudSyncManager.status(this)
     }
 
-    private fun startTopicRecording(groupId: String) {
-        TopicLibraryRepository.setPendingRecordingGroup(this, groupId)
+    private fun startTopicRecording(groupId: String, index: Int?) {
+        TopicLibraryRepository.setPendingRecordingGroup(this, groupId, index)
         val result = RecordingController.start(this)
         if (!result.contains("requested", ignoreCase = true)) {
             TopicLibraryRepository.clearPendingRecordingGroup(this)
@@ -860,7 +860,7 @@ private fun DetectorScreen(
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
-    onStartTopicRecording: (String) -> Unit
+    onStartTopicRecording: (String, Int?) -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
