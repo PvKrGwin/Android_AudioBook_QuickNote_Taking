@@ -36,6 +36,9 @@ object MediaControlGateway {
         "org.coursera.android" to "Coursera"
     )
 
+    fun isSupportedPackage(packageName: String?): Boolean =
+        packageName != null && supportedAppNames.containsKey(packageName)
+
     private fun isMediaApp(context: Context, pkg: String): Boolean =
         pkg != context.packageName && pkg != "com.android.systemui"
     private val notificationTextByPackage =

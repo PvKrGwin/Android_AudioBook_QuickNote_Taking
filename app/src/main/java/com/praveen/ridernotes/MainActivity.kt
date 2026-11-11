@@ -72,6 +72,7 @@ import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
 import com.praveen.ridernotes.input.GestureActionConfig
+import com.praveen.ridernotes.input.FloatingRecordConfig
 import com.praveen.ridernotes.input.RemotePressPatternDetector
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.media.SharedMediaLinkStore
@@ -105,6 +106,7 @@ class MainActivity : ComponentActivity() {
     private val sharedLinkStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
+    private val floatingRecordEnabled = mutableStateOf(false)
     private var remoteTraining = false
     private var remoteTrainingDevice: String? = null
     private val remoteTrainingSignals = linkedSetOf<String>()
@@ -174,6 +176,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupDiagnosticMediaSession()
+        floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
 
         setContent {
             RiderNotesTheme {
@@ -221,7 +224,9 @@ class MainActivity : ComponentActivity() {
                     onRemoveCloudFolder = ::removeCloudFolder,
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
-                    onStartTopicRecording = ::startTopicRecording
+                    onStartTopicRecording = ::startTopicRecording,
+                    floatingRecordEnabled = floatingRecordEnabled,
+                    onSetFloatingRecordEnabled = ::setFloatingRecordEnabled
                 )
             }
         }
@@ -238,6 +243,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
+        floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
         MediaControlGateway.observeActivePlayback(this)
@@ -445,6 +451,11 @@ class MainActivity : ComponentActivity() {
             TopicLibraryRepository.clearPendingRecordingGroup(this)
         }
         backupStatus.value = result
+    }
+
+    private fun setFloatingRecordEnabled(enabled: Boolean) {
+        FloatingRecordConfig.setEnabled(this, enabled)
+        floatingRecordEnabled.value = enabled
     }
 
     private fun stopTranscription(note: SavedVoiceNote) {
@@ -860,7 +871,9 @@ private fun DetectorScreen(
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
-    onStartTopicRecording: (String, Int?) -> Unit
+    onStartTopicRecording: (String, Int?) -> Unit,
+    floatingRecordEnabled: State<Boolean>,
+    onSetFloatingRecordEnabled: (Boolean) -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -1102,6 +1115,35 @@ private fun DetectorScreen(
                                     TextButton(onClick = { showLinkGuide.value = true }) {
                                         Text("📝 Link guide: cleared vs replaced")
                                     }
+                                }
+                            }
+                        }
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Checkbox(
+                                            checked = floatingRecordEnabled.value,
+                                            onCheckedChange = onSetFloatingRecordEnabled
+                                        )
+                                        Text(
+                                            "Floating record button without remote",
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                    Text(
+                                        "When enabled, a draggable Rider Notes button appears over Audible, " +
+                                            "YouTube, YouTube Music, Google Play Books, Netflix and Coursera " +
+                                            "only while the configured Bluetooth remote is disconnected. " +
+                                            "Tap it to start or stop a media note; tap × to hide it until the media app is reopened. " +
+                                            "The Rider Notes accessibility detector must remain enabled."
+                                    )
                                 }
                             }
                         }

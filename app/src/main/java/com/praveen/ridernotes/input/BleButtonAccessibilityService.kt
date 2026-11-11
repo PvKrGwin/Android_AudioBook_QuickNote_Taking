@@ -6,6 +6,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.PixelFormat
+import android.hardware.input.InputManager
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Build
@@ -14,8 +16,17 @@ import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
 import android.view.InputDevice
+import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.TextView
 import android.view.accessibility.AccessibilityEvent
+import androidx.core.content.ContextCompat
+import com.praveen.ridernotes.R
 import com.praveen.ridernotes.call.CallControlGateway
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.recording.RecordingController
@@ -24,7 +35,7 @@ import com.praveen.ridernotes.recording.RecordingController
  * Observes hardware keys globally and classifies Beauty-R1's usable camera
  * button as a single, double, triple or four-press gesture.
  */
-class BleButtonAccessibilityService : AccessibilityService() {
+class BleButtonAccessibilityService : AccessibilityService(), InputManager.InputDeviceListener {
     private val detector = RemotePressPatternDetector()
     private val handler = Handler(Looper.getMainLooper())
 
@@ -35,6 +46,17 @@ class BleButtonAccessibilityService : AccessibilityService() {
     private var screenOffObserved = false
     private var lastScreenWakeAt = 0L
     private var warningPressCount = 0
+    private var configReceiverRegistered = false
+    private var foregroundPackage: String? = null
+    private var dismissedPackage: String? = null
+    private var floatingView: View? = null
+    private var floatingParams: WindowManager.LayoutParams? = null
+
+    private val floatingConfigReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == FloatingRecordConfig.ACTION_CHANGED) refreshFloatingRecordButton()
+        }
+    }
 
     private val warningSinglePress = Runnable {
         val shouldStop = warningPressCount == 1 &&
@@ -73,6 +95,8 @@ class BleButtonAccessibilityService : AccessibilityService() {
         }
         screenOffObserved = !(getSystemService(Context.POWER_SERVICE) as PowerManager).isInteractive
         registerScreenOnReceiver()
+        registerFloatingObservers()
+        refreshFloatingRecordButton()
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -303,6 +327,148 @@ class BleButtonAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun registerFloatingObservers() {
+        if (!configReceiverRegistered) {
+            val filter = IntentFilter(FloatingRecordConfig.ACTION_CHANGED)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(floatingConfigReceiver, filter, RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("DEPRECATION")
+                registerReceiver(floatingConfigReceiver, filter)
+            }
+            configReceiverRegistered = true
+        }
+        (getSystemService(Context.INPUT_SERVICE) as InputManager)
+            .registerInputDeviceListener(this, handler)
+    }
+
+    override fun onInputDeviceAdded(deviceId: Int) = refreshFloatingRecordButton()
+    override fun onInputDeviceRemoved(deviceId: Int) = refreshFloatingRecordButton()
+    override fun onInputDeviceChanged(deviceId: Int) = refreshFloatingRecordButton()
+
+    private fun refreshFloatingRecordButton() {
+        val shouldShow = FloatingRecordConfig.isEnabled(this) &&
+            MediaControlGateway.isSupportedPackage(foregroundPackage) &&
+            foregroundPackage != dismissedPackage &&
+            !isConfiguredRemoteConnected()
+        if (shouldShow) showFloatingRecordButton() else removeFloatingRecordButton()
+    }
+
+    private fun showFloatingRecordButton() {
+        if (floatingView != null) return
+        val windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        val density = resources.displayMetrics.density
+        val container = FrameLayout(this).apply {
+            background = ContextCompat.getDrawable(
+                this@BleButtonAccessibilityService,
+                R.drawable.floating_record_background
+            )
+            elevation = 8f * density
+        }
+        val icon = ImageView(this).apply {
+            setImageResource(R.drawable.rider_notes_logo)
+            contentDescription = "Record Rider Note"
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }
+        val close = TextView(this).apply {
+            text = "×"
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setTextColor(0xFFFFFFFF.toInt())
+            contentDescription = "Close floating record button"
+            setOnClickListener {
+                dismissedPackage = foregroundPackage
+                removeFloatingRecordButton()
+            }
+        }
+        container.addView(icon, FrameLayout.LayoutParams(dp(58), dp(58)).apply {
+            gravity = Gravity.BOTTOM or Gravity.START
+            setMargins(dp(5), dp(5), dp(5), dp(5))
+        })
+        container.addView(close, FrameLayout.LayoutParams(dp(26), dp(26)).apply {
+            gravity = Gravity.TOP or Gravity.END
+        })
+
+        val (savedX, savedY) = FloatingRecordConfig.position(this)
+        val params = WindowManager.LayoutParams(
+            dp(72), dp(72),
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = savedX.coerceIn(0, (resources.displayMetrics.widthPixels - dp(72)).coerceAtLeast(0))
+            y = savedY.coerceIn(0, (resources.displayMetrics.heightPixels - dp(72)).coerceAtLeast(0))
+        }
+        var downRawX = 0f
+        var downRawY = 0f
+        var downX = 0
+        var downY = 0
+        var dragged = false
+        container.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX; downRawY = event.rawY
+                    downX = params.x; downY = params.y
+                    dragged = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - downRawX).toInt()
+                    val dy = (event.rawY - downRawY).toInt()
+                    if (kotlin.math.abs(dx) > dp(6) || kotlin.math.abs(dy) > dp(6)) dragged = true
+                    params.x = (downX + dx).coerceIn(
+                        0,
+                        (resources.displayMetrics.widthPixels - container.width).coerceAtLeast(0)
+                    )
+                    params.y = (downY + dy).coerceIn(
+                        0,
+                        (resources.displayMetrics.heightPixels - container.height).coerceAtLeast(0)
+                    )
+                    runCatching { windowManager.updateViewLayout(container, params) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (dragged) {
+                        FloatingRecordConfig.savePosition(this, params.x, params.y)
+                    } else if (event.x < container.width - dp(26) || event.y > dp(26)) {
+                        toggleFloatingRecording()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+        runCatching { windowManager.addView(container, params) }.onSuccess {
+            floatingView = container
+            floatingParams = params
+        }
+    }
+
+    private fun toggleFloatingRecording() {
+        val message = if (RecordingController.isRecordingOrStarting) {
+            RecordingController.stop(this)
+        } else {
+            RecordingController.start(this)
+        }
+        ButtonEventStore.record(
+            ButtonEvent.recordingResult(
+                message,
+                message.contains("requested", ignoreCase = true)
+            )
+        )
+    }
+
+    private fun removeFloatingRecordButton() {
+        val view = floatingView ?: return
+        floatingView = null
+        floatingParams = null
+        runCatching { (getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(view) }
+    }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
     private fun playScreenReadyTone() {
         playScreenTransitionTone(
             tones = intArrayOf(
@@ -371,7 +537,17 @@ class BleButtonAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        // Screen content is deliberately not inspected.
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val nextPackage = event.packageName?.toString() ?: return
+        if (nextPackage == "com.android.systemui") {
+            removeFloatingRecordButton()
+            return
+        }
+        if (nextPackage != foregroundPackage) {
+            dismissedPackage = null
+            foregroundPackage = nextPackage
+        }
+        refreshFloatingRecordButton()
     }
 
     override fun onInterrupt() {
@@ -389,6 +565,13 @@ class BleButtonAccessibilityService : AccessibilityService() {
         if (screenReceiverRegistered) {
             unregisterReceiver(screenOnReceiver)
             screenReceiverRegistered = false
+        }
+        removeFloatingRecordButton()
+        (getSystemService(Context.INPUT_SERVICE) as InputManager)
+            .unregisterInputDeviceListener(this)
+        if (configReceiverRegistered) {
+            unregisterReceiver(floatingConfigReceiver)
+            configReceiverRegistered = false
         }
         super.onDestroy()
     }
