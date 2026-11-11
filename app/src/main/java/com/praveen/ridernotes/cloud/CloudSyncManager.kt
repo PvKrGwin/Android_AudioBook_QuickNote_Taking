@@ -2,6 +2,7 @@ package com.praveen.ridernotes.cloud
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -23,7 +24,8 @@ object CloudSyncManager {
     data class Status(
         val destinationName: String?,
         val mode: Mode,
-        val message: String
+        val message: String,
+        val destinationPath: String? = null
     )
 
     fun destinationUri(context: Context): Uri? = preferences(context)
@@ -35,10 +37,23 @@ object CloudSyncManager {
         val name = uri?.let {
             runCatching { DocumentFile.fromTreeUri(context, it)?.name }.getOrNull()
         }
+        val path = uri?.let {
+            runCatching {
+                val treeId = DocumentsContract.getTreeDocumentId(it)
+                val readableTree = Uri.decode(treeId).replace(':', '/')
+                val provider = it.authority
+                    ?.substringBefore(".documents")
+                    ?.substringAfterLast('.')
+                    ?.replaceFirstChar(Char::uppercase)
+                listOfNotNull(provider, readableTree.takeIf(String::isNotBlank))
+                    .joinToString(" › ")
+            }.getOrNull() ?: it.toString()
+        }
         return Status(
             destinationName = name ?: uri?.lastPathSegment,
             mode = mode(context),
-            message = preferences(context).getString(KEY_STATUS, "").orEmpty()
+            message = preferences(context).getString(KEY_STATUS, "").orEmpty(),
+            destinationPath = path
         )
     }
 

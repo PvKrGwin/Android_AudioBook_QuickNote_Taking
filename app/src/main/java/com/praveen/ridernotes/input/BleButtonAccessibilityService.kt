@@ -556,8 +556,10 @@ class BleButtonAccessibilityService : AccessibilityService(), InputManager.Input
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val nextPackage = event.packageName?.toString() ?: return
-        if (nextPackage == "com.android.systemui") {
-            removeFloatingRecordButton()
+        // Adding our accessibility overlay produces a Rider Notes window event.
+        // System UI also produces transient events for volume/notification UI.
+        // Neither event represents the user leaving the active media app.
+        if (nextPackage == packageName || nextPackage == "com.android.systemui") {
             return
         }
         if (nextPackage != foregroundPackage) {

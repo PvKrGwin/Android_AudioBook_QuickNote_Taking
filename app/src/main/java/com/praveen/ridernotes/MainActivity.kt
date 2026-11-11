@@ -1444,6 +1444,13 @@ private fun DetectorScreen(
                                             "Cloud folder: $it"
                                         } ?: "No cloud folder selected"
                                     )
+                                    cloudSyncStatus.value.destinationPath?.let { path ->
+                                        Text(
+                                            "Saved folder path: $path",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                     Text(
                                         "Choose a folder from Google Drive, OneDrive, or another " +
                                             "provider shown by Android. The choice remains after restart."
@@ -1552,25 +1559,30 @@ private fun DetectorScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            OutlinedButton(onClick = onRefreshNotes) { Text("Refresh") }
+                            OutlinedButton(onClick = {
+                                selectedNotePaths.value = emptySet()
+                                onRefreshNotes()
+                            }) { Text("Refresh") }
                             OutlinedButton(onClick = onImportBackup) {
                                 Text("Import backup")
                             }
                         }
-                        if (selectedNotes.isNotEmpty()) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = { onExportNotes(selectedNotes) },
+                                enabled = selectedNotes.isNotEmpty()
                             ) {
-                                Button(onClick = { onExportNotes(selectedNotes) }) {
-                                    Text("Export (${selectedNotes.size})")
-                                }
-                                Button(onClick = {
-                                    showDeleteConfirmation.value = true
-                                }) {
-                                    Text("Delete (${selectedNotes.size})")
-                                }
+                                Text("Export (${selectedNotes.size})")
+                            }
+                            Button(
+                                onClick = { showDeleteConfirmation.value = true },
+                                enabled = selectedNotes.isNotEmpty()
+                            ) {
+                                Text("Delete (${selectedNotes.size})")
                             }
                         }
                     }
