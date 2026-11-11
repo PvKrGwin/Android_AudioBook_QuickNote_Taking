@@ -33,7 +33,9 @@ object MediaControlGateway {
         "com.google.android.apps.youtube.music" to "YouTube Music",
         "com.google.android.apps.books" to "Google Play Books",
         "com.netflix.mediaclient" to "Netflix",
-        "org.coursera.android" to "Coursera"
+        "org.coursera.android" to "Coursera",
+        "com.udemy.android" to "Udemy",
+        "com.udemy.android.ufb" to "Udemy Business"
     )
 
     fun isSupportedPackage(packageName: String?): Boolean =

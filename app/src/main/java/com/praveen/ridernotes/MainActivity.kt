@@ -1139,7 +1139,7 @@ private fun DetectorScreen(
                                     }
                                     Text(
                                         "When enabled, a draggable Rider Notes button appears over Audible, " +
-                                            "YouTube, YouTube Music, Google Play Books, Netflix and Coursera " +
+                                            "YouTube, YouTube Music, Google Play Books, Netflix, Coursera and Udemy " +
                                             "only while the configured Bluetooth remote is disconnected. " +
                                             "Tap it to start or stop a media note; tap × to hide it until the media app is reopened. " +
                                             "The Rider Notes accessibility detector must remain enabled."
