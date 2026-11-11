@@ -19,6 +19,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.provider.DocumentsContract
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
@@ -265,6 +266,8 @@ class MainActivity : ComponentActivity() {
                     onSetManualSourceLink = ::setManualSourceLink,
                     cloudSyncStatus = cloudSyncStatus,
                     onChooseCloudFolder = ::chooseCloudFolder,
+                    onOpenCloudFolder = ::openCloudFolder,
+                    onCopyCloudFolder = ::copyCloudFolder,
                     onRemoveCloudFolder = ::removeCloudFolder,
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
@@ -469,6 +472,36 @@ class MainActivity : ComponentActivity() {
 
     private fun chooseCloudFolder() {
         cloudFolderLauncher.launch(CloudSyncManager.destinationUri(this))
+    }
+
+    private fun openCloudFolder() {
+        val uri = CloudSyncManager.destinationUri(this) ?: return
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        val opened = runCatching {
+            startActivity(Intent(Intent.ACTION_VIEW).setData(uri).addFlags(flags))
+        }.isSuccess
+        if (!opened) {
+            runCatching {
+                startActivity(
+                    Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                        .putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri)
+                        .addFlags(flags)
+                )
+            }.onFailure {
+                backupStatus.value = "The selected cloud provider could not open this folder"
+            }
+        }
+    }
+
+    private fun copyCloudFolder() {
+        val uri = CloudSyncManager.destinationUri(this) ?: return
+        val path = CloudSyncManager.status(this).destinationPath.orEmpty()
+        val value = listOf(path, uri.toString()).filter(String::isNotBlank).joinToString("\n")
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(
+            ClipData.newPlainText("Rider Notes cloud folder", value)
+        )
+        backupStatus.value = "Cloud folder location copied"
     }
 
     private fun removeCloudFolder() {
@@ -930,6 +963,8 @@ private fun DetectorScreen(
     onSetManualSourceLink: (SavedVoiceNote, String) -> Boolean,
     cloudSyncStatus: State<CloudSyncManager.Status>,
     onChooseCloudFolder: () -> Unit,
+    onOpenCloudFolder: () -> Unit,
+    onCopyCloudFolder: () -> Unit,
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
@@ -1443,11 +1478,15 @@ private fun DetectorScreen(
                                         } ?: "No cloud folder selected"
                                     )
                                     cloudSyncStatus.value.destinationPath?.let { path ->
-                                        Text(
-                                            "Saved folder path: $path",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
+                                        TextButton(onClick = onOpenCloudFolder) {
+                                            Text(
+                                                "📁 Saved folder: $path",
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+                                        OutlinedButton(onClick = onCopyCloudFolder) {
+                                            Text("Copy folder location")
+                                        }
                                     }
                                     Text(
                                         "Choose a folder from Google Drive, OneDrive, or another " +
