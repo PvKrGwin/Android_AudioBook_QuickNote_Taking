@@ -75,6 +75,7 @@ fun TopicLibraryScreen(
     var insertionIndex by remember { mutableIntStateOf(-1) }
     var actionPlacement by remember { mutableStateOf<TopicPlacement?>(null) }
     var linkItemId by remember { mutableStateOf<String?>(null) }
+    var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     var deleteGroupTarget by remember { mutableStateOf<TopicGroup?>(null) }
     var expandedPlacements by remember { mutableStateOf<Set<String>>(emptySet()) }
     var colorPlacement by remember { mutableStateOf<TopicPlacement?>(null) }
@@ -156,14 +157,63 @@ fun TopicLibraryScreen(
         }, confirmButton = { TextButton(onClick = { dialog = null }) { Text("Close") } })
     }
     if (linkItemId != null) {
-        AlertDialog(onDismissRequest = { linkItemId = null }, title = { Text("Link point to another group") }, text = {
-            LazyColumn { items(library.groups, key = { it.id }) { group ->
-                TextButton(onClick = {
-                    TopicLibraryRepository.linkItem(context, linkItemId!!, group.id)
-                    linkItemId = null; refresh()
-                }) { Text(groupPath(library, group)) }
-            } }
-        }, confirmButton = { TextButton(onClick = { linkItemId = null }) { Text("Cancel") } })
+        val selectedFolder = library.groups.firstOrNull { it.id == linkPickerGroupId }
+        val visibleFolders = library.groups
+            .filter { it.parentId == linkPickerGroupId }
+            .sortedBy { it.order }
+        val alreadyLinkedHere = selectedFolder?.let { folder ->
+            library.placements.any {
+                it.itemId == linkItemId && it.groupId == folder.id
+            }
+        } == true
+        AlertDialog(
+            onDismissRequest = { linkItemId = null; linkPickerGroupId = null },
+            title = {
+                Text(selectedFolder?.let { groupPath(library, it) } ?: "Choose destination folder")
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (selectedFolder != null) {
+                        Button(
+                            onClick = {
+                                TopicLibraryRepository.linkItem(
+                                    context,
+                                    linkItemId!!,
+                                    selectedFolder.id
+                                )
+                                linkItemId = null
+                                linkPickerGroupId = null
+                                refresh()
+                            },
+                            enabled = !alreadyLinkedHere,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (alreadyLinkedHere) "Already linked here" else "Link to this folder")
+                        }
+                    }
+                    LazyColumn {
+                        items(visibleFolders, key = { it.id }) { group ->
+                            TextButton(
+                                onClick = { linkPickerGroupId = group.id },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("📁 ${group.name}") }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { linkItemId = null; linkPickerGroupId = null }) {
+                    Text("Cancel")
+                }
+            },
+            dismissButton = {
+                if (selectedFolder != null) {
+                    TextButton(onClick = { linkPickerGroupId = selectedFolder.parentId }) {
+                        Text("← Back")
+                    }
+                }
+            }
+        )
     }
     actionPlacement?.let { placement ->
         val pointIndex = placements.indexOfFirst { it.id == placement.id }
@@ -180,7 +230,11 @@ fun TopicLibraryScreen(
                 TextButton(onClick = { insertionIndex = pointIndex + 1; actionPlacement = null; filePicker.launch(arrayOf("*/*")) }) { Text("Insert file after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "recordings"; actionPlacement = null }) { Text("Insert existing recording after this point") }
                 TextButton(onClick = { onStartRecording(placement.groupId, pointIndex + 1); actionPlacement = null }) { Text("Record after this point") }
-                TextButton(onClick = { linkItemId = placement.itemId; actionPlacement = null }) { Text("Link this point to another group") }
+                TextButton(onClick = {
+                    linkPickerGroupId = null
+                    linkItemId = placement.itemId
+                    actionPlacement = null
+                }) { Text("Link this point to another group") }
                 val deletesTopicRecording = TopicLibraryRepository.willDeleteTopicRecording(
                     context,
                     placement.id
