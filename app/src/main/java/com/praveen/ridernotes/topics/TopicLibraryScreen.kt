@@ -181,7 +181,24 @@ fun TopicLibraryScreen(
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "recordings"; actionPlacement = null }) { Text("Insert existing recording after this point") }
                 TextButton(onClick = { onStartRecording(placement.groupId, pointIndex + 1); actionPlacement = null }) { Text("Record after this point") }
                 TextButton(onClick = { linkItemId = placement.itemId; actionPlacement = null }) { Text("Link this point to another group") }
-                TextButton(onClick = { TopicLibraryRepository.removePlacement(context, placement.id); actionPlacement = null; refresh() }) { Text("Remove from this group") }
+                val deletesTopicRecording = TopicLibraryRepository.willDeleteTopicRecording(
+                    context,
+                    placement.id
+                )
+                TextButton(onClick = {
+                    TopicLibraryRepository.removePlacement(context, placement.id)
+                    actionPlacement = null
+                    onRefreshNotes()
+                    refresh()
+                }) {
+                    Text(
+                        if (deletesTopicRecording) {
+                            "Delete this topic recording permanently"
+                        } else {
+                            "Remove from this group"
+                        }
+                    )
+                }
             }
         }, confirmButton = { TextButton(onClick = { actionPlacement = null }) { Text("Close") } })
     }

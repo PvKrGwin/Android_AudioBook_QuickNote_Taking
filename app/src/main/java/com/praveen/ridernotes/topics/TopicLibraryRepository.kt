@@ -111,6 +111,14 @@ object TopicLibraryRepository {
         save(context, pruneOrphans(context, current.copy(placements = current.placements.filterNot { it.id == placementId })))
     }
 
+    fun willDeleteTopicRecording(context: Context, placementId: String): Boolean {
+        val current = load(context)
+        val placement = current.placements.firstOrNull { it.id == placementId } ?: return false
+        if (current.placements.count { it.itemId == placement.itemId } > 1) return false
+        val item = current.items.firstOrNull { it.id == placement.itemId } ?: return false
+        return item.type == TYPE_RECORDING && isTopicOnlyRecording(context, item)
+    }
+
     @Synchronized fun move(context: Context, placementId: String, delta: Int) {
         val current = load(context)
         val placement = current.placements.firstOrNull { it.id == placementId } ?: return
@@ -178,10 +186,30 @@ object TopicLibraryRepository {
 
     private fun pruneOrphans(context: Context, library: TopicLibrary): TopicLibrary {
         val used = library.placements.mapTo(mutableSetOf()) { it.itemId }
-        library.items.filter { it.id !in used && it.type == TYPE_ATTACHMENT }.forEach { item ->
-            attachmentFile(context, item)?.delete()
+        library.items.filter { it.id !in used }.forEach { item ->
+            when {
+                item.type == TYPE_ATTACHMENT -> attachmentFile(context, item)?.delete()
+                item.type == TYPE_RECORDING && isTopicOnlyRecording(context, item) -> {
+                    val audioName = item.target ?: return@forEach
+                    val voiceFolder = File(context.filesDir, "voice_notes")
+                    val baseName = audioName.substringBeforeLast('.')
+                    listOf("m4a", "json", "txt", "vtt", "srt").forEach { extension ->
+                        File(voiceFolder, "$baseName.$extension").delete()
+                    }
+                }
+            }
         }
         return library.copy(items = library.items.filter { it.id in used })
+    }
+
+    private fun isTopicOnlyRecording(context: Context, item: TopicItem): Boolean {
+        val audioName = item.target ?: return false
+        val metadata = File(
+            File(context.filesDir, "voice_notes"),
+            audioName.substringBeforeLast('.') + ".json"
+        )
+        return runCatching { JSONObject(metadata.readText()).optBoolean("topicOnly", false) }
+            .getOrDefault(false)
     }
 
     private fun save(context: Context, library: TopicLibrary) {
