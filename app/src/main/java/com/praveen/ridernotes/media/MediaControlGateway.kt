@@ -850,49 +850,43 @@ object MediaControlGateway {
             }
 
             "org.coursera.android" -> {
-                // Prefer the album/subtitle as the course. Coursera's TITLE and
-                // ARTIST can contain a combined "course + lesson" string.
-                val courseTitle = listOfNotNull(album, displaySubtitle)
-                    .firstOrNull { candidate ->
-                        !candidate.contains("module", ignoreCase = true)
-                    }
-                    ?: notificationText.firstOrNull { candidate ->
-                        !candidate.contains("module", ignoreCase = true) &&
-                            candidate.length in 3..160 &&
-                            !candidate.equals(title, ignoreCase = true)
-                    }
-                    ?: title ?: displayTitle
-                val university = rawAuthor ?: albumArtist
-                val excluded = listOfNotNull(
-                    courseTitle,
-                    university,
-                    "Coursera"
-                )
-                val rawChapter = (
-                    listOfNotNull(displayTitle, displayDescription, title, artist) + notificationText
-                )
-                    .map { it.trim() }
-                    .firstOrNull { candidate ->
-                        candidate.isNotBlank() &&
-                            candidate.length <= 200 &&
-                            !candidate.matches(Regex("(?i)^module\\s*\\d+$")) &&
-                            excluded.none { it.equals(candidate, ignoreCase = true) }
-                    }
-                val chapter = rawChapter?.let { candidate ->
-                    val withoutCourse = courseTitle?.let { course ->
-                        candidate.removePrefix(course).trim(' ', '-', ':', '·', '|')
-                    } ?: candidate
-                    withoutCourse.takeIf { it.isNotBlank() && !it.equals(courseTitle, true) }
-                }
                 val allText = listOfNotNull(
                     title, displayTitle, displaySubtitle, displayDescription,
                     album, rawAuthor, artist, albumArtist
                 ) + notificationText
                 val moduleNumber = allText.asSequence()
-                    .mapNotNull { Regex("(?i)\\bmodule\\s*([0-9]+)\\b").find(it)?.groupValues?.getOrNull(1) }
+                    .mapNotNull { value ->
+                        Regex("(?i)\\b(?:module|week|unit)\\s*[-:]?\\s*([0-9]+)\\b")
+                            .find(value)?.groupValues?.getOrNull(1)
+                    }
                     .firstOrNull()
+                // Coursera publishes the currently playing video as TITLE.
+                // On the tested build ARTIST carries the course name; album and
+                // subtitle may repeat the lesson and must not become the course.
+                val rawChapter = title ?: displayTitle ?: displayDescription
+                val university = albumArtist ?: rawAuthor?.takeUnless { candidate ->
+                    candidate.equals(rawChapter, ignoreCase = true) ||
+                        candidate.equals(artist, ignoreCase = true)
+                }
+                val courseTitle = artist?.takeUnless { candidate ->
+                    candidate.equals(rawChapter, ignoreCase = true) ||
+                        candidate.equals(university, ignoreCase = true) ||
+                        candidate.matches(Regex("(?i)^\\s*(?:module|week|unit)\\s*[-:]?\\s*\\d+\\s*$"))
+                } ?: notificationText.firstOrNull { candidate ->
+                    candidate.isNotBlank() &&
+                        !candidate.equals(rawChapter, ignoreCase = true) &&
+                        !candidate.equals(university, ignoreCase = true) &&
+                        !candidate.contains("module", ignoreCase = true) &&
+                        candidate.length <= 160
+                }
+                val chapter = rawChapter?.let { candidate ->
+                    val withoutCourse = courseTitle?.let { course ->
+                        candidate.removePrefix(course).trim(' ', '-', ':', '·', '|')
+                    } ?: candidate
+                    withoutCourse.takeIf { it.isNotBlank() }
+                }
                 MappedMediaFields(
-                    title = courseTitle,
+                    title = courseTitle ?: "Coursera course",
                     module = moduleNumber?.let { "Module $it" },
                     chapter = chapter,
                     author = university

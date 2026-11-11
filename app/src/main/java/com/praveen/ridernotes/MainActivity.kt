@@ -1283,20 +1283,18 @@ private fun DetectorScreen(
                                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
                                         Checkbox(
-                                            checked = floatingRecordEnabled.value,
-                                            onCheckedChange = onSetFloatingRecordEnabled
+                                            checked = false,
+                                            onCheckedChange = null,
+                                            enabled = false
                                         )
                                         Text(
-                                            "Floating record button without remote",
+                                            "Floating record button without remote — disabled",
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
                                     Text(
-                                        "When enabled, a draggable Rider Notes button appears over Audible, " +
-                                            "YouTube, YouTube Music, Google Play Books, Netflix, Coursera and Udemy " +
-                                            "only while the configured Bluetooth remote is disconnected. " +
-                                            "Tap it to start or stop a media note; tap × to hide it until the media app is reopened. " +
-                                            "The Rider Notes accessibility detector must remain enabled."
+                                        "This option is temporarily unavailable to prevent interference " +
+                                            "with Bluetooth earphones and remotes. It remains off after restart."
                                     )
                                 }
                             }

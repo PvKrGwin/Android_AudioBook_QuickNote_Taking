@@ -10,13 +10,19 @@ object FloatingRecordConfig {
     private const val POSITION_X = "position_x"
     private const val POSITION_Y = "position_y"
 
-    fun isEnabled(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(ENABLED, false)
+    // Temporarily disabled: accessibility overlays can interfere with some
+    // Bluetooth headset/remote combinations. Keep the stored state forced off.
+    fun isEnabled(context: Context): Boolean {
+        val preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (preferences.getBoolean(ENABLED, false)) {
+            preferences.edit().putBoolean(ENABLED, false).apply()
+        }
+        return false
+    }
 
-    fun setEnabled(context: Context, enabled: Boolean) {
+    fun setEnabled(context: Context, @Suppress("UNUSED_PARAMETER") enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putBoolean(ENABLED, enabled).apply()
+            .edit().putBoolean(ENABLED, false).apply()
         context.sendBroadcast(Intent(ACTION_CHANGED).setPackage(context.packageName))
     }
 
