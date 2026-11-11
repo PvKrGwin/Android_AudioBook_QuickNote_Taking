@@ -875,7 +875,22 @@ object MediaControlGateway {
                             candidate.length <= 200 &&
                             excluded.none { it.equals(candidate, ignoreCase = true) }
                     }
-                MappedMediaFields(courseTitle, module, chapter, university)
+                val allText = listOfNotNull(
+                    title, displayTitle, displaySubtitle, displayDescription,
+                    album, rawAuthor, artist, albumArtist
+                ) + notificationText
+                val moduleNumber = allText.asSequence()
+                    .mapNotNull { Regex("(?i)\\bmodule\\s*([0-9]+)\\b").find(it)?.groupValues?.getOrNull(1) }
+                    .firstOrNull()
+                val moduleHeading = listOfNotNull(
+                    moduleNumber?.let { "Module $it" },
+                    module,
+                    courseTitle
+                ).distinctBy { it.lowercase() }.joinToString(" · ").takeIf { it.isNotBlank() }
+
+                // Notes are titled by the lesson/chapter. The Notes tab groups
+                // them under the numbered module heading below.
+                MappedMediaFields(chapter ?: courseTitle, moduleHeading, chapter, university)
             }
 
             else -> {

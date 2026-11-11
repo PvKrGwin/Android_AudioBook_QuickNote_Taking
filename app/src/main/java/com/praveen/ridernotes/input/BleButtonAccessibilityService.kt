@@ -347,10 +347,19 @@ class BleButtonAccessibilityService : AccessibilityService(), InputManager.Input
     override fun onInputDeviceChanged(deviceId: Int) = refreshFloatingRecordButton()
 
     private fun refreshFloatingRecordButton() {
-        val shouldShow = FloatingRecordConfig.isEnabled(this) &&
-            MediaControlGateway.isSupportedPackage(foregroundPackage) &&
-            foregroundPackage != dismissedPackage &&
-            !isConfiguredRemoteConnected()
+        val enabled = FloatingRecordConfig.isEnabled(this)
+        val supported = MediaControlGateway.isSupportedPackage(foregroundPackage)
+        val remoteConnected = isConfiguredRemoteConnected()
+        val shouldShow = enabled && supported &&
+            foregroundPackage != dismissedPackage && !remoteConnected
+        if (enabled && supported) {
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "FLOATING_RECORD_CHECK: app=$foregroundPackage, remoteConnected=$remoteConnected, dismissed=${foregroundPackage == dismissedPackage}",
+                    true
+                )
+            )
+        }
         if (shouldShow) showFloatingRecordButton() else removeFloatingRecordButton()
     }
 
@@ -443,6 +452,14 @@ class BleButtonAccessibilityService : AccessibilityService(), InputManager.Input
         runCatching { windowManager.addView(container, params) }.onSuccess {
             floatingView = container
             floatingParams = params
+            ButtonEventStore.record(ButtonEvent.recordingResult("Floating record button shown for $foregroundPackage", true))
+        }.onFailure { error ->
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "Floating record button failed: ${error.javaClass.simpleName}: ${error.message}",
+                    false
+                )
+            )
         }
     }
 

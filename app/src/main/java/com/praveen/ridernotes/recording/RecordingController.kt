@@ -16,6 +16,10 @@ object RecordingController {
     var isExtensionWindowOpen: Boolean = false
         internal set
 
+    @Volatile
+    var topicRecordingStartedAtElapsedMs: Long? = null
+        internal set
+
     fun start(context: Context): String {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
@@ -40,6 +44,28 @@ object RecordingController {
         } catch (error: RuntimeException) {
             isRecordingOrStarting = false
             MediaControlGateway.finishVoiceNote(context, delayMs = 0L)
+            "Recording could not start: ${error.javaClass.simpleName}"
+        }
+    }
+
+    fun startTopic(context: Context): String {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
+            PackageManager.PERMISSION_GRANTED
+        ) return "Microphone permission required"
+        if (isRecordingOrStarting) return "Recording is already active"
+
+        topicRecordingStartedAtElapsedMs = null
+        isRecordingOrStarting = true
+        return try {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, VoiceRecordingService::class.java)
+                    .setAction(VoiceRecordingService.ACTION_START)
+                    .putExtra(VoiceRecordingService.EXTRA_TOPIC_ONLY, true)
+            )
+            "Topic recording start requested"
+        } catch (error: RuntimeException) {
+            isRecordingOrStarting = false
             "Recording could not start: ${error.javaClass.simpleName}"
         }
     }

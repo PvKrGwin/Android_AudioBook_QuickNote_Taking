@@ -48,6 +48,7 @@ class VoiceRecordingService : Service() {
     private var startCueCompleted = false
     private var deferResumeUntilCallEnds = false
     private var stopCompletionStarted = false
+    private var topicOnly = false
 
     private val beginAfterBeep = Runnable { beginRecording() }
     private val warningBeep = Runnable { playNextWarningBeep() }
@@ -92,7 +93,10 @@ class VoiceRecordingService : Service() {
             ACTION_STOP -> stopAndSave("remote press")
             ACTION_STOP_FOR_CALL ->
                 stopAndSave("incoming app call", deferMediaResume = true)
-            ACTION_START -> startRecordingFlow()
+            ACTION_START -> {
+                topicOnly = intent.getBooleanExtra(EXTRA_TOPIC_ONLY, false)
+                startRecordingFlow()
+            }
             ACTION_EXTEND -> extendRecording()
             ACTION_HOLD_AUTO_STOP -> holdAutoStopForGesture()
         }
@@ -104,7 +108,12 @@ class VoiceRecordingService : Service() {
         pauseCheckAttempts = 0
         acquireRecordingWakeLock()
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
-        if (MediaControlGateway.currentVoiceNoteContext()?.isStandalone != false) {
+        if (topicOnly) {
+            announceRecordingMode(
+                announcement = TOPIC_MODE_ANNOUNCEMENT,
+                utteranceId = TOPIC_MODE_UTTERANCE_ID
+            )
+        } else if (MediaControlGateway.currentVoiceNoteContext()?.isStandalone != false) {
             announceRecordingMode(
                 announcement = INDIVIDUAL_MODE_ANNOUNCEMENT,
                 utteranceId = INDIVIDUAL_MODE_UTTERANCE_ID
@@ -119,7 +128,7 @@ class VoiceRecordingService : Service() {
 
     @Suppress("DEPRECATION")
     private fun beginRecording() {
-        if (!MediaControlGateway.ensureVoiceNoteMediaPaused(this)) {
+        if (!topicOnly && !MediaControlGateway.ensureVoiceNoteMediaPaused(this)) {
             pauseCheckAttempts += 1
             if (pauseCheckAttempts <= MAX_PAUSE_ATTEMPTS) {
                 updateNotification("Waiting for media to pause…")
@@ -146,7 +155,7 @@ class VoiceRecordingService : Service() {
             recorderStage = "create output file"
             val folder = File(filesDir, "voice_notes").apply { mkdirs() }
             val timestamp = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
-            val mediaContext = MediaControlGateway.currentVoiceNoteContext()
+            val mediaContext = if (topicOnly) null else MediaControlGateway.currentVoiceNoteContext()
             val sourceName = if (mediaContext?.isStandalone == false) {
                 safeFilePart(mediaContext.appName ?: "Media")
             } else {
@@ -213,6 +222,15 @@ class VoiceRecordingService : Service() {
             outputFile = file
             recorder = mediaRecorder
             recordingStarted = true
+            if (topicOnly) {
+                val startedAt = SystemClock.elapsedRealtime()
+                RecordingController.topicRecordingStartedAtElapsedMs = startedAt
+                sendBroadcast(
+                    Intent(ACTION_TOPIC_RECORDING_STARTED)
+                        .setPackage(packageName)
+                        .putExtra(EXTRA_STARTED_AT_ELAPSED_MS, startedAt)
+                )
+            }
             updateNotification("Recording voice note…")
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
@@ -220,7 +238,7 @@ class VoiceRecordingService : Service() {
                     true
                 )
             )
-            scheduleRecordingDeadline()
+            if (!topicOnly) scheduleRecordingDeadline()
             handler.post(callSafetyCheck)
         } catch (error: Exception) {
             outputFile?.delete()
@@ -229,7 +247,11 @@ class VoiceRecordingService : Service() {
             recorder = null
             recordingStarted = false
             RecordingController.isRecordingOrStarting = false
-            MediaControlGateway.finishVoiceNote(this)
+            if (topicOnly) {
+                RecordingController.topicRecordingStartedAtElapsedMs = null
+                sendBroadcast(Intent(ACTION_TOPIC_RECORDING_FINISHED).setPackage(packageName))
+            }
+            if (!topicOnly) MediaControlGateway.finishVoiceNote(this)
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
                     "Recording failed at $recorderStage: ${error.javaClass.simpleName}: ${error.message?.take(160)}",
@@ -272,19 +294,27 @@ class VoiceRecordingService : Service() {
         outputFile = null
         RecordingController.isRecordingOrStarting = false
         RecordingController.isExtensionWindowOpen = false
-
-        val mediaContext = MediaControlGateway.currentVoiceNoteContext()
+        val mediaContext = if (topicOnly) null else MediaControlGateway.currentVoiceNoteContext()
         if (saved && file != null) {
             saveMetadata(file, mediaContext)
             TopicLibraryRepository.attachPendingRecording(
                 this,
                 file.name,
-                mediaContext?.title ?: file.nameWithoutExtension
+                mediaContext?.title ?: if (topicOnly) {
+                    "Topic recording · " + SimpleDateFormat(
+                        "dd MMM yyyy, h:mm a",
+                        Locale.getDefault()
+                    ).format(Date())
+                } else file.nameWithoutExtension
             )
-            ScribTranscriber.enqueue(this, file)
+            if (!topicOnly) ScribTranscriber.enqueue(this, file)
             CloudSyncManager.enqueueNow(this)
         } else {
             TopicLibraryRepository.clearPendingRecordingGroup(this)
+        }
+        if (topicOnly) {
+            RecordingController.topicRecordingStartedAtElapsedMs = null
+            sendBroadcast(Intent(ACTION_TOPIC_RECORDING_FINISHED).setPackage(packageName))
         }
 
         val source = if (mediaContext?.isStandalone == false) {
@@ -518,11 +548,13 @@ class VoiceRecordingService : Service() {
     }
 
     private fun finishStopAfterAnnouncement() {
-        MediaControlGateway.finishVoiceNote(
-            this,
-            delayMs = RESUME_DELAY_MS,
-            deferForCall = deferResumeUntilCallEnds
-        )
+        if (!topicOnly) {
+            MediaControlGateway.finishVoiceNote(
+                this,
+                delayMs = RESUME_DELAY_MS,
+                deferForCall = deferResumeUntilCallEnds
+            )
+        }
         completeStop()
     }
 
@@ -547,7 +579,8 @@ class VoiceRecordingService : Service() {
                 .put("audioFile", audioFile.name)
                 .put("metadataVersion", 4)
                 .put("recordedAtEpochMs", recordedAt)
-                .put("type", if (mediaContext?.isStandalone == false) "MEDIA_LINKED" else "STANDALONE")
+                .put("type", if (topicOnly) "TOPIC_ONLY" else if (mediaContext?.isStandalone == false) "MEDIA_LINKED" else "STANDALONE")
+                .put("topicOnly", topicOnly)
                 .put("title", mediaContext?.title ?: standaloneTitle)
                 .put("sourcePackage", mediaContext?.packageName ?: JSONObject.NULL)
                 .put("sourceApp", mediaContext?.appName ?: JSONObject.NULL)
@@ -557,7 +590,7 @@ class VoiceRecordingService : Service() {
                 .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
                 .put("sourceUrl", mediaContext?.sourceUrl ?: JSONObject.NULL)
                 .put("recordingInput", recordingInputLabel)
-                .put("transcriptionStatus", "PENDING")
+                .put("transcriptionStatus", if (topicOnly) "NOT_REQUESTED" else "PENDING")
 
             File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
                 .writeText(json.toString(2))
@@ -574,14 +607,19 @@ class VoiceRecordingService : Service() {
     @Suppress("DEPRECATION")
     private fun acquireRecordingWakeLock() {
         if (recordingWakeLock?.isHeld == true) return
+        val wakeFlags = if (topicOnly) {
+            PowerManager.PARTIAL_WAKE_LOCK
+        } else {
+            PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP
+        }
         recordingWakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                wakeFlags,
                 "${packageName}:voice-note-recording"
             )
             .apply {
                 setReferenceCounted(false)
-                acquire(MAX_RECORDING_MS + WAKE_LOCK_SAFETY_MS)
+                acquire(if (topicOnly) TOPIC_RECORDING_MAX_WAKE_MS else MAX_RECORDING_MS + WAKE_LOCK_SAFETY_MS)
             }
     }
 
@@ -685,6 +723,12 @@ class VoiceRecordingService : Service() {
 
     companion object {
         const val ACTION_START = "com.praveen.ridernotes.action.START_RECORDING"
+        const val EXTRA_TOPIC_ONLY = "com.praveen.ridernotes.extra.TOPIC_ONLY"
+        const val EXTRA_STARTED_AT_ELAPSED_MS = "com.praveen.ridernotes.extra.STARTED_AT_ELAPSED_MS"
+        const val ACTION_TOPIC_RECORDING_STARTED =
+            "com.praveen.ridernotes.action.TOPIC_RECORDING_STARTED"
+        const val ACTION_TOPIC_RECORDING_FINISHED =
+            "com.praveen.ridernotes.action.TOPIC_RECORDING_FINISHED"
         const val ACTION_STOP = "com.praveen.ridernotes.action.STOP_RECORDING"
         const val ACTION_STOP_FOR_CALL =
             "com.praveen.ridernotes.action.STOP_RECORDING_FOR_CALL"
@@ -703,6 +747,7 @@ class VoiceRecordingService : Service() {
         private const val GESTURE_RESOLUTION_GRACE_MS = 1_100L
         private const val DEADLINE_CHECK_MS = 250L
         private const val WAKE_LOCK_SAFETY_MS = 10_000L
+        private const val TOPIC_RECORDING_MAX_WAKE_MS = 12 * 60 * 60 * 1_000L
         private const val START_BEEP_GAP_MS = 400L
         private const val RESUME_DELAY_MS = 1_500L
         private const val BEEP_MS = 300
@@ -713,6 +758,8 @@ class VoiceRecordingService : Service() {
         private const val MAX_PAUSE_ATTEMPTS = 3
         private const val INDIVIDUAL_MODE_ANNOUNCEMENT = "Individual recording mode"
         private const val MEDIA_MODE_ANNOUNCEMENT = "Media note taking mode started"
+        private const val TOPIC_MODE_ANNOUNCEMENT = "Topic recording started"
+        private const val TOPIC_MODE_UTTERANCE_ID = "topic-recording-mode"
         private const val MEDIA_MODE_UTTERANCE_ID = "rider-notes-media-mode"
         private const val RECORD_ENDED_ANNOUNCEMENT = "Record ended"
         private const val RECORD_ENDED_UTTERANCE_ID = "rider_notes_record_ended"

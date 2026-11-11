@@ -3,10 +3,12 @@ package com.praveen.ridernotes
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.ClipData
+import android.content.BroadcastReceiver
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.media.session.MediaSession
@@ -15,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -25,6 +28,8 @@ import androidx.activity.compose.setContent
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -61,6 +66,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -81,9 +87,12 @@ import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 import com.praveen.ridernotes.recording.RecordingController
 import com.praveen.ridernotes.recording.TranscriptSegment
+import com.praveen.ridernotes.recording.VoiceRecordingService
 import com.praveen.ridernotes.transcription.ScribTranscriber
 import com.praveen.ridernotes.topics.TopicLibraryRepository
 import com.praveen.ridernotes.topics.TopicLibraryScreen
+import com.praveen.ridernotes.topics.TopicLibrary
+import com.praveen.ridernotes.topics.TopicGroup
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
@@ -155,6 +164,27 @@ class MainActivity : ComponentActivity() {
         }
     }
     private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
+    private val topicNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
+    private val topicRecordingActive = mutableStateOf(false)
+    private val topicRecordingStartedAtElapsedMs = mutableStateOf<Long?>(null)
+    private val topicRecordingReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                VoiceRecordingService.ACTION_TOPIC_RECORDING_STARTED -> {
+                    topicRecordingActive.value = true
+                    topicRecordingStartedAtElapsedMs.value = intent.getLongExtra(
+                        VoiceRecordingService.EXTRA_STARTED_AT_ELAPSED_MS,
+                        SystemClock.elapsedRealtime()
+                    )
+                }
+                VoiceRecordingService.ACTION_TOPIC_RECORDING_FINISHED -> {
+                    topicRecordingActive.value = false
+                    topicRecordingStartedAtElapsedMs.value = null
+                    refreshSavedNotes()
+                }
+            }
+        }
+    }
     private val playingFileName = mutableStateOf<String?>(null)
     private val playingPositionMs = mutableStateOf(0L)
     private val playingDurationMs = mutableStateOf(0L)
@@ -176,7 +206,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setupDiagnosticMediaSession()
+        ContextCompat.registerReceiver(
+            this,
+            topicRecordingReceiver,
+            IntentFilter().apply {
+                addAction(VoiceRecordingService.ACTION_TOPIC_RECORDING_STARTED)
+                addAction(VoiceRecordingService.ACTION_TOPIC_RECORDING_FINISHED)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
         floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
+        RecordingController.topicRecordingStartedAtElapsedMs?.let { startedAt ->
+            topicRecordingActive.value = true
+            topicRecordingStartedAtElapsedMs.value = startedAt
+        }
 
         setContent {
             RiderNotesTheme {
@@ -192,6 +235,7 @@ class MainActivity : ComponentActivity() {
                     transcriptionLanguage = transcriptionLanguage,
                     onSelectTranscriptionLanguage = ::selectTranscriptionLanguage,
                     savedNotes = savedNotes,
+                    topicNotes = topicNotes,
                     playingFileName = playingFileName,
                     playingPositionMs = playingPositionMs,
                     playingDurationMs = playingDurationMs,
@@ -225,6 +269,9 @@ class MainActivity : ComponentActivity() {
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
                     onStartTopicRecording = ::startTopicRecording,
+                    onStopTopicRecording = ::stopTopicRecording,
+                    topicRecordingActive = topicRecordingActive,
+                    topicRecordingStartedAtElapsedMs = topicRecordingStartedAtElapsedMs,
                     floatingRecordEnabled = floatingRecordEnabled,
                     onSetFloatingRecordEnabled = ::setFloatingRecordEnabled
                 )
@@ -267,6 +314,7 @@ class MainActivity : ComponentActivity() {
         remoteSetupHandler.removeCallbacks(remoteTrainingTimeout)
         if (remoteTraining) RemoteButtonConfig.setTraining(this, false)
         diagnosticMediaSession.release()
+        runCatching { unregisterReceiver(topicRecordingReceiver) }
         super.onDestroy()
     }
 
@@ -408,6 +456,7 @@ class MainActivity : ComponentActivity() {
     private fun refreshSavedNotes() {
         SavedVoiceNoteRepository.synchronizeYouTubeLinks(this)
         savedNotes.value = SavedVoiceNoteRepository.load(this)
+        topicNotes.value = SavedVoiceNoteRepository.load(this, includeTopicOnly = true)
     }
 
     private fun deleteNotes(notes: List<SavedVoiceNote>) {
@@ -446,11 +495,22 @@ class MainActivity : ComponentActivity() {
 
     private fun startTopicRecording(groupId: String, index: Int?) {
         TopicLibraryRepository.setPendingRecordingGroup(this, groupId, index)
-        val result = RecordingController.start(this)
+        val result = RecordingController.startTopic(this)
         if (!result.contains("requested", ignoreCase = true)) {
             TopicLibraryRepository.clearPendingRecordingGroup(this)
+            topicRecordingActive.value = false
+            topicRecordingStartedAtElapsedMs.value = null
+        } else {
+            topicRecordingActive.value = true
         }
         backupStatus.value = result
+    }
+
+    private fun stopTopicRecording() {
+        backupStatus.value = RecordingController.stop(this)
+        topicRecordingActive.value = false
+        topicRecordingStartedAtElapsedMs.value = null
+        playbackHandler.postDelayed(::refreshSavedNotes, 900L)
     }
 
     private fun setFloatingRecordEnabled(enabled: Boolean) {
@@ -828,6 +888,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun DetectorScreen(
     detectorEnabled: State<Boolean>,
@@ -839,6 +900,7 @@ private fun DetectorScreen(
     transcriptionLanguage: State<String>,
     onSelectTranscriptionLanguage: (String) -> Unit,
     savedNotes: State<List<SavedVoiceNote>>,
+    topicNotes: State<List<SavedVoiceNote>>,
     playingFileName: State<String?>,
     playingPositionMs: State<Long>,
     playingDurationMs: State<Long>,
@@ -872,6 +934,9 @@ private fun DetectorScreen(
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
     onStartTopicRecording: (String, Int?) -> Unit,
+    onStopTopicRecording: () -> Unit,
+    topicRecordingActive: State<Boolean>,
+    topicRecordingStartedAtElapsedMs: State<Long?>,
     floatingRecordEnabled: State<Boolean>,
     onSetFloatingRecordEnabled: (Boolean) -> Unit
 ) {
@@ -885,6 +950,11 @@ private fun DetectorScreen(
     val showSharedLinkDetails = remember { mutableStateOf(false) }
     val manualLinkTarget = remember { mutableStateOf<SavedVoiceNote?>(null) }
     val manualLinkText = remember { mutableStateOf("") }
+    val addToTopicNote = remember { mutableStateOf<SavedVoiceNote?>(null) }
+    val context = LocalContext.current
+    val topicLibraryForDialog = remember(addToTopicNote.value) {
+        TopicLibraryRepository.load(context)
+    }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
     }
@@ -914,7 +984,30 @@ private fun DetectorScreen(
             onRetryTranscription = { onRetryTranscription(note) },
             onCopyTitle = { onCopyTitle(note) },
             onOpenSource = { onOpenSource(note) },
-            onSearchSource = { onSearchSource(note) }
+            onSearchSource = { onSearchSource(note) },
+            onLongPress = { addToTopicNote.value = note }
+        )
+    }
+
+    addToTopicNote.value?.let { note ->
+        AlertDialog(
+            onDismissRequest = { addToTopicNote.value = null },
+            title = { Text("Add recording to topic") },
+            text = {
+                LazyColumn {
+                    items(topicLibraryForDialog.groups, key = { it.id }) { group ->
+                        TextButton(onClick = {
+                            TopicLibraryRepository.addRecording(
+                                context, group.id, note.audioFile.name, note.title
+                            )
+                            addToTopicNote.value = null
+                        }) { Text(topicGroupPath(topicLibraryForDialog, group)) }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { addToTopicNote.value = null }) { Text("Cancel") }
+            }
         )
     }
 
@@ -1403,23 +1496,6 @@ private fun DetectorScreen(
                                 Text("Import backup")
                             }
                         }
-                        if (savedNotes.value.isNotEmpty()) {
-                            val allSelected = selectedNotes.size == savedNotes.value.size
-                            OutlinedButton(
-                                onClick = {
-                                    selectedNotePaths.value = if (allSelected) {
-                                        emptySet()
-                                    } else {
-                                        savedNotes.value.mapTo(mutableSetOf()) {
-                                            it.audioFile.absolutePath
-                                        }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(if (allSelected) "Clear selection" else "Select all (${savedNotes.value.size})")
-                            }
-                        }
                         if (selectedNotes.isNotEmpty()) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1488,6 +1564,15 @@ private fun DetectorScreen(
                                 }
 
                                 if (source in expandedSources.value) {
+                                    item(key = "select-source-$source") {
+                                        val paths = sourceNotes.mapTo(mutableSetOf()) { it.audioFile.absolutePath }
+                                        val allSelected = paths.all { it in selectedNotePaths.value }
+                                        TextButton(onClick = {
+                                            selectedNotePaths.value = if (allSelected) {
+                                                selectedNotePaths.value - paths
+                                            } else selectedNotePaths.value + paths
+                                        }) { Text(if (allSelected) "Clear this media selection" else "Select all in $source") }
+                                    }
                                     if (supportsTitleGrouping(source)) {
                                         val notesByTitle = sourceNotes
                                             .groupBy { titleGroupKey(source, it) }
@@ -1536,6 +1621,13 @@ private fun DetectorScreen(
                                                             Text("🔗 Add or edit link for this title")
                                                         }
                                                     }
+                                                    val titlePaths = titleNotes.mapTo(mutableSetOf()) { it.audioFile.absolutePath }
+                                                    val allTitleSelected = titlePaths.all { it in selectedNotePaths.value }
+                                                    TextButton(onClick = {
+                                                        selectedNotePaths.value = if (allTitleSelected) {
+                                                            selectedNotePaths.value - titlePaths
+                                                        } else selectedNotePaths.value + titlePaths
+                                                    }) { Text(if (allTitleSelected) "Clear this title selection" else "Select all in this title") }
                                                 }
                                             }
                                             if (titleKey in expandedTitles.value) {
@@ -1563,9 +1655,18 @@ private fun DetectorScreen(
 
                 3 -> {
                     TopicLibraryScreen(
-                        savedNotes = savedNotes.value,
+                        savedNotes = topicNotes.value,
                         onPlayRecording = onPlayNote,
                         onStartRecording = onStartTopicRecording,
+                        onStopRecording = onStopTopicRecording,
+                        isRecording = topicRecordingActive.value,
+                        recordingStartedAtElapsedMs = topicRecordingStartedAtElapsedMs.value,
+                        playingFileName = playingFileName.value,
+                        playbackPositionMs = playingPositionMs.value,
+                        playbackDurationMs = playingDurationMs.value,
+                        playbackPaused = playbackPaused.value,
+                        onSeekRecording = onSeekNote,
+                        onStopPlayback = onStopNote,
                         onRefreshNotes = onRefreshNotes
                     )
                 }
@@ -1624,6 +1725,9 @@ private fun creatorLabel(source: String): String = when {
 
 private fun titleGroupKey(source: String, note: SavedVoiceNote): String {
     val title = note.title.trim().ifBlank { "Untitled" }
+    if (source.equals("Coursera", ignoreCase = true)) {
+        return note.module?.trim()?.takeIf { it.isNotBlank() } ?: title
+    }
     return if (YouTubeSourceLink.isSupportedSourceApp(source)) {
         "$title\u001F${note.author?.trim().orEmpty()}"
     } else {
@@ -1648,6 +1752,17 @@ private fun compactSharedLinkStatus(status: String): String =
         }
     }
 
+private fun topicGroupPath(library: TopicLibrary, group: TopicGroup): String {
+    val names = mutableListOf(group.name)
+    var parentId = group.parentId
+    while (parentId != null) {
+        val parent = library.groups.firstOrNull { it.id == parentId } ?: break
+        names.add(0, parent.name)
+        parentId = parent.parentId
+    }
+    return names.joinToString(" › ")
+}
+
 @Composable
 private fun SavedNoteCard(
     note: SavedVoiceNote,
@@ -1664,11 +1779,13 @@ private fun SavedNoteCard(
     onRetryTranscription: () -> Unit,
     onCopyTitle: () -> Unit,
     onOpenSource: () -> Unit,
-    onSearchSource: () -> Unit
+    onSearchSource: () -> Unit,
+    onLongPress: () -> Unit
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongPress)
     ) {
         Column(
             modifier = Modifier.padding(14.dp),

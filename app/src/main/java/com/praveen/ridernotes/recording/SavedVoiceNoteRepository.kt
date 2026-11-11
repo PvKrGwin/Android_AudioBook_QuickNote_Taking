@@ -26,7 +26,8 @@ data class SavedVoiceNote(
     val sourceUrl: String?,
     val transcriptionStatus: String,
     val transcript: String?,
-    val transcriptSegments: List<TranscriptSegment>
+    val transcriptSegments: List<TranscriptSegment>,
+    val topicOnly: Boolean = false
 ) {
     val recordedAtLabel: String
         get() = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
@@ -53,7 +54,7 @@ data class SavedVoiceNote(
 }
 
 object SavedVoiceNoteRepository {
-    fun load(context: Context): List<SavedVoiceNote> {
+    fun load(context: Context, includeTopicOnly: Boolean = false): List<SavedVoiceNote> {
         val folder = File(context.filesDir, "voice_notes")
         if (!folder.exists()) return emptyList()
 
@@ -61,6 +62,7 @@ object SavedVoiceNoteRepository {
             .orEmpty()
             .filter { it.isFile && it.extension.equals("m4a", ignoreCase = true) }
             .map { audioFile -> loadOne(audioFile) }
+            .filter { includeTopicOnly || !it.topicOnly }
             .sortedByDescending { it.recordedAtEpochMs }
     }
 
@@ -234,7 +236,8 @@ object SavedVoiceNoteRepository {
                             }
                         }
                     }
-                }.orEmpty()
+                }.orEmpty(),
+                topicOnly = json.optBoolean("topicOnly", false)
             )
         } catch (_: Exception) {
             SavedVoiceNote(

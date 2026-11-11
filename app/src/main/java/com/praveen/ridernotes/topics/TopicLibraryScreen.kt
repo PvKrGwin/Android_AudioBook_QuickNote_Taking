@@ -1,9 +1,12 @@
 package com.praveen.ridernotes.topics
 
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -22,16 +26,20 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -46,6 +54,15 @@ fun TopicLibraryScreen(
     savedNotes: List<SavedVoiceNote>,
     onPlayRecording: (SavedVoiceNote) -> Unit,
     onStartRecording: (String, Int?) -> Unit,
+    onStopRecording: () -> Unit,
+    isRecording: Boolean,
+    recordingStartedAtElapsedMs: Long?,
+    playingFileName: String?,
+    playbackPositionMs: Long,
+    playbackDurationMs: Long,
+    playbackPaused: Boolean,
+    onSeekRecording: (Long) -> Unit,
+    onStopPlayback: () -> Unit,
     onRefreshNotes: () -> Unit
 ) {
     val context = LocalContext.current
@@ -63,6 +80,21 @@ fun TopicLibraryScreen(
     var legendExpanded by remember { mutableStateOf(false) }
     var legendColor by remember { mutableStateOf<String?>(null) }
     var restoreStatus by remember { mutableStateOf<String?>(null) }
+    var addMenuExpanded by remember { mutableStateOf(false) }
+    var recordingElapsedSeconds by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(isRecording, recordingStartedAtElapsedMs) {
+        if (!isRecording || recordingStartedAtElapsedMs == null) {
+            recordingElapsedSeconds = 0L
+        } else {
+            while (true) {
+                recordingElapsedSeconds = (
+                    SystemClock.elapsedRealtime() - recordingStartedAtElapsedMs
+                ).coerceAtLeast(0L) / 1_000L
+                delay(250L)
+            }
+        }
+    }
 
     fun refresh() { library = TopicLibraryRepository.load(context) }
     fun resetInput() { inputTitle = ""; inputBody = ""; insertionIndex = -1; dialog = null }
@@ -188,37 +220,43 @@ fun TopicLibraryScreen(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(top = 12.dp).weight(1f)
             )
-            if (currentGroup != null) TextButton(onClick = { legendExpanded = !legendExpanded }) { Text("🎨 Legend") }
+            if (currentGroup != null) TextButton(onClick = { legendExpanded = true }) { Text("🎨 Legend") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Button(onClick = { inputTitle = ""; dialog = "group" }) { Text(if (currentGroup == null) "+ Group" else "+ Subgroup") }
             OutlinedButton(onClick = { onRefreshNotes(); refresh() }) { Text("Refresh") }
             if (currentGroup == null) OutlinedButton(onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Restore backup") }
             if (currentGroup != null) {
-                OutlinedButton(onClick = { dialog = "text" }) { Text("+ Text") }
-                OutlinedButton(onClick = { dialog = "link" }) { Text("+ Link") }
+                OutlinedButton(onClick = { addMenuExpanded = true }) { Text("＋ Add point") }
             }
         }
-        if (currentGroup != null) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            OutlinedButton(onClick = { filePicker.launch(arrayOf("*/*")) }) { Text("+ File") }
-            OutlinedButton(onClick = { dialog = "recordings" }) { Text("+ Existing recording") }
-            OutlinedButton(onClick = { onStartRecording(currentGroup.id, null) }) { Text("+ Record") }
-        }
-        restoreStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        if (currentGroup != null && legendExpanded) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("Colour legend", fontWeight = FontWeight.Bold)
-                    topicColors.forEach { color ->
-                        val meaning = if (color == "WHITE") "Nothing special" else library.colorLegend[color] ?: "Not defined"
-                        if (color == "WHITE") Text("White: $meaning", modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
-                        else TextButton(onClick = { legendColor = color; inputBody = library.colorLegend[color].orEmpty() }) {
-                            Text("${color.lowercase().replaceFirstChar { it.uppercase() }}: $meaning")
-                        }
+        if (currentGroup != null && isRecording) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFFE1E1))
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        if (recordingStartedAtElapsedMs == null) {
+                            "🔴 🎙 Preparing topic recording…"
+                        } else {
+                            "🔴 🎙 RECORDING  ${formatTopicTime(recordingElapsedSeconds * 1_000L)}"
+                        },
+                        color = Color(0xFFB00020),
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Button(onClick = onStopRecording, modifier = Modifier.fillMaxWidth()) {
+                        Text("■ Stop topic recording")
                     }
                 }
             }
         }
+        restoreStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
             items(childGroups, key = { "group-${it.id}" }) { group ->
                 Card(Modifier.fillMaxWidth().combinedClickable(onClick = { currentGroupId = group.id }, onLongClick = { deleteGroupTarget = group })) {
@@ -259,6 +297,18 @@ fun TopicLibraryScreen(
                             Text(item.type.lowercase().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelSmall)
                             item.text?.let { Text(it) }
                             item.target?.takeIf { item.type == TopicLibraryRepository.TYPE_LINK }?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+                            if (item.type == TopicLibraryRepository.TYPE_ATTACHMENT && attachment?.exists() == true && isImageFile(attachment)) {
+                                val bitmap = remember(attachment.absolutePath, attachment.lastModified()) {
+                                    decodeThumbnail(attachment)
+                                }
+                                bitmap?.let {
+                                    Image(
+                                        bitmap = it.asImageBitmap(),
+                                        contentDescription = item.title,
+                                        modifier = Modifier.size(96.dp)
+                                    )
+                                }
+                            }
                             note?.let {
                                 Text("Source: ${it.sourceApp}")
                                 it.module?.let { value -> Text("Module: $value") }
@@ -269,7 +319,23 @@ fun TopicLibraryScreen(
                                 Text(it.transcript ?: "Transcript not available")
                             }
                             when (item.type) {
-                                TopicLibraryRepository.TYPE_RECORDING -> Button(enabled = note != null && !originalMissing, onClick = { note?.let(onPlayRecording) }) { Text("Play recording") }
+                                TopicLibraryRepository.TYPE_RECORDING -> {
+                                    val isPlaying = note?.audioFile?.name == playingFileName
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(enabled = note != null && !originalMissing, onClick = { note?.let(onPlayRecording) }) {
+                                            Text(if (!isPlaying) "Play recording" else if (playbackPaused) "Resume" else "Pause")
+                                        }
+                                        if (isPlaying) OutlinedButton(onClick = onStopPlayback) { Text("Stop") }
+                                    }
+                                    if (isPlaying && playbackDurationMs > 0L) {
+                                        Slider(
+                                            value = playbackPositionMs.toFloat(),
+                                            onValueChange = { onSeekRecording(it.toLong()) },
+                                            valueRange = 0f..playbackDurationMs.toFloat()
+                                        )
+                                        Text("${formatTopicTime(playbackPositionMs)} / ${formatTopicTime(playbackDurationMs)}")
+                                    }
+                                }
                                 TopicLibraryRepository.TYPE_LINK -> Button(onClick = { item.target?.let { context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(it))) } }) { Text("Open link") }
                                 TopicLibraryRepository.TYPE_ATTACHMENT -> Button(enabled = !originalMissing, onClick = {
                                     attachment?.let { file ->
@@ -285,6 +351,44 @@ fun TopicLibraryScreen(
             }
             if (currentGroup == null && childGroups.isEmpty()) item { Text("Create your first topic group, for example Biology.") }
         }
+    }
+
+    if (addMenuExpanded && currentGroup != null) {
+        AlertDialog(
+            onDismissRequest = { addMenuExpanded = false },
+            title = { Text("Add point") },
+            text = {
+                Column {
+                    TextButton(onClick = { addMenuExpanded = false; dialog = "text" }) { Text("Text") }
+                    TextButton(onClick = { addMenuExpanded = false; dialog = "link" }) { Text("Web link") }
+                    TextButton(onClick = { addMenuExpanded = false; filePicker.launch(arrayOf("*/*")) }) { Text("File or image") }
+                    TextButton(onClick = { addMenuExpanded = false; dialog = "recordings" }) { Text("Existing recording") }
+                    TextButton(onClick = { addMenuExpanded = false; onStartRecording(currentGroup.id, null) }) { Text("New recording") }
+                }
+            },
+            confirmButton = { TextButton(onClick = { addMenuExpanded = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (legendExpanded) {
+        AlertDialog(
+            onDismissRequest = { legendExpanded = false },
+            title = { Text("Colour legend") },
+            text = {
+                LazyColumn {
+                    items(topicColors) { color ->
+                        val meaning = if (color == "WHITE") "Nothing special" else library.colorLegend[color] ?: "Not defined"
+                        if (color == "WHITE") Text("White: $meaning", modifier = Modifier.padding(12.dp))
+                        else TextButton(onClick = {
+                            legendExpanded = false
+                            legendColor = color
+                            inputBody = library.colorLegend[color].orEmpty()
+                        }) { Text("${color.lowercase().replaceFirstChar { it.uppercase() }}: $meaning") }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { legendExpanded = false }) { Text("Close") } }
+        )
     }
 }
 
@@ -314,4 +418,25 @@ private fun groupPath(library: TopicLibrary, group: TopicGroup): String {
         names.add(0, value.name); parent = value.parentId
     }
     return names.joinToString(" › ")
+}
+
+private fun isImageFile(file: java.io.File): Boolean =
+    file.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp", "heic", "heif")
+
+private fun decodeThumbnail(file: java.io.File): android.graphics.Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    var sample = 1
+    while (bounds.outWidth / sample > 256 || bounds.outHeight / sample > 256) sample *= 2
+    return BitmapFactory.decodeFile(
+        file.absolutePath,
+        BitmapFactory.Options().apply { inSampleSize = sample.coerceAtLeast(1) }
+    )
+}
+
+private fun formatTopicTime(valueMs: Long): String {
+    val totalSeconds = valueMs.coerceAtLeast(0L) / 1_000L
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return "%d:%02d".format(minutes, seconds)
 }
