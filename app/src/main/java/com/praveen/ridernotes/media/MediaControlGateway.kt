@@ -850,31 +850,40 @@ object MediaControlGateway {
             }
 
             "org.coursera.android" -> {
-                // Coursera uses ARTIST for the module on current Android builds.
-                // Keep that separate from the institution and lesson/chapter.
-                val courseTitle = title ?: album ?: displaySubtitle ?: displayTitle
-                    ?: notificationText.firstOrNull()
+                // Prefer the album/subtitle as the course. Coursera's TITLE and
+                // ARTIST can contain a combined "course + lesson" string.
+                val courseTitle = listOfNotNull(album, displaySubtitle)
+                    .firstOrNull { candidate ->
+                        !candidate.contains("module", ignoreCase = true)
+                    }
+                    ?: notificationText.firstOrNull { candidate ->
+                        !candidate.contains("module", ignoreCase = true) &&
+                            candidate.length in 3..160 &&
+                            !candidate.equals(title, ignoreCase = true)
+                    }
+                    ?: title ?: displayTitle
                 val university = rawAuthor ?: albumArtist
-                val module = artist?.takeUnless {
-                    it.equals(courseTitle, ignoreCase = true) ||
-                        it.equals(university, ignoreCase = true)
-                }
                 val excluded = listOfNotNull(
                     courseTitle,
-                    module,
                     university,
                     "Coursera"
                 )
-                val chapter = (
-                    listOfNotNull(displayTitle, displayDescription, displaySubtitle, album) +
-                        notificationText
-                    )
+                val rawChapter = (
+                    listOfNotNull(displayTitle, displayDescription, title, artist) + notificationText
+                )
                     .map { it.trim() }
                     .firstOrNull { candidate ->
                         candidate.isNotBlank() &&
                             candidate.length <= 200 &&
+                            !candidate.matches(Regex("(?i)^module\\s*\\d+$")) &&
                             excluded.none { it.equals(candidate, ignoreCase = true) }
                     }
+                val chapter = rawChapter?.let { candidate ->
+                    val withoutCourse = courseTitle?.let { course ->
+                        candidate.removePrefix(course).trim(' ', '-', ':', '·', '|')
+                    } ?: candidate
+                    withoutCourse.takeIf { it.isNotBlank() && !it.equals(courseTitle, true) }
+                }
                 val allText = listOfNotNull(
                     title, displayTitle, displaySubtitle, displayDescription,
                     album, rawAuthor, artist, albumArtist
@@ -882,15 +891,12 @@ object MediaControlGateway {
                 val moduleNumber = allText.asSequence()
                     .mapNotNull { Regex("(?i)\\bmodule\\s*([0-9]+)\\b").find(it)?.groupValues?.getOrNull(1) }
                     .firstOrNull()
-                val moduleHeading = listOfNotNull(
-                    moduleNumber?.let { "Module $it" },
-                    module,
-                    courseTitle
-                ).distinctBy { it.lowercase() }.joinToString(" · ").takeIf { it.isNotBlank() }
-
-                // Notes are titled by the lesson/chapter. The Notes tab groups
-                // them under the numbered module heading below.
-                MappedMediaFields(chapter ?: courseTitle, moduleHeading, chapter, university)
+                MappedMediaFields(
+                    title = courseTitle,
+                    module = moduleNumber?.let { "Module $it" },
+                    chapter = chapter,
+                    author = university
+                )
             }
 
             else -> {

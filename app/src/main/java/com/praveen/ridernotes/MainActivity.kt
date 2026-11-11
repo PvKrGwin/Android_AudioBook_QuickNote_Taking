@@ -952,9 +952,10 @@ private fun DetectorScreen(
     val manualLinkText = remember { mutableStateOf("") }
     val addToTopicNote = remember { mutableStateOf<SavedVoiceNote?>(null) }
     val context = LocalContext.current
-    val topicLibraryForDialog = remember(addToTopicNote.value) {
-        TopicLibraryRepository.load(context)
-    }
+    val topicPickerLibrary = remember { mutableStateOf(TopicLibraryRepository.load(context)) }
+    val topicPickerGroupId = remember { mutableStateOf<String?>(null) }
+    val topicPickerCreatingFolder = remember { mutableStateOf(false) }
+    val topicPickerNewFolderName = remember { mutableStateOf("") }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
     }
@@ -985,28 +986,88 @@ private fun DetectorScreen(
             onCopyTitle = { onCopyTitle(note) },
             onOpenSource = { onOpenSource(note) },
             onSearchSource = { onSearchSource(note) },
-            onLongPress = { addToTopicNote.value = note }
+            onLongPress = {
+                topicPickerLibrary.value = TopicLibraryRepository.load(context)
+                topicPickerGroupId.value = null
+                topicPickerCreatingFolder.value = false
+                topicPickerNewFolderName.value = ""
+                addToTopicNote.value = note
+            }
         )
     }
 
     addToTopicNote.value?.let { note ->
+        val library = topicPickerLibrary.value
+        val currentFolder = library.groups.firstOrNull { it.id == topicPickerGroupId.value }
+        val visibleFolders = library.groups
+            .filter { it.parentId == topicPickerGroupId.value }
+            .sortedBy { it.order }
         AlertDialog(
             onDismissRequest = { addToTopicNote.value = null },
-            title = { Text("Add recording to topic") },
+            title = {
+                Text(currentFolder?.let { topicGroupPath(library, it) } ?: "Choose topic folder")
+            },
             text = {
-                LazyColumn {
-                    items(topicLibraryForDialog.groups, key = { it.id }) { group ->
-                        TextButton(onClick = {
-                            TopicLibraryRepository.addRecording(
-                                context, group.id, note.audioFile.name, note.title
-                            )
-                            addToTopicNote.value = null
-                        }) { Text(topicGroupPath(topicLibraryForDialog, group)) }
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (currentFolder != null) {
+                        Button(
+                            onClick = {
+                                TopicLibraryRepository.addRecording(
+                                    context, currentFolder.id, note.audioFile.name, note.title
+                                )
+                                addToTopicNote.value = null
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Save in this folder") }
+                    }
+                    if (topicPickerCreatingFolder.value) {
+                        OutlinedTextField(
+                            value = topicPickerNewFolderName.value,
+                            onValueChange = { topicPickerNewFolderName.value = it },
+                            label = { Text(if (currentFolder == null) "New main folder" else "New subfolder") }
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                if (topicPickerNewFolderName.value.isNotBlank()) {
+                                    val created = TopicLibraryRepository.createGroup(
+                                        context,
+                                        topicPickerNewFolderName.value,
+                                        currentFolder?.id
+                                    )
+                                    topicPickerLibrary.value = TopicLibraryRepository.load(context)
+                                    topicPickerGroupId.value = created.id
+                                    topicPickerNewFolderName.value = ""
+                                    topicPickerCreatingFolder.value = false
+                                }
+                            }) { Text("Create") }
+                            TextButton(onClick = { topicPickerCreatingFolder.value = false }) {
+                                Text("Cancel")
+                            }
+                        }
+                    } else {
+                        TextButton(onClick = { topicPickerCreatingFolder.value = true }) {
+                            Text(if (currentFolder == null) "+ New main folder" else "+ New subfolder")
+                        }
+                    }
+                    LazyColumn {
+                        items(visibleFolders, key = { it.id }) { group ->
+                            TextButton(
+                                onClick = { topicPickerGroupId.value = group.id },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("📁 ${group.name}") }
+                        }
                     }
                 }
             },
             confirmButton = {
                 TextButton(onClick = { addToTopicNote.value = null }) { Text("Cancel") }
+            },
+            dismissButton = {
+                if (currentFolder != null) {
+                    TextButton(onClick = { topicPickerGroupId.value = currentFolder.parentId }) {
+                        Text("← Back")
+                    }
+                }
             }
         )
     }
@@ -1725,9 +1786,6 @@ private fun creatorLabel(source: String): String = when {
 
 private fun titleGroupKey(source: String, note: SavedVoiceNote): String {
     val title = note.title.trim().ifBlank { "Untitled" }
-    if (source.equals("Coursera", ignoreCase = true)) {
-        return note.module?.trim()?.takeIf { it.isNotBlank() } ?: title
-    }
     return if (YouTubeSourceLink.isSupportedSourceApp(source)) {
         "$title\u001F${note.author?.trim().orEmpty()}"
     } else {

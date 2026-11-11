@@ -45,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.praveen.ridernotes.recording.SavedVoiceNote
 
@@ -213,21 +214,21 @@ fun TopicLibraryScreen(
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (currentGroup != null) OutlinedButton(onClick = { currentGroupId = currentGroup.parentId }) { Text("← Back") }
+            if (currentGroup != null) OutlinedButton(onClick = { currentGroupId = currentGroup.parentId }) { Text("← Back", fontSize = 11.sp) }
             Text(
                 currentGroup?.let { groupPath(library, it) } ?: "Topic groups",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(top = 12.dp).weight(1f)
             )
-            if (currentGroup != null) TextButton(onClick = { legendExpanded = true }) { Text("🎨 Legend") }
+            if (currentGroup != null) TextButton(onClick = { legendExpanded = true }) { Text("🎨 Legend", fontSize = 11.sp) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Button(onClick = { inputTitle = ""; dialog = "group" }) { Text(if (currentGroup == null) "+ Group" else "+ Subgroup") }
-            OutlinedButton(onClick = { onRefreshNotes(); refresh() }) { Text("Refresh") }
-            if (currentGroup == null) OutlinedButton(onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Restore backup") }
+            Button(onClick = { inputTitle = ""; dialog = "group" }) { Text(if (currentGroup == null) "+ Group" else "+ Subgroup", fontSize = 11.sp) }
+            OutlinedButton(onClick = { onRefreshNotes(); refresh() }) { Text("Refresh", fontSize = 11.sp) }
+            if (currentGroup == null) OutlinedButton(onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Restore backup", fontSize = 11.sp) }
             if (currentGroup != null) {
-                OutlinedButton(onClick = { addMenuExpanded = true }) { Text("＋ Add point") }
+                OutlinedButton(onClick = { addMenuExpanded = true }) { Text("＋ Add point", fontSize = 11.sp) }
             }
         }
         if (currentGroup != null && isRecording) {
@@ -260,7 +261,7 @@ fun TopicLibraryScreen(
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
             items(childGroups, key = { "group-${it.id}" }) { group ->
                 Card(Modifier.fillMaxWidth().combinedClickable(onClick = { currentGroupId = group.id }, onLongClick = { deleteGroupTarget = group })) {
-                    Text("📁 ${group.name}", fontWeight = FontWeight.Bold, modifier = Modifier.padding(14.dp))
+                    Text("📁 ${group.name}", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
                 }
             }
             items(placements, key = { it.id }) { placement ->
@@ -282,11 +283,12 @@ fun TopicLibraryScreen(
                     onClick = { expandedPlacements = if (expanded) expandedPlacements - placement.id else expandedPlacements + placement.id },
                     onLongClick = { actionPlacement = placement }
                 )) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 "${placement.order + 1}. ${item.title}",
                                 fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
                                 textDecoration = if (originalMissing) TextDecoration.LineThrough else TextDecoration.None,
                                 modifier = Modifier.weight(1f)
                             )
@@ -295,7 +297,7 @@ fun TopicLibraryScreen(
                         if (originalMissing) Text("Original content is missing — restore it from backup to reactivate this point.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                         if (expanded) {
                             Text(item.type.lowercase().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelSmall)
-                            item.text?.let { Text(it) }
+                            item.text?.let { Text(it, fontSize = 12.sp) }
                             item.target?.takeIf { item.type == TopicLibraryRepository.TYPE_LINK }?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
                             if (item.type == TopicLibraryRepository.TYPE_ATTACHMENT && attachment?.exists() == true && isImageFile(attachment)) {
                                 val bitmap = remember(attachment.absolutePath, attachment.lastModified()) {
@@ -310,13 +312,13 @@ fun TopicLibraryScreen(
                                 }
                             }
                             note?.let {
-                                Text("Source: ${it.sourceApp}")
-                                it.module?.let { value -> Text("Module: $value") }
-                                it.chapter?.let { value -> Text("Chapter: $value") }
-                                it.author?.let { value -> Text("Author / creator: $value") }
-                                it.playbackPositionLabel?.let { value -> Text("Media time: $value") }
-                                Text("Recorded: ${it.recordedAtLabel}")
-                                Text(it.transcript ?: "Transcript not available")
+                                Text("Source: ${it.sourceApp}", fontSize = 12.sp)
+                                it.module?.let { value -> Text("Module: $value", fontSize = 12.sp) }
+                                it.chapter?.let { value -> Text("Chapter: $value", fontSize = 12.sp) }
+                                it.author?.let { value -> Text("Author / creator: $value", fontSize = 12.sp) }
+                                it.playbackPositionLabel?.let { value -> Text("Media time: $value", fontSize = 12.sp) }
+                                Text("Recorded: ${it.recordedAtLabel}", fontSize = 12.sp)
+                                Text(it.transcript ?: "Transcript not available", fontSize = 12.sp)
                             }
                             when (item.type) {
                                 TopicLibraryRepository.TYPE_RECORDING -> {
