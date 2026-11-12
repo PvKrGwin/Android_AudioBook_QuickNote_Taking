@@ -268,6 +268,7 @@ class MainActivity : ComponentActivity() {
                     onChooseCloudFolder = ::chooseCloudFolder,
                     onOpenCloudFolder = ::openCloudFolder,
                     onCopyCloudFolder = ::copyCloudFolder,
+                    onSetCloudWebLink = ::setCloudWebLink,
                     onRemoveCloudFolder = ::removeCloudFolder,
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
@@ -475,6 +476,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openCloudFolder() {
+        val status = CloudSyncManager.status(this)
+        status.destinationWebUrl?.let { webUrl ->
+            val opened = runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(webUrl)))
+            }.isSuccess
+            if (opened) return
+        }
         val uri = CloudSyncManager.destinationUri(this) ?: return
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -496,12 +504,21 @@ class MainActivity : ComponentActivity() {
 
     private fun copyCloudFolder() {
         val uri = CloudSyncManager.destinationUri(this) ?: return
-        val path = CloudSyncManager.status(this).destinationPath.orEmpty()
-        val value = listOf(path, uri.toString()).filter(String::isNotBlank).joinToString("\n")
+        val status = CloudSyncManager.status(this)
+        val value = status.destinationWebUrl ?: uri.toString()
         getSystemService(ClipboardManager::class.java).setPrimaryClip(
             ClipData.newPlainText("Rider Notes cloud folder", value)
         )
         backupStatus.value = "Cloud folder location copied"
+    }
+
+    private fun setCloudWebLink(value: String): Boolean {
+        val saved = CloudSyncManager.setDestinationWebUrl(this, value)
+        if (saved) {
+            cloudSyncStatus.value = CloudSyncManager.status(this)
+            backupStatus.value = "Cloud folder web link saved"
+        }
+        return saved
     }
 
     private fun removeCloudFolder() {
@@ -965,6 +982,7 @@ private fun DetectorScreen(
     onChooseCloudFolder: () -> Unit,
     onOpenCloudFolder: () -> Unit,
     onCopyCloudFolder: () -> Unit,
+    onSetCloudWebLink: (String) -> Boolean,
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
@@ -985,6 +1003,9 @@ private fun DetectorScreen(
     val showSharedLinkDetails = remember { mutableStateOf(false) }
     val manualLinkTarget = remember { mutableStateOf<SavedVoiceNote?>(null) }
     val manualLinkText = remember { mutableStateOf("") }
+    val showCloudWebLinkDialog = remember { mutableStateOf(false) }
+    val cloudWebLinkText = remember { mutableStateOf("") }
+    val cloudWebLinkError = remember { mutableStateOf(false) }
     val addToTopicNote = remember { mutableStateOf<SavedVoiceNote?>(null) }
     val context = LocalContext.current
     val topicPickerLibrary = remember { mutableStateOf(TopicLibraryRepository.load(context)) }
@@ -993,6 +1014,40 @@ private fun DetectorScreen(
     val topicPickerNewFolderName = remember { mutableStateOf("") }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
+    }
+
+    if (showCloudWebLinkDialog.value) {
+        AlertDialog(
+            onDismissRequest = { showCloudWebLinkDialog.value = false },
+            title = { Text("Google Drive folder link") },
+            text = {
+                Column {
+                    Text("Paste the browser link for the same folder used by automatic sync.")
+                    OutlinedTextField(
+                        value = cloudWebLinkText.value,
+                        onValueChange = {
+                            cloudWebLinkText.value = it
+                            cloudWebLinkError.value = false
+                        },
+                        label = { Text("https://drive.google.com/drive/folders/…") },
+                        isError = cloudWebLinkError.value
+                    )
+                    if (cloudWebLinkError.value) {
+                        Text("Enter a valid web link", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (onSetCloudWebLink(cloudWebLinkText.value)) {
+                        showCloudWebLinkDialog.value = false
+                    } else cloudWebLinkError.value = true
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCloudWebLinkDialog.value = false }) { Text("Cancel") }
+            }
+        )
     }
     val noteCard: @Composable (SavedVoiceNote) -> Unit = { note ->
         SavedNoteCard(
@@ -1477,15 +1532,36 @@ private fun DetectorScreen(
                                             "Cloud folder: $it"
                                         } ?: "No cloud folder selected"
                                     )
-                                    cloudSyncStatus.value.destinationPath?.let { path ->
+                                    cloudSyncStatus.value.destinationWebUrl?.let { webUrl ->
                                         TextButton(onClick = onOpenCloudFolder) {
                                             Text(
-                                                "📁 Saved folder: $path",
+                                                "📁 $webUrl",
                                                 style = MaterialTheme.typography.bodySmall
                                             )
                                         }
                                         OutlinedButton(onClick = onCopyCloudFolder) {
-                                            Text("Copy folder location")
+                                            Text("Copy folder link")
+                                        }
+                                    } ?: cloudSyncStatus.value.destinationName?.let {
+                                        Text(
+                                            "Android folder access is saved securely. " +
+                                                "Add the browser link below for opening and copying."
+                                        )
+                                    }
+                                    if (cloudSyncStatus.value.destinationName != null) {
+                                        OutlinedButton(onClick = {
+                                            cloudWebLinkText.value =
+                                                cloudSyncStatus.value.destinationWebUrl.orEmpty()
+                                            cloudWebLinkError.value = false
+                                            showCloudWebLinkDialog.value = true
+                                        }) {
+                                            Text(
+                                                if (cloudSyncStatus.value.destinationWebUrl == null) {
+                                                    "Add Google Drive web link"
+                                                } else {
+                                                    "Edit Google Drive web link"
+                                                }
+                                            )
                                         }
                                     }
                                     Text(

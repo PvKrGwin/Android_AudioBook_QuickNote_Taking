@@ -2,7 +2,6 @@ package com.praveen.ridernotes.cloud
 
 import android.content.Context
 import android.net.Uri
-import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -25,7 +24,8 @@ object CloudSyncManager {
         val destinationName: String?,
         val mode: Mode,
         val message: String,
-        val destinationPath: String? = null
+        val destinationPath: String? = null,
+        val destinationWebUrl: String? = null
     )
 
     fun destinationUri(context: Context): Uri? = preferences(context)
@@ -37,24 +37,26 @@ object CloudSyncManager {
         val name = uri?.let {
             runCatching { DocumentFile.fromTreeUri(context, it)?.name }.getOrNull()
         }
-        val path = uri?.let {
-            runCatching {
-                val treeId = DocumentsContract.getTreeDocumentId(it)
-                val readableTree = Uri.decode(treeId).replace(':', '/')
-                val provider = it.authority
-                    ?.substringBefore(".documents")
-                    ?.substringAfterLast('.')
-                    ?.replaceFirstChar(Char::uppercase)
-                listOfNotNull(provider, readableTree.takeIf(String::isNotBlank))
-                    .joinToString(" › ")
-            }.getOrNull() ?: it.toString()
-        }
         return Status(
             destinationName = name ?: uri?.lastPathSegment,
             mode = mode(context),
             message = preferences(context).getString(KEY_STATUS, "").orEmpty(),
-            destinationPath = path
+            destinationPath = name,
+            destinationWebUrl = preferences(context)
+                .getString(KEY_WEB_URL, null)
+                ?.takeIf(String::isNotBlank)
         )
+    }
+
+    fun setDestinationWebUrl(context: Context, value: String): Boolean {
+        val normalized = value.trim()
+        val valid = runCatching {
+            val uri = Uri.parse(normalized)
+            uri.scheme in setOf("https", "http") && !uri.host.isNullOrBlank()
+        }.getOrDefault(false)
+        if (!valid) return false
+        preferences(context).edit().putString(KEY_WEB_URL, normalized).apply()
+        return true
     }
 
     fun setDestination(context: Context, uri: Uri) {
@@ -63,7 +65,10 @@ object CloudSyncManager {
             .putString(KEY_TREE_URI, uri.toString())
             .putString(KEY_STATUS, "Cloud folder selected")
             .apply()
-        if (previous != uri) clearUploadMarkers(context)
+        if (previous != uri) {
+            preferences(context).edit().remove(KEY_WEB_URL).apply()
+            clearUploadMarkers(context)
+        }
         schedule(context)
     }
 
@@ -164,6 +169,7 @@ object CloudSyncManager {
     private const val KEY_TREE_URI = "tree_uri"
     private const val KEY_MODE = "mode"
     private const val KEY_STATUS = "status"
+    private const val KEY_WEB_URL = "web_url"
     private const val MARKER_PREFIX = "uploaded:"
     private const val PERIODIC_WORK = "rider-notes-cloud-periodic"
     private const val IMMEDIATE_WORK = "rider-notes-cloud-now"
