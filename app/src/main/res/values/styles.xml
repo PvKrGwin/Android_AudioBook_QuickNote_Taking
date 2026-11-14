@@ -7,4 +7,12 @@
         <item name="android:statusBarColor">#F6F8FA</item>
         <item name="android:windowLightStatusBar">true</item>
     </style>
+
+    <style name="Theme.RiderNotes.Assistant" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:colorAccent">#28536B</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
 </resources>
