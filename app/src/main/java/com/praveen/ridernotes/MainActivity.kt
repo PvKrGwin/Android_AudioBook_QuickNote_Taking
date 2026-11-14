@@ -2,6 +2,7 @@ package com.praveen.ridernotes
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.StatusBarManager
 import android.content.ClipData
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
@@ -21,7 +22,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.provider.DocumentsContract
-import android.service.quicksettings.TileService
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
@@ -549,17 +549,16 @@ class MainActivity : ComponentActivity() {
     private fun addQuickSettingsTile() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             quickTileSetupStatus.value = "Confirm Add in the Android Quick Settings dialog"
-            TileService.requestAddTileService(
-                this,
+            getSystemService(StatusBarManager::class.java).requestAddTileService(
                 ComponentName(this, RiderRecordTileService::class.java),
                 "Rider Record",
                 Icon.createWithResource(this, R.drawable.ic_rider_record),
                 mainExecutor
             ) { result ->
                 quickTileSetupStatus.value = when (result) {
-                    TileService.TILE_ADD_REQUEST_RESULT_TILE_ADDED ->
+                    StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ->
                         "Rider Record was added to Quick Settings"
-                    TileService.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED ->
+                    StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED ->
                         "Rider Record is already in Quick Settings"
                     else ->
                         "Swipe down twice, tap Edit, then drag Rider Record into Quick Settings"
