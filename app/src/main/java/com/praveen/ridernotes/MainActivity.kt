@@ -572,11 +572,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun configurePowerAssistant() {
+        val permissions = mutableListOf<String>()
         if (!hasMicrophonePermission()) {
-            val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                permissions += Manifest.permission.POST_NOTIFICATIONS
-            }
+            permissions += Manifest.permission.RECORD_AUDIO
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            permissions += Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (permissions.isNotEmpty()) {
             assistantPermissionLauncher.launch(permissions.toTypedArray())
             return
         }
