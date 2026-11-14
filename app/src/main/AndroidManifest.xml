@@ -41,6 +41,19 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".assistant.RiderAssistantActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:showWhenLocked="true"
+            android:theme="@style/Theme.RiderNotes.Assistant">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".input.BleButtonAccessibilityService"
             android:exported="true"
