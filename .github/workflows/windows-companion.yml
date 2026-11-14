@@ -25,8 +25,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.1"
-      - name: Test desktop companion
-        run: gradle :desktopApp:test
+      - name: Test Android and desktop companion
+        run: gradle :app:testDebugUnitTest :desktopApp:test
       - name: Build Windows MSI
         run: gradle :desktopApp:packageMsi
       - uses: actions/upload-artifact@v4
