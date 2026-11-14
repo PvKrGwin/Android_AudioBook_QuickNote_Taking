@@ -250,6 +250,13 @@ object TopicLibraryRepository {
         temp.delete()
     }
 
+    /** Rebuild the complete Topics archive from the phone's current local state. */
+    @Synchronized
+    fun createFreshBackup(context: Context): Result<File> = runCatching {
+        rebuildBackup(context, load(context))
+        backup(context).also { require(it.exists() && it.length() > 0L) }
+    }
+
     /** Merge a topic backup without replacing any file or entity already on this phone. */
     @Synchronized fun restoreBackup(context: Context, uri: Uri): String = runCatching {
         val tempRoot = File(context.cacheDir, "topic_restore_${System.currentTimeMillis()}").apply { mkdirs() }
