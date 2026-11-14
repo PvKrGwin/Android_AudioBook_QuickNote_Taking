@@ -3,9 +3,12 @@ package com.praveen.ridernotes.recording
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.widget.Toast
+import com.praveen.ridernotes.input.ButtonEvent
+import com.praveen.ridernotes.input.ButtonEventStore
 
 /** Portable recording control exposed in Android Quick Settings. */
 class RiderRecordTileService : TileService() {
@@ -16,6 +19,20 @@ class RiderRecordTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        val now = SystemClock.elapsedRealtime()
+        if (lastHandledClickElapsedMs != 0L &&
+            now - lastHandledClickElapsedMs < DUPLICATE_CLICK_GUARD_MS
+        ) {
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    "Duplicate Quick Settings tile click ignored",
+                    true
+                )
+            )
+            updateTile()
+            return
+        }
+        lastHandledClickElapsedMs = now
         val result = when {
             RecordingController.isRecordingOrStarting &&
                 RecordingController.isExtensionWindowOpen ->
@@ -25,6 +42,13 @@ class RiderRecordTileService : TileService() {
             else -> RecordingController.start(this)
         }
         Toast.makeText(this, result, Toast.LENGTH_SHORT).show()
+        ButtonEventStore.record(
+            ButtonEvent.recordingResult(
+                "Quick Settings tile: $result",
+                !result.contains("failed", ignoreCase = true) &&
+                    !result.contains("required", ignoreCase = true)
+            )
+        )
         updateTile()
     }
 
@@ -57,5 +81,10 @@ class RiderRecordTileService : TileService() {
 
         const val ACTION_RECORDING_STATE_CHANGED =
             "com.praveen.ridernotes.action.RECORDING_STATE_CHANGED"
+
+        private const val DUPLICATE_CLICK_GUARD_MS = 1_500L
+
+        @Volatile
+        private var lastHandledClickElapsedMs = 0L
     }
 }
