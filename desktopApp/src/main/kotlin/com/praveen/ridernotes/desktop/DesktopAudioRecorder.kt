@@ -6,6 +6,7 @@ import java.util.Date
 import java.util.Locale
 import javax.sound.sampled.AudioFileFormat
 import javax.sound.sampled.AudioFormat
+import javax.sound.sampled.AudioInputStream
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.DataLine
 import javax.sound.sampled.TargetDataLine
@@ -30,7 +31,11 @@ class DesktopAudioRecorder {
         output = file
         target.start()
         writer = Thread({
-            runCatching { AudioSystem.write(target, AudioFileFormat.Type.WAVE, file) }
+            runCatching {
+                AudioInputStream(target).use { stream ->
+                    AudioSystem.write(stream, AudioFileFormat.Type.WAVE, file)
+                }
+            }
         }, "rider-notes-topic-recorder").apply { isDaemon = true; start() }
         return file
     }
