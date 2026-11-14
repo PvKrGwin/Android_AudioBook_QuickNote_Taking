@@ -12,10 +12,13 @@ import com.praveen.ridernotes.recording.RecordingController
 class RiderAssistantActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val result = if (RecordingController.isRecordingOrStarting) {
-            RecordingController.stop(this)
-        } else {
-            RecordingController.start(this)
+        val result = when {
+            RecordingController.isRecordingOrStarting &&
+                RecordingController.isExtensionWindowOpen ->
+                RecordingController.extend(this)
+            RecordingController.isRecordingOrStarting ->
+                RecordingController.stop(this)
+            else -> RecordingController.start(this)
         }
         Toast.makeText(this, result, Toast.LENGTH_SHORT).show()
         finishAndRemoveTask()
