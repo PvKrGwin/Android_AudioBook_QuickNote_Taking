@@ -150,7 +150,7 @@ object ScribTranscriber {
         val timeoutMs = if (wasTimedOut) RETRY_AFTER_TIMEOUT_MS else NORMAL_TIMEOUT_MS
         enqueue(context, audioFile, timeoutMs)
         return if (wasTimedOut) {
-            "Timed-out transcription queued again with a 30-minute limit."
+            "Timed-out transcription queued again with a 3-hour limit."
         } else {
             "Transcription queued again with a 10-minute limit."
         }
@@ -362,7 +362,7 @@ object ScribTranscriber {
                 updateMetadata(
                     metadataFile,
                     "TIMED_OUT",
-                    error = "Scrib exceeded the ${timeoutMs / 60_000L}-minute transcription limit",
+                    error = "Scrib exceeded the ${timeoutLabel(timeoutMs)} transcription limit",
                     timeoutMs = timeoutMs
                 )
                 finishActive(appContext, audioFile, startNext = true)
@@ -406,7 +406,14 @@ object ScribTranscriber {
     }.getOrDefault(NORMAL_TIMEOUT_MS)
 
     private const val NORMAL_TIMEOUT_MS = 10L * 60L * 1_000L
-    private const val RETRY_AFTER_TIMEOUT_MS = 30L * 60L * 1_000L
+    private const val RETRY_AFTER_TIMEOUT_MS = 3L * 60L * 60L * 1_000L
+
+    private fun timeoutLabel(timeoutMs: Long): String =
+        if (timeoutMs % (60L * 60L * 1_000L) == 0L) {
+            "${timeoutMs / (60L * 60L * 1_000L)}-hour"
+        } else {
+            "${timeoutMs / (60L * 1_000L)}-minute"
+        }
 
     @Synchronized
     private fun updateMetadata(
