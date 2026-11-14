@@ -2,7 +2,6 @@ package com.praveen.ridernotes
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
-import android.app.role.RoleManager
 import android.content.ClipData
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
@@ -11,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.graphics.drawable.Icon
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
@@ -21,6 +21,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.provider.DocumentsContract
+import android.service.quicksettings.TileService
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.accessibility.AccessibilityManager
@@ -88,6 +89,7 @@ import com.praveen.ridernotes.media.YouTubeSourceLink
 import com.praveen.ridernotes.recording.SavedVoiceNote
 import com.praveen.ridernotes.recording.SavedVoiceNoteRepository
 import com.praveen.ridernotes.recording.RecordingController
+import com.praveen.ridernotes.recording.RiderRecordTileService
 import com.praveen.ridernotes.recording.TranscriptSegment
 import com.praveen.ridernotes.recording.VoiceRecordingService
 import com.praveen.ridernotes.transcription.ScribTranscriber
@@ -118,8 +120,9 @@ class MainActivity : ComponentActivity() {
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
     private val floatingRecordEnabled = mutableStateOf(false)
-    private val assistantRoleEnabled = mutableStateOf(false)
-    private val assistantSetupStatus = mutableStateOf("Not configured")
+    private val quickTileSetupStatus = mutableStateOf(
+        "Add Rider Record to Quick Settings for recording without Beauty-R1"
+    )
     private var remoteTraining = false
     private var remoteTrainingDevice: String? = null
     private val remoteTrainingSignals = linkedSetOf<String>()
@@ -134,30 +137,6 @@ class MainActivity : ComponentActivity() {
         }
     }
     private var pendingExportNotes: List<SavedVoiceNote> = emptyList()
-
-    private val assistantRoleLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        assistantRoleEnabled.value = isAssistantRoleEnabled()
-        assistantSetupStatus.value = if (assistantRoleEnabled.value) {
-            "Power-button assistant mode enabled"
-        } else {
-            "Rider Notes was not selected. Opening Android assistant settings…"
-        }
-        if (!assistantRoleEnabled.value) openAssistantSettings()
-    }
-
-    private val assistantPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { result ->
-        if (result[Manifest.permission.RECORD_AUDIO] == true || hasMicrophonePermission()) {
-            microphoneEnabled.value = true
-            requestAssistantRole()
-        } else {
-            assistantSetupStatus.value =
-                "Microphone permission is required for assistant recording"
-        }
-    }
 
     private val exportBackupLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -306,9 +285,8 @@ class MainActivity : ComponentActivity() {
                     topicRecordingStartedAtElapsedMs = topicRecordingStartedAtElapsedMs,
                     floatingRecordEnabled = floatingRecordEnabled,
                     onSetFloatingRecordEnabled = ::setFloatingRecordEnabled,
-                    assistantRoleEnabled = assistantRoleEnabled,
-                    assistantSetupStatus = assistantSetupStatus,
-                    onConfigureAssistant = ::configurePowerAssistant
+                    quickTileSetupStatus = quickTileSetupStatus,
+                    onAddQuickTile = ::addQuickSettingsTile
                 )
             }
         }
@@ -326,10 +304,6 @@ class MainActivity : ComponentActivity() {
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
         floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
-        assistantRoleEnabled.value = isAssistantRoleEnabled()
-        if (assistantRoleEnabled.value) {
-            assistantSetupStatus.value = "Power-button assistant mode enabled"
-        }
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
         MediaControlGateway.observeActivePlayback(this)
@@ -578,73 +552,30 @@ class MainActivity : ComponentActivity() {
         cloudSyncStatus.value = CloudSyncManager.status(this)
     }
 
-    private fun configurePowerAssistant() {
-        if (isAssistantRoleEnabled()) {
-            assistantSetupStatus.value = "Power-button assistant mode is enabled"
-            openAssistantSettings()
-            return
-        }
-        assistantSetupStatus.value = "Preparing Android assistant setup…"
-        val permissions = mutableListOf<String>()
-        if (!hasMicrophonePermission()) {
-            permissions += Manifest.permission.RECORD_AUDIO
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
-            PackageManager.PERMISSION_GRANTED
-        ) {
-            permissions += Manifest.permission.POST_NOTIFICATIONS
-        }
-        if (permissions.isNotEmpty()) {
-            assistantPermissionLauncher.launch(permissions.toTypedArray())
-            return
-        }
-        requestAssistantRole()
-    }
-
-    private fun requestAssistantRole() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roles = getSystemService(RoleManager::class.java)
-            if (!roles.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
-                assistantSetupStatus.value =
-                    "The standard assistant dialog is unavailable. Opening Android settings…"
-                openAssistantSettings()
-                return
+    private fun addQuickSettingsTile() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            quickTileSetupStatus.value = "Confirm Add in the Android Quick Settings dialog"
+            TileService.requestAddTileService(
+                this,
+                ComponentName(this, RiderRecordTileService::class.java),
+                "Rider Record",
+                Icon.createWithResource(this, R.drawable.ic_rider_record),
+                mainExecutor
+            ) { result ->
+                quickTileSetupStatus.value = when (result) {
+                    TileService.TILE_ADD_REQUEST_RESULT_TILE_ADDED ->
+                        "Rider Record was added to Quick Settings"
+                    TileService.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED ->
+                        "Rider Record is already in Quick Settings"
+                    else ->
+                        "Swipe down twice, tap Edit, then drag Rider Record into Quick Settings"
+                }
             }
-            if (roles.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-                assistantSetupStatus.value = "Power-button assistant mode is already enabled"
-                return
-            }
-            assistantSetupStatus.value = "Confirm Rider Notes in the Android assistant dialog"
-            assistantRoleLauncher.launch(roles.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
         } else {
-            openAssistantSettings()
+            quickTileSetupStatus.value =
+                "Swipe down twice, tap Edit, then drag Rider Record into Quick Settings"
         }
     }
-
-    private fun openAssistantSettings() {
-        val candidates = listOf(
-            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
-            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
-            Intent(Settings.ACTION_SETTINGS)
-        )
-        val target = candidates.firstOrNull { it.resolveActivity(packageManager) != null }
-        if (target == null) {
-            assistantSetupStatus.value =
-                "Open Android Settings → Apps → Default apps → Digital assistant app"
-            return
-        }
-        runCatching { startActivity(target) }
-            .onFailure {
-                assistantSetupStatus.value =
-                    "Open Android Settings → Apps → Default apps → Digital assistant app"
-            }
-    }
-
-    private fun isAssistantRoleEnabled(): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            getSystemService(RoleManager::class.java)
-                .isRoleHeld(RoleManager.ROLE_ASSISTANT)
 
     private fun createFreshBackup() {
         TopicLibraryRepository.createFreshBackup(this)
@@ -1116,9 +1047,8 @@ private fun DetectorScreen(
     topicRecordingStartedAtElapsedMs: State<Long?>,
     floatingRecordEnabled: State<Boolean>,
     onSetFloatingRecordEnabled: (Boolean) -> Unit,
-    assistantRoleEnabled: State<Boolean>,
-    assistantSetupStatus: State<String>,
-    onConfigureAssistant: () -> Unit
+    quickTileSetupStatus: State<String>,
+    onAddQuickTile: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -1478,41 +1408,23 @@ private fun DetectorScreen(
                                     modifier = Modifier.padding(14.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    Text("Quick Settings recording", fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Power-button assistant mode",
-                                        fontWeight = FontWeight.Bold
+                                        "Use Rider Record on any Android phone when Beauty-R1 is not " +
+                                            "connected. Tap once to start, tap again to stop, or tap " +
+                                            "during the final warning beeps to extend by 40 seconds."
                                     )
-                                    Text(
-                                        if (assistantRoleEnabled.value) {
-                                            "Enabled. Long-press the power button once to start a " +
-                                                "Rider Notes recording and again to stop it. During the " +
-                                                "final warning beeps, long-press to extend by 40 seconds."
-                                        } else {
-                                            "Use Rider Notes instead of Gemini for the power-button " +
-                                                "assistant shortcut. Android will ask you to confirm once."
-                                        }
-                                    )
-                                    Button(onClick = onConfigureAssistant) {
-                                        Text(
-                                            if (assistantRoleEnabled.value) {
-                                                "Open assistant settings"
-                                            } else {
-                                                "Set Rider Notes as assistant"
-                                            }
-                                        )
+                                    Button(onClick = onAddQuickTile) {
+                                        Text("Add Rider Record tile")
                                     }
                                     Text(
-                                        assistantSetupStatus.value,
-                                        color = if (assistantRoleEnabled.value) {
-                                            MaterialTheme.colorScheme.primary
-                                        } else {
-                                            MaterialTheme.colorScheme.error
-                                        },
+                                        quickTileSetupStatus.value,
+                                        color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                     Text(
-                                        "Rider Notes does not listen continuously. The microphone starts " +
-                                            "only after the physical shortcut is invoked.",
+                                        "The tile works while another app is visible and from the lock " +
+                                            "screen after waking it. It does not listen continuously.",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }

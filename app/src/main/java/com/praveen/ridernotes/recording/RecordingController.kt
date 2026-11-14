@@ -30,6 +30,7 @@ object RecordingController {
 
         val mediaContext = MediaControlGateway.prepareForVoiceNote(context)
         isRecordingOrStarting = true
+        RiderRecordTileService.refresh(context)
         return try {
             ContextCompat.startForegroundService(
                 context,
@@ -56,6 +57,7 @@ object RecordingController {
 
         topicRecordingStartedAtElapsedMs = null
         isRecordingOrStarting = true
+        RiderRecordTileService.refresh(context)
         return try {
             ContextCompat.startForegroundService(
                 context,
@@ -85,6 +87,7 @@ object RecordingController {
         // Reserve this extension synchronously so a delayed gesture cannot
         // become a new recording if the old deadline expires first.
         isExtensionWindowOpen = false
+        RiderRecordTileService.refresh(context)
         return try {
             context.startService(
                 Intent(context, VoiceRecordingService::class.java)
@@ -93,6 +96,7 @@ object RecordingController {
             "Recording extended by another 40 seconds"
         } catch (error: RuntimeException) {
             isExtensionWindowOpen = true
+            RiderRecordTileService.refresh(context)
             "Recording extension failed: ${error.javaClass.simpleName}"
         }
     }
@@ -103,6 +107,7 @@ object RecordingController {
         // the recording service finishes saving and releases the microphone.
         isRecordingOrStarting = false
         isExtensionWindowOpen = false
+        RiderRecordTileService.refresh(context)
         context.startService(
             Intent(context, VoiceRecordingService::class.java)
                 .setAction(VoiceRecordingService.ACTION_STOP_FOR_CALL)
@@ -111,6 +116,7 @@ object RecordingController {
 
     fun stop(context: Context): String {
         if (!isRecordingOrStarting) return "No recording is active"
+        RiderRecordTileService.refresh(context)
         context.startService(
             Intent(context, VoiceRecordingService::class.java)
                 .setAction(VoiceRecordingService.ACTION_STOP)

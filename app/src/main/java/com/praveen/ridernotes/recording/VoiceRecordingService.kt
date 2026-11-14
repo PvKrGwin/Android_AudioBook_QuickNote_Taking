@@ -688,6 +688,33 @@ class VoiceRecordingService : Service() {
             .setContentTitle("Rider Notes")
             .setContentText(text)
             .setOngoing(true)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .addAction(
+                android.R.drawable.ic_media_pause,
+                "Stop and save",
+                PendingIntent.getService(
+                    this,
+                    2002,
+                    Intent(this, VoiceRecordingService::class.java).setAction(ACTION_STOP),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            )
+            .apply {
+                if (RecordingController.isExtensionWindowOpen) {
+                    addAction(
+                        android.R.drawable.ic_input_add,
+                        "Extend 40 seconds",
+                        PendingIntent.getService(
+                            this@VoiceRecordingService,
+                            2003,
+                            Intent(this@VoiceRecordingService, VoiceRecordingService::class.java)
+                                .setAction(ACTION_EXTEND),
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        )
+                    )
+                }
+            }
             .setContentIntent(
                 PendingIntent.getActivity(
                     this,
@@ -701,6 +728,7 @@ class VoiceRecordingService : Service() {
     private fun updateNotification(text: String) {
         getSystemService(NotificationManager::class.java)
             .notify(NOTIFICATION_ID, buildNotification(text))
+        RiderRecordTileService.refresh(this)
     }
 
     override fun onDestroy() {
@@ -714,6 +742,7 @@ class VoiceRecordingService : Service() {
         recorder = null
         RecordingController.isRecordingOrStarting = false
         RecordingController.isExtensionWindowOpen = false
+        RiderRecordTileService.refresh(this)
         releaseBluetoothRoute()
         releaseRecordingWakeLock()
         super.onDestroy()
