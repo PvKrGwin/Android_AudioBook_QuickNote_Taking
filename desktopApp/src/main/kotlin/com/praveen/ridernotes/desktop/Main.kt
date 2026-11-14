@@ -20,12 +20,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +65,27 @@ private fun RiderNotesDesktopApp() {
     var snapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
     var status by remember { mutableStateOf("Open RiderNotes_Full_Backup.zip to begin.") }
     var selectedTab by remember { mutableStateOf(0) }
+    var showCloudSyncReminder by remember { mutableStateOf(true) }
+
+    if (showCloudSyncReminder) {
+        AlertDialog(
+            onDismissRequest = { showCloudSyncReminder = false },
+            title = { Text("Before opening a cloud backup") },
+            text = {
+                Text(
+                    "Ensure that all recent changes on your phone have been included in a fresh " +
+                        "full backup and successfully synchronized to the cloud. Otherwise, the " +
+                        "ZIP downloaded on this PC may not contain your latest mobile notes, " +
+                        "transcripts, Topics, or attachments."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showCloudSyncReminder = false }) {
+                    Text("I understand")
+                }
+            }
+        )
+    }
 
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
