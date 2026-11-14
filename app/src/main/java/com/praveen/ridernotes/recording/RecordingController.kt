@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.praveen.ridernotes.media.MediaControlGateway
 
@@ -20,6 +21,9 @@ object RecordingController {
     var topicRecordingStartedAtElapsedMs: Long? = null
         internal set
 
+    @Volatile
+    private var recordingRequestedAtElapsedMs: Long = 0L
+
     fun start(context: Context): String {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
@@ -30,6 +34,7 @@ object RecordingController {
 
         val mediaContext = MediaControlGateway.prepareForVoiceNote(context)
         isRecordingOrStarting = true
+        recordingRequestedAtElapsedMs = SystemClock.elapsedRealtime()
         RiderRecordTileService.refresh(context)
         return try {
             ContextCompat.startForegroundService(
@@ -44,6 +49,7 @@ object RecordingController {
             }
         } catch (error: RuntimeException) {
             isRecordingOrStarting = false
+            recordingRequestedAtElapsedMs = 0L
             MediaControlGateway.finishVoiceNote(context, delayMs = 0L)
             "Recording could not start: ${error.javaClass.simpleName}"
         }
@@ -57,6 +63,7 @@ object RecordingController {
 
         topicRecordingStartedAtElapsedMs = null
         isRecordingOrStarting = true
+        recordingRequestedAtElapsedMs = SystemClock.elapsedRealtime()
         RiderRecordTileService.refresh(context)
         return try {
             ContextCompat.startForegroundService(
@@ -68,6 +75,7 @@ object RecordingController {
             "Topic recording start requested"
         } catch (error: RuntimeException) {
             isRecordingOrStarting = false
+            recordingRequestedAtElapsedMs = 0L
             "Recording could not start: ${error.javaClass.simpleName}"
         }
     }
@@ -107,6 +115,7 @@ object RecordingController {
         // the recording service finishes saving and releases the microphone.
         isRecordingOrStarting = false
         isExtensionWindowOpen = false
+        recordingRequestedAtElapsedMs = 0L
         RiderRecordTileService.refresh(context)
         context.startService(
             Intent(context, VoiceRecordingService::class.java)
@@ -116,6 +125,10 @@ object RecordingController {
 
     fun stop(context: Context): String {
         if (!isRecordingOrStarting) return "No recording is active"
+        val sinceRequest = SystemClock.elapsedRealtime() - recordingRequestedAtElapsedMs
+        if (recordingRequestedAtElapsedMs != 0L && sinceRequest < STARTUP_STOP_GUARD_MS) {
+            return "Recording is still starting; accidental stop ignored"
+        }
         RiderRecordTileService.refresh(context)
         context.startService(
             Intent(context, VoiceRecordingService::class.java)
@@ -123,4 +136,10 @@ object RecordingController {
         )
         return "Recording stop requested"
     }
+
+    internal fun markStopped() {
+        recordingRequestedAtElapsedMs = 0L
+    }
+
+    private const val STARTUP_STOP_GUARD_MS = 2_000L
 }

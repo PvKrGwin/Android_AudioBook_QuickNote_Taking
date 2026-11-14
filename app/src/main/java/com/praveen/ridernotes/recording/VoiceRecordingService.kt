@@ -49,6 +49,7 @@ class VoiceRecordingService : Service() {
     private var deferResumeUntilCallEnds = false
     private var stopCompletionStarted = false
     private var topicOnly = false
+    private var recordingFlowRequestedAtElapsedMs = 0L
 
     private val beginAfterBeep = Runnable { beginRecording() }
     private val warningBeep = Runnable { playNextWarningBeep() }
@@ -90,7 +91,23 @@ class VoiceRecordingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> stopAndSave("remote press")
+            ACTION_STOP -> {
+                val sinceStart = SystemClock.elapsedRealtime() -
+                    recordingFlowRequestedAtElapsedMs
+                if (!recordingStarted &&
+                    recordingFlowRequestedAtElapsedMs != 0L &&
+                    sinceStart < STARTUP_STOP_GUARD_MS
+                ) {
+                    ButtonEventStore.record(
+                        ButtonEvent.recordingResult(
+                            "Premature stop intent ignored during recording startup",
+                            true
+                        )
+                    )
+                } else {
+                    stopAndSave("remote press")
+                }
+            }
             ACTION_STOP_FOR_CALL ->
                 stopAndSave("incoming app call", deferMediaResume = true)
             ACTION_START -> {
@@ -105,6 +122,7 @@ class VoiceRecordingService : Service() {
 
     private fun startRecordingFlow() {
         if (recordingStarted || recorder != null || stopping) return
+        recordingFlowRequestedAtElapsedMs = SystemClock.elapsedRealtime()
         pauseCheckAttempts = 0
         acquireRecordingWakeLock()
         startForeground(NOTIFICATION_ID, buildNotification("Preparing microphone…"))
@@ -137,6 +155,7 @@ class VoiceRecordingService : Service() {
             }
 
             RecordingController.isRecordingOrStarting = false
+            RecordingController.markStopped()
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
                     "Recording cancelled because the media app did not pause",
@@ -247,6 +266,7 @@ class VoiceRecordingService : Service() {
             recorder = null
             recordingStarted = false
             RecordingController.isRecordingOrStarting = false
+            RecordingController.markStopped()
             if (topicOnly) {
                 RecordingController.topicRecordingStartedAtElapsedMs = null
                 sendBroadcast(Intent(ACTION_TOPIC_RECORDING_FINISHED).setPackage(packageName))
@@ -294,6 +314,7 @@ class VoiceRecordingService : Service() {
         outputFile = null
         RecordingController.isRecordingOrStarting = false
         RecordingController.isExtensionWindowOpen = false
+        RecordingController.markStopped()
         val mediaContext = if (topicOnly) null else MediaControlGateway.currentVoiceNoteContext()
         if (saved && file != null) {
             saveMetadata(file, mediaContext)
@@ -742,6 +763,7 @@ class VoiceRecordingService : Service() {
         recorder = null
         RecordingController.isRecordingOrStarting = false
         RecordingController.isExtensionWindowOpen = false
+        RecordingController.markStopped()
         RiderRecordTileService.refresh(this)
         releaseBluetoothRoute()
         releaseRecordingWakeLock()
@@ -769,6 +791,7 @@ class VoiceRecordingService : Service() {
         private const val NOTIFICATION_ID = 2001
         private const val MAX_RECORDING_MS = 40_000L
         private const val CALL_SAFETY_CHECK_MS = 500L
+        private const val STARTUP_STOP_GUARD_MS = 2_000L
         private const val WARNING_WINDOW_MS = 4_000L
         private const val WARNING_BEEP_COUNT = 8
         private const val WARNING_BEEP_MS = 160
