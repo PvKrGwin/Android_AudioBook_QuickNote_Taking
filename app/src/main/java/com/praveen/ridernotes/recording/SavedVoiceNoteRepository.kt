@@ -30,7 +30,10 @@ data class SavedVoiceNote(
     val transcriptSegments: List<TranscriptSegment>,
     val topicOnly: Boolean = false,
     val textOnly: Boolean = false,
-    val typedNote: String? = null
+    val typedNote: String? = null,
+    val originDeviceId: String? = null,
+    val originDeviceName: String? = null,
+    val originDeviceType: String? = null
 ) {
     val recordedAtLabel: String
         get() = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
@@ -245,7 +248,10 @@ object SavedVoiceNoteRepository {
                 topicOnly = json.optBoolean("topicOnly", false),
                 textOnly = json.optBoolean("textOnly", false) ||
                     json.optNullableString("noteKind").equals("TEXT", ignoreCase = true),
-                typedNote = json.optNullableString("typedNote")
+                typedNote = json.optNullableString("typedNote"),
+                originDeviceId = json.optNullableString("originDeviceId"),
+                originDeviceName = json.optNullableString("originDeviceName"),
+                originDeviceType = json.optNullableString("originDeviceType")
             )
         } catch (_: Exception) {
             SavedVoiceNote(

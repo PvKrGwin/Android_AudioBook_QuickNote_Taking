@@ -82,7 +82,9 @@ object BackupImporter {
             }.orEmpty(),
             syncManifest = root.walkTopDown()
                 .firstOrNull { it.isFile && it.name == SyncManifestCodec.FILE_NAME }
-                ?.let(SyncManifestCodec::read)
+                ?.let(SyncManifestCodec::read),
+            sourceZipLastModified = zipFile.lastModified(),
+            sourceZipLength = zipFile.length()
         )
     }
 
@@ -115,7 +117,10 @@ object BackupImporter {
             topicOnly = json.optBoolean("topicOnly", false),
             textOnly = json.optBoolean("textOnly", false) ||
                 json.optString("noteKind").equals("TEXT", ignoreCase = true),
-            typedNote = json.nullable("typedNote")
+            typedNote = json.nullable("typedNote"),
+            originDeviceId = json.nullable("originDeviceId"),
+            originDeviceName = json.nullable("originDeviceName"),
+            originDeviceType = json.nullable("originDeviceType")
         )
     }.getOrNull()
 

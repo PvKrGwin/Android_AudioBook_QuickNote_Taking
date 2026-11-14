@@ -599,7 +599,7 @@ class VoiceRecordingService : Service() {
 
             val json = JSONObject()
                 .put("audioFile", audioFile.name)
-                .put("metadataVersion", 4)
+                .put("metadataVersion", 5)
                 .put("recordedAtEpochMs", recordedAt)
                 .put("type", if (topicOnly) "TOPIC_ONLY" else if (mediaContext?.isStandalone == false) "MEDIA_LINKED" else "STANDALONE")
                 .put("topicOnly", topicOnly)
@@ -612,6 +612,9 @@ class VoiceRecordingService : Service() {
                 .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
                 .put("sourceUrl", mediaContext?.sourceUrl ?: JSONObject.NULL)
                 .put("recordingInput", recordingInputLabel)
+                .put("originDeviceId", SyncRevisionStore.deviceId(this))
+                .put("originDeviceName", SyncRevisionStore.deviceName())
+                .put("originDeviceType", "ANDROID")
                 .put("transcriptionStatus", if (topicOnly) "NOT_REQUESTED" else "PENDING")
 
             File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")

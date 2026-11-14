@@ -17,7 +17,10 @@ data class DesktopNote(
     val audioFile: File?,
     val topicOnly: Boolean,
     val textOnly: Boolean = false,
-    val typedNote: String? = null
+    val typedNote: String? = null,
+    val originDeviceId: String? = null,
+    val originDeviceName: String? = null,
+    val originDeviceType: String? = null
 )
 
 data class SyncManifest(
@@ -64,5 +67,7 @@ data class BackupSnapshot(
     val items: List<DesktopTopicItem>,
     val placements: List<DesktopTopicPlacement>,
     val colorLegend: Map<String, String>,
-    val syncManifest: SyncManifest?
+    val syncManifest: SyncManifest?,
+    val sourceZipLastModified: Long,
+    val sourceZipLength: Long
 )

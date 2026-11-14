@@ -7,14 +7,18 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 object BackupPublisher {
-    fun publish(snapshot: BackupSnapshot): BackupSnapshot {
+    fun publish(
+        snapshot: BackupSnapshot,
+        forceAgainstRemote: SyncManifest? = null
+    ): BackupSnapshot {
         val remote = remoteManifestFor(snapshot.sourceZip)
         val openedRevision = snapshot.syncManifest?.revisionId
-        require(remote == null || remote.revisionId == openedRevision) {
+        val expectedRevision = forceAgainstRemote?.revisionId ?: openedRevision
+        require(remote == null || remote.revisionId == expectedRevision) {
             "The Drive backup changed after it was opened (${remote?.deviceName ?: "another device"}). " +
                 "Reopen it before publishing so those changes are not overwritten."
         }
-        val nextManifest = SyncManifestCodec.next(snapshot.syncManifest)
+        val nextManifest = SyncManifestCodec.next(forceAgainstRemote ?: snapshot.syncManifest)
         SyncManifestCodec.write(
             File(snapshot.extractedRoot, SyncManifestCodec.FILE_NAME),
             nextManifest

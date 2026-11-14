@@ -29,6 +29,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
+import kotlinx.coroutines.delay
 import java.awt.Desktop
 import java.io.File
 import java.text.SimpleDateFormat
@@ -51,19 +53,43 @@ import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 
 fun main() = application {
+    var windowVisible by remember { mutableStateOf(true) }
+    var mediaNoteRequest by remember { mutableStateOf(0) }
+    var trayAvailable by remember { mutableStateOf(false) }
+    val tray = remember {
+        DesktopTrayController(
+            onOpen = { windowVisible = true },
+            onAddMediaNote = {
+                windowVisible = true
+                mediaNoteRequest += 1
+            },
+            onExit = ::exitApplication
+        )
+    }
+    DisposableEffect(Unit) {
+        trayAvailable = runCatching { tray.install() }.getOrDefault(false)
+        onDispose { tray.close() }
+    }
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = {
+            if (trayAvailable) windowVisible = false else exitApplication()
+        },
+        visible = windowVisible,
         title = "Rider Notes PC"
     ) {
         MaterialTheme {
-            RiderNotesDesktopApp()
+            RiderNotesDesktopApp(mediaNoteRequest, tray)
         }
     }
 }
 
 @Composable
-private fun RiderNotesDesktopApp() {
+private fun RiderNotesDesktopApp(
+    externalMediaNoteRequest: Int,
+    tray: DesktopTrayController
+) {
     var snapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
+    var baseSnapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
     var status by remember { mutableStateOf("Open RiderNotes_Full_Backup.zip to begin.") }
     var selectedTab by remember { mutableStateOf(0) }
     var showCloudSyncReminder by remember { mutableStateOf(true) }
@@ -75,13 +101,25 @@ private fun RiderNotesDesktopApp() {
     var mediaTitle by remember { mutableStateOf("") }
     var mediaSource by remember { mutableStateOf("") }
     var mediaAuthor by remember { mutableStateOf("") }
+    var mediaModule by remember { mutableStateOf("") }
+    var mediaChapter by remember { mutableStateOf("") }
     var mediaPosition by remember { mutableStateOf("") }
+    var syncObservation by remember { mutableStateOf<DesktopSyncObservation?>(null) }
+    var showCloudChangeDialog by remember { mutableStateOf(false) }
+    var dismissedCloudRevision by remember { mutableStateOf<String?>(null) }
+    var showOfflineEditWarning by remember { mutableStateOf(false) }
+    var pendingOfflineSnapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
+    var offlineEditAcknowledged by remember { mutableStateOf(false) }
+    var startupEnabled by remember { mutableStateOf(WindowsStartupManager.isEnabled()) }
 
     fun loadBackup(zip: File) {
         runCatching { BackupImporter.import(zip) }
             .onSuccess {
                 snapshot = it
+                baseSnapshot = runCatching { BackupImporter.import(zip) }.getOrDefault(it)
                 dirty = false
+                offlineEditAcknowledged = false
+                syncObservation = DesktopSyncMonitor.inspect(it)
                 DesktopDeviceIdentity.rememberBackupPath(zip.absolutePath)
                 status = "Loaded ${it.notes.size} notes and ${it.groups.size} topic folders from ${zip.name}"
             }
@@ -91,24 +129,47 @@ private fun RiderNotesDesktopApp() {
     }
 
     fun markChanged(updated: BackupSnapshot) {
+        val health = syncObservation?.health
+        if (!offlineEditAcknowledged &&
+            (health == DesktopSyncHealth.OFFLINE_UNVERIFIED || health == DesktopSyncHealth.DRIVE_UNVERIFIED)
+        ) {
+            pendingOfflineSnapshot = updated
+            showOfflineEditWarning = true
+            return
+        }
         snapshot = updated
         dirty = true
         status = "Local changes are ready — Sync now is recommended"
         showSyncPrompt = true
     }
 
-    fun publishNow() {
+    fun publishNow(forceAgainstRemote: SyncManifest? = null) {
         val current = snapshot ?: return
-        runCatching { BackupPublisher.publish(current) }
+        runCatching { BackupPublisher.publish(current, forceAgainstRemote) }
             .onSuccess {
                 snapshot = it
+                baseSnapshot = runCatching { BackupImporter.import(it.sourceZip) }.getOrDefault(it)
                 dirty = false
                 showSyncPrompt = false
                 status = "Cloud-folder ZIP updated by ${DesktopDeviceIdentity.name()} at ${formatTime(System.currentTimeMillis())}"
+                syncObservation = DesktopSyncMonitor.inspect(it)
+                tray.notify("Rider Notes synchronized", "The Drive backup ZIP was updated successfully.")
             }
             .onFailure { error ->
                 status = "Sync stopped safely: ${error.message ?: error.javaClass.simpleName}"
             }
+    }
+
+    fun requestMediaNote() {
+        val captured = WindowsMediaBridge.captureAndPause()
+        mediaDraft = captured
+        mediaTitle = captured?.title.orEmpty()
+        mediaSource = captured?.sourceApp.orEmpty()
+        mediaAuthor = captured?.author.orEmpty()
+        mediaModule = captured?.module.orEmpty()
+        mediaChapter = captured?.chapter.orEmpty()
+        mediaPosition = captured?.playbackPositionMs?.div(1_000.0)?.toString().orEmpty()
+        showMediaNoteDialog = true
     }
 
     LaunchedEffect(Unit) {
@@ -116,6 +177,119 @@ private fun RiderNotesDesktopApp() {
             ?.let { File(it) }
             ?.takeIf(File::isFile)
             ?.let(::loadBackup)
+    }
+
+    LaunchedEffect(externalMediaNoteRequest) {
+        if (externalMediaNoteRequest > 0) requestMediaNote()
+    }
+
+    LaunchedEffect(snapshot?.sourceZip?.absolutePath) {
+        while (true) {
+            delay(4_000)
+            val current = snapshot ?: continue
+            val observation = DesktopSyncMonitor.inspect(current)
+            syncObservation = observation
+            val revisionKey = observation.remoteRevision?.revisionId
+                ?: if (observation.health == DesktopSyncHealth.NEW_CLOUD_VERSION) {
+                    "zip:${current.sourceZip.lastModified()}:${current.sourceZip.length()}"
+                } else null
+            if (observation.health == DesktopSyncHealth.NEW_CLOUD_VERSION &&
+                revisionKey != dismissedCloudRevision
+            ) {
+                showCloudChangeDialog = true
+                tray.notify("New Rider Notes backup", observation.message)
+            }
+        }
+    }
+
+    if (showOfflineEditWarning) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Cloud version cannot be verified") },
+            text = {
+                Text(
+                    "This PC appears offline, or the Drive revision marker is unavailable. " +
+                        "You can keep editing, but another device may have newer changes."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    offlineEditAcknowledged = true
+                    snapshot = pendingOfflineSnapshot
+                    pendingOfflineSnapshot = null
+                    dirty = true
+                    showOfflineEditWarning = false
+                    status = "Offline changes are pending — verify Drive before syncing"
+                }) { Text("Continue editing") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingOfflineSnapshot = null
+                    showOfflineEditWarning = false
+                    snapshot?.sourceZip?.takeIf(File::isFile)?.let(::loadBackup)
+                }) { Text("Discard this edit") }
+            }
+        )
+    }
+
+    if (showCloudChangeDialog) {
+        val observation = syncObservation
+        AlertDialog(
+            onDismissRequest = {
+                dismissedCloudRevision = observation?.remoteRevision?.revisionId
+                showCloudChangeDialog = false
+            },
+            title = { Text("A newer cloud version is available") },
+            text = {
+                Text(
+                    if (dirty) {
+                        "This PC and the cloud both contain changes. Merge both is recommended and keeps independently created notes and Topic points."
+                    } else {
+                        "${observation?.message.orEmpty()}. Reload it before continuing so this PC shows the latest notes."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val current = snapshot
+                    val base = baseSnapshot
+                    if (dirty && current != null && base != null) {
+                        runCatching {
+                            val cloud = BackupImporter.import(current.sourceZip)
+                            BackupMerger.keepBoth(base, current, cloud)
+                        }.onSuccess { merged ->
+                            snapshot = merged
+                            baseSnapshot = merged
+                            dirty = true
+                            showCloudChangeDialog = false
+                            publishNow(observation?.remoteRevision)
+                        }.onFailure { status = "Merge stopped safely: ${it.message}" }
+                    } else {
+                        current?.sourceZip?.takeIf(File::isFile)?.let(::loadBackup)
+                        showCloudChangeDialog = false
+                    }
+                }) { Text(if (dirty) "Merge both (recommended)" else "Reload cloud version") }
+            },
+            dismissButton = {
+                Row {
+                    if (dirty) {
+                        TextButton(onClick = {
+                            snapshot?.sourceZip?.takeIf(File::isFile)?.let(::loadBackup)
+                            showCloudChangeDialog = false
+                        }) { Text("Use cloud") }
+                        TextButton(onClick = {
+                            showCloudChangeDialog = false
+                            publishNow(observation?.remoteRevision)
+                        }) { Text("Keep PC as base") }
+                    } else {
+                        TextButton(onClick = {
+                            dismissedCloudRevision = observation?.remoteRevision?.revisionId
+                            showCloudChangeDialog = false
+                        }) { Text("Later") }
+                    }
+                }
+            }
+        )
     }
 
     if (showCloudSyncReminder) {
@@ -148,7 +322,7 @@ private fun RiderNotesDesktopApp() {
                         "and replaces it safely in your Google Drive for Desktop folder."
                 )
             },
-            confirmButton = { TextButton(onClick = ::publishNow) { Text("Sync now") } },
+            confirmButton = { TextButton(onClick = { publishNow() }) { Text("Sync now") } },
             dismissButton = { TextButton(onClick = { showSyncPrompt = false }) { Text("Later") } }
         )
     }
@@ -159,9 +333,11 @@ private fun RiderNotesDesktopApp() {
             title = { Text("Add note at paused media time") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(mediaTitle, { mediaTitle = it }, label = { Text("Media title") })
+                    OutlinedTextField(mediaTitle, { mediaTitle = it }, label = { Text("Book / course / video title") })
                     OutlinedTextField(mediaSource, { mediaSource = it }, label = { Text("Source app") })
                     OutlinedTextField(mediaAuthor, { mediaAuthor = it }, label = { Text("Author / channel") })
+                    OutlinedTextField(mediaModule, { mediaModule = it }, label = { Text("Module (optional)") })
+                    OutlinedTextField(mediaChapter, { mediaChapter = it }, label = { Text("Chapter / episode (optional)") })
                     OutlinedTextField(mediaPosition, { mediaPosition = it }, label = { Text("Position in seconds") })
                     OutlinedTextField(mediaNoteText, { mediaNoteText = it }, label = { Text("Your note") })
                 }
@@ -175,6 +351,9 @@ private fun RiderNotesDesktopApp() {
                             sourcePackage = mediaDraft?.sourcePackage,
                             title = mediaTitle.ifBlank { "Typed media note" },
                             author = mediaAuthor.takeIf(String::isNotBlank),
+                            module = mediaModule.takeIf(String::isNotBlank),
+                            chapter = mediaChapter.takeIf(String::isNotBlank),
+                            sourceUrl = mediaDraft?.sourceUrl,
                             playbackPositionMs = mediaPosition.toDoubleOrNull()?.let { (it * 1_000).toLong() }
                         )
                         markChanged(BackupEditor.addTypedMediaNote(snapshot!!, media, mediaNoteText))
@@ -200,25 +379,39 @@ private fun RiderNotesDesktopApp() {
                 }
                 OutlinedButton(
                     enabled = snapshot != null,
-                    onClick = {
-                        val captured = WindowsMediaBridge.captureAndPause()
-                        mediaDraft = captured
-                        mediaTitle = captured?.title.orEmpty()
-                        mediaSource = captured?.sourceApp.orEmpty()
-                        mediaAuthor = captured?.author.orEmpty()
-                        mediaPosition = captured?.playbackPositionMs?.div(1_000.0)?.toString().orEmpty()
-                        showMediaNoteDialog = true
-                    }
+                    onClick = ::requestMediaNote
                 ) { Text("✎ Add media note") }
                 if (dirty) {
-                    Button(onClick = ::publishNow) { Text("Sync now — recommended") }
+                    Button(onClick = { publishNow() }) { Text("Sync now — recommended") }
                 }
                 Button(onClick = { chooseBackup()?.let(::loadBackup) }) {
                     Text("Open backup ZIP")
                 }
+                if (WindowsStartupManager.isSupported()) {
+                    OutlinedButton(onClick = {
+                        val target = !startupEnabled
+                        WindowsStartupManager.setEnabled(target)
+                            .onSuccess {
+                                startupEnabled = target
+                                status = if (target) "Rider Notes will start with Windows" else "Windows startup disabled"
+                            }
+                            .onFailure { status = it.message ?: "Could not change Windows startup" }
+                    }) { Text(if (startupEnabled) "Startup: On" else "Startup: Off") }
+                }
             }
             Spacer(Modifier.height(10.dp))
             Text(status, color = MaterialTheme.colorScheme.primary)
+            syncObservation?.let { observation ->
+                Text(
+                    "Cloud status: ${observation.message}",
+                    color = when (observation.health) {
+                        DesktopSyncHealth.CURRENT -> Color(0xFF2E7D32)
+                        DesktopSyncHealth.NEW_CLOUD_VERSION -> Color(0xFF1565C0)
+                        else -> Color(0xFFB26A00)
+                    },
+                    fontSize = 12.sp
+                )
+            }
             Spacer(Modifier.height(10.dp))
 
             TabRow(selectedTabIndex = selectedTab) {
@@ -252,6 +445,7 @@ private fun RiderNotesDesktopApp() {
 @Composable
 private fun NotesScreen(notes: List<DesktopNote>) {
     var expandedSources by remember(notes) { mutableStateOf(emptySet<String>()) }
+    var expandedTitles by remember(notes) { mutableStateOf(emptySet<String>()) }
     val grouped = notes.groupBy { it.sourceApp }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -274,7 +468,28 @@ private fun NotesScreen(notes: List<DesktopNote>) {
                 }
             }
             if (source in expandedSources) {
-                items(sourceNotes, key = { it.id }) { note -> NoteCard(note) }
+                val titleGroups = sourceNotes.groupBy { it.title }
+                    .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                titleGroups.forEach { (title, titleNotes) ->
+                    val titleKey = "$source::$title"
+                    item(key = "title:$titleKey") {
+                        val expanded = titleKey in expandedTitles
+                        OutlinedButton(
+                            onClick = {
+                                expandedTitles = if (expanded) expandedTitles - titleKey
+                                else expandedTitles + titleKey
+                            },
+                            modifier = Modifier.fillMaxWidth().padding(start = 18.dp)
+                        ) {
+                            Text("${if (expanded) "▼" else "▶"} $title (${titleNotes.size})")
+                        }
+                    }
+                    if (titleKey in expandedTitles) {
+                        items(titleNotes.sortedByDescending { it.recordedAtEpochMs }, key = { it.id }) {
+                            note -> NoteCard(note)
+                        }
+                    }
+                }
             }
         }
     }
@@ -290,6 +505,11 @@ private fun NoteCard(note: DesktopNote) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(note.title, fontWeight = FontWeight.Bold)
             Text("${note.sourceApp} · ${formatTime(note.recordedAtEpochMs)}")
+            Text(
+                "Origin: ${note.originDeviceName ?: "Legacy / unknown device"}",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (expanded) {
                 note.module?.let { Text("Module: $it") }
                 note.chapter?.let { Text("Chapter / episode: $it") }

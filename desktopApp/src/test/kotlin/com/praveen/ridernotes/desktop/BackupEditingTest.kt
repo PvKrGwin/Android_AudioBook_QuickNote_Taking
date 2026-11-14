@@ -29,7 +29,15 @@ class BackupEditingTest {
         snapshot = BackupEditor.addTextPoint(snapshot, group.id, "Cells", "Mitochondria")
         snapshot = BackupEditor.addTypedMediaNote(
             snapshot,
-            CapturedMedia("Coursera", "coursera", "Cell structure", "University", 12_000L),
+            CapturedMedia(
+                sourceApp = "Coursera",
+                sourcePackage = "coursera",
+                title = "Cell Biology",
+                author = "University",
+                playbackPositionMs = 12_000L,
+                module = "Module 2",
+                chapter = "Cell structure"
+            ),
             "Compare prokaryotic and eukaryotic cells"
         )
         val published = BackupPublisher.publish(snapshot)
@@ -37,6 +45,10 @@ class BackupEditingTest {
         assertEquals("Biology", published.groups.single().name)
         assertEquals("Cells", published.items.single().title)
         assertTrue(published.notes.single().textOnly)
+        assertEquals("Cell Biology", published.notes.single().title)
+        assertEquals("Module 2", published.notes.single().module)
+        assertEquals("Cell structure", published.notes.single().chapter)
+        assertEquals(DesktopDeviceIdentity.name(), published.notes.single().originDeviceName)
         assertNotNull(published.syncManifest)
         assertTrue(File(temp, SyncManifestCodec.SIBLING_FILE_NAME).isFile)
         ZipFile(zip).use { archive ->

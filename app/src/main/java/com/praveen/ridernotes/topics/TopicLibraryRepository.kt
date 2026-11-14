@@ -343,6 +343,73 @@ object TopicLibraryRepository {
     }.getOrElse { "Topic restore failed: ${it.javaClass.simpleName}" }
 
     /**
+     * Keep both sides of a full-backup conflict. Existing phone entities win only when the
+     * same UUID was edited on both devices; cloud-only notes, files and Topic points are kept.
+     */
+    @Synchronized fun mergeFromFullBackup(context: Context, input: InputStream): String = runCatching {
+        val tempRoot = File(context.cacheDir, "full_merge_${System.currentTimeMillis()}").apply { mkdirs() }
+        ZipInputStream(input).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                val safe = File(tempRoot, entry.name).canonicalFile
+                require(safe.path.startsWith(tempRoot.canonicalPath + File.separator))
+                if (!entry.isDirectory) {
+                    safe.parentFile?.mkdirs()
+                    safe.outputStream().use { zip.copyTo(it) }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        val cloudManifest = File(tempRoot, "library.json")
+        require(cloudManifest.exists()) { "Topic manifest is missing" }
+        require(File(tempRoot, "rider_notes_backup.json").exists()) { "Backup marker is missing" }
+
+        val localFolder = folder(context)
+        tempRoot.walkTopDown().filter(File::isFile).forEach { source ->
+            val relative = source.relativeTo(tempRoot).invariantSeparatorsPath
+            when {
+                relative.startsWith("recordings/") -> {
+                    val target = File(File(context.filesDir, "voice_notes").apply { mkdirs() }, source.name)
+                    if (!target.exists()) source.copyTo(target)
+                }
+                relative !in setOf(
+                    "library.json",
+                    "rider_notes_backup.json",
+                    SyncRevisionStore.MANIFEST_FILE
+                ) -> {
+                    val target = File(localFolder, relative)
+                    if (!target.exists()) {
+                        target.parentFile?.mkdirs()
+                        source.copyTo(target)
+                    }
+                }
+            }
+        }
+        val local = load(context)
+        val cloud = readLibrary(cloudManifest)
+        val merged = TopicLibrary(
+            groups = mergeById(local.groups, cloud.groups) { it.id },
+            items = mergeById(local.items, cloud.items) { it.id },
+            placements = mergeById(local.placements, cloud.placements) { it.id },
+            colorLegend = cloud.colorLegend + local.colorLegend
+        )
+        save(context, merged)
+        File(context.filesDir, "voice_notes").listFiles().orEmpty()
+            .filter { it.extension.equals("json", true) }
+            .forEach { metadata ->
+                val json = runCatching { JSONObject(metadata.readText()) }.getOrNull() ?: return@forEach
+                if (json.optBoolean("textOnly", false)) {
+                    File(metadata.parentFile, metadata.nameWithoutExtension + ".m4a")
+                        .takeUnless(File::exists)
+                        ?.writeBytes(byteArrayOf())
+                }
+            }
+        tempRoot.deleteRecursively()
+        "Cloud and phone merged; phone-only and cloud-only content kept"
+    }.getOrElse { "Cloud merge failed: ${it.javaClass.simpleName}" }
+
+    /**
      * Replace the phone's managed Rider Notes content with one complete cloud snapshot.
      * A safety copy of the previous full backup is retained locally before replacement.
      */

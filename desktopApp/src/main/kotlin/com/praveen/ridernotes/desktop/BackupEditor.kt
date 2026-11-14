@@ -10,7 +10,10 @@ data class CapturedMedia(
     val sourcePackage: String?,
     val title: String,
     val author: String?,
-    val playbackPositionMs: Long?
+    val playbackPositionMs: Long?,
+    val module: String? = null,
+    val chapter: String? = null,
+    val sourceUrl: String? = null
 )
 
 object BackupEditor {
@@ -33,18 +36,23 @@ object BackupEditor {
             .put("title", media.title.ifBlank { "Typed media note" })
             .put("sourcePackage", media.sourcePackage ?: JSONObject.NULL)
             .put("sourceApp", media.sourceApp.ifBlank { "Windows media" })
-            .put("module", JSONObject.NULL)
-            .put("subtitleOrChapter", JSONObject.NULL)
+            .put("module", media.module ?: JSONObject.NULL)
+            .put("subtitleOrChapter", media.chapter ?: JSONObject.NULL)
             .put("author", media.author ?: JSONObject.NULL)
             .put("playbackPositionMs", media.playbackPositionMs ?: JSONObject.NULL)
-            .put("sourceUrl", JSONObject.NULL)
+            .put("sourceUrl", media.sourceUrl ?: JSONObject.NULL)
             .put("transcriptionStatus", "NOT_REQUESTED")
             .put("typedNote", noteText.trim())
+            .put("originDeviceId", DesktopDeviceIdentity.id())
+            .put("originDeviceName", DesktopDeviceIdentity.name())
+            .put("originDeviceType", "WINDOWS_PC")
         File(recordings, "$base.json").writeText(metadata.toString(2))
         File(recordings, "$base.txt").writeText(
             buildString {
                 appendLine("TITLE: ${media.title}")
                 appendLine("SOURCE: ${media.sourceApp}")
+                media.module?.let { appendLine("MODULE: $it") }
+                media.chapter?.let { appendLine("CHAPTER / EPISODE: $it") }
                 media.author?.let { appendLine("AUTHOR / CHANNEL: $it") }
                 media.playbackPositionMs?.let { appendLine("MEDIA POSITION MS: $it") }
                 appendLine()
@@ -185,7 +193,7 @@ object BackupEditor {
         )
     }
 
-    private fun saveLibrary(
+    internal fun saveLibrary(
         snapshot: BackupSnapshot,
         groups: List<DesktopTopicGroup> = snapshot.groups,
         items: List<DesktopTopicItem> = snapshot.items,

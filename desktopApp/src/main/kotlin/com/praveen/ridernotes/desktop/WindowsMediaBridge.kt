@@ -21,12 +21,17 @@ object WindowsMediaBridge {
             val jsonText = output.lineSequence().lastOrNull { it.trim().startsWith("{") }
                 ?: return null
             val json = JSONObject(jsonText)
+            val publishedTitle = json.optString("title", "Current media")
+            val albumTitle = json.optString("albumTitle").takeIf(String::isNotBlank)
             CapturedMedia(
                 sourceApp = friendlySource(json.optString("source")),
                 sourcePackage = json.optString("source").takeIf(String::isNotBlank),
-                title = json.optString("title", "Current media"),
+                title = albumTitle ?: publishedTitle,
                 author = json.optString("artist").takeIf(String::isNotBlank),
-                playbackPositionMs = json.optLong("positionMs", -1L).takeIf { it >= 0L }
+                playbackPositionMs = json.optLong("positionMs", -1L).takeIf { it >= 0L },
+                chapter = publishedTitle.takeIf {
+                    !albumTitle.isNullOrBlank() && !it.equals(albumTitle, ignoreCase = true)
+                }
             )
         }.getOrNull()
     }
@@ -69,6 +74,7 @@ object WindowsMediaBridge {
           source = ${'$'}session.SourceAppUserModelId
           title = ${'$'}props.Title
           artist = ${'$'}props.Artist
+          albumTitle = ${'$'}props.AlbumTitle
           positionMs = [long]${'$'}timeline.Position.TotalMilliseconds
         } | ConvertTo-Json -Compress
     """.trimIndent()

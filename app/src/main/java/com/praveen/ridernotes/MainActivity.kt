@@ -295,18 +295,22 @@ class MainActivity : ComponentActivity() {
                                 "The cloud backup was updated by ${revision.deviceName} at " +
                                     SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
                                         .format(Date(revision.modifiedAtEpochMs)) +
-                                    ". Update this phone before continuing, or keep this phone's " +
-                                    "local version as the new cloud base."
+                                ". Merge both is recommended when both devices contain changes."
                             )
                         },
                         confirmButton = {
-                            TextButton(onClick = { applyCloudRevision(revision) }) {
-                                Text("Update phone from cloud")
+                            TextButton(onClick = { mergeCloudRevision(revision) }) {
+                                Text("Merge both (recommended)")
                             }
                         },
                         dismissButton = {
-                            TextButton(onClick = { keepLocalAsCloudBase(revision) }) {
-                                Text("Keep local as base")
+                            Row {
+                                TextButton(onClick = { applyCloudRevision(revision) }) {
+                                    Text("Use cloud")
+                                }
+                                TextButton(onClick = { keepLocalAsCloudBase(revision) }) {
+                                    Text("Keep phone")
+                                }
                             }
                         }
                     )
@@ -388,6 +392,36 @@ class MainActivity : ComponentActivity() {
                 backupStatus.value = "Could not prepare local base: ${error.javaClass.simpleName}"
             }
         cloudSyncStatus.value = CloudSyncManager.status(this)
+    }
+
+    private fun mergeCloudRevision(revision: CloudRevision) {
+        backupStatus.value = "Merging phone changes with ${revision.deviceName}..."
+        Thread {
+            val remote = CloudSyncManager.downloadRemoteFullBackup(this)
+            val result = if (remote == null) {
+                "Cloud merge failed: full backup ZIP was not found"
+            } else if (SyncRevisionStore.revisionInside(remote)?.revisionId != revision.revisionId) {
+                "Cloud files are still synchronizing. Please wait briefly and try again."
+            } else {
+                SyncRevisionStore.setPendingRemote(this, revision)
+                remote.inputStream().use { TopicLibraryRepository.mergeFromFullBackup(this, it) }
+            }
+            val succeeded = result.startsWith("Cloud and phone merged")
+            if (succeeded) {
+                SyncRevisionStore.keepLocalOver(this, revision)
+                TopicLibraryRepository.createFreshBackup(this)
+                CloudSyncManager.enqueueNow(this)
+            }
+            remote?.delete()
+            runOnUiThread {
+                backupStatus.value = if (succeeded) "$result; Sync now is recommended" else result
+                if (succeeded) {
+                    cloudConflict.value = null
+                    refreshSavedNotes()
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+        }.start()
     }
 
     override fun onPause() {
@@ -2134,6 +2168,11 @@ private fun SavedNoteCard(
                 Text(note.title, fontWeight = FontWeight.Bold)
             }
             Text("${note.sourceApp} · ${note.recordedAtLabel}")
+            Text(
+                "Origin: ${note.originDeviceName ?: "Legacy / unknown device"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             note.module?.let { Text("Module: $it") }
             note.author?.let { Text("${creatorLabel(note.sourceApp)}: $it") }
             note.chapter?.let {
