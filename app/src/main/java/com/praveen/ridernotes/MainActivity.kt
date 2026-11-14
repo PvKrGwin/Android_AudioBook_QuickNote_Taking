@@ -272,6 +272,7 @@ class MainActivity : ComponentActivity() {
                     onRemoveCloudFolder = ::removeCloudFolder,
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
+                    onCreateFreshBackup = ::createFreshBackup,
                     onStartTopicRecording = ::startTopicRecording,
                     onStopTopicRecording = ::stopTopicRecording,
                     topicRecordingActive = topicRecordingActive,
@@ -541,6 +542,26 @@ class MainActivity : ComponentActivity() {
     private fun syncCloudNow() {
         CloudSyncManager.enqueueNow(this)
         cloudSyncStatus.value = CloudSyncManager.status(this)
+    }
+
+    private fun createFreshBackup() {
+        TopicLibraryRepository.createFreshBackup(this)
+            .onSuccess { backup ->
+                val status = CloudSyncManager.status(this)
+                if (status.destinationName != null && status.mode != CloudSyncManager.Mode.OFF) {
+                    CloudSyncManager.enqueueNow(this)
+                    backupStatus.value =
+                        "Fresh full backup created (${backup.length() / 1024} KB); cloud sync queued"
+                } else {
+                    backupStatus.value =
+                        "Fresh full backup created locally (${backup.length() / 1024} KB); enable cloud sync to upload"
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+            .onFailure { error ->
+                backupStatus.value =
+                    "Fresh backup failed: ${error.javaClass.simpleName}"
+            }
     }
 
     private fun startTopicRecording(groupId: String, index: Int?) {
@@ -986,6 +1007,7 @@ private fun DetectorScreen(
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
+    onCreateFreshBackup: () -> Unit,
     onStartTopicRecording: (String, Int?) -> Unit,
     onStopTopicRecording: () -> Unit,
     topicRecordingActive: State<Boolean>,
@@ -1019,17 +1041,20 @@ private fun DetectorScreen(
     if (showCloudWebLinkDialog.value) {
         AlertDialog(
             onDismissRequest = { showCloudWebLinkDialog.value = false },
-            title = { Text("Google Drive folder link") },
+            title = { Text("Cloud folder browser link") },
             text = {
                 Column {
-                    Text("Paste the browser link for the same folder used by automatic sync.")
+                    Text(
+                        "Paste the browser link for the same folder used by automatic sync " +
+                            "(Google Drive, OneDrive, Dropbox, or another provider)."
+                    )
                     OutlinedTextField(
                         value = cloudWebLinkText.value,
                         onValueChange = {
                             cloudWebLinkText.value = it
                             cloudWebLinkError.value = false
                         },
-                        label = { Text("https://drive.google.com/drive/folders/…") },
+                        label = { Text("https://…") },
                         isError = cloudWebLinkError.value
                     )
                     if (cloudWebLinkError.value) {
@@ -1557,9 +1582,9 @@ private fun DetectorScreen(
                                         }) {
                                             Text(
                                                 if (cloudSyncStatus.value.destinationWebUrl == null) {
-                                                    "Add Google Drive web link"
+                                                    "Add cloud folder web link"
                                                 } else {
-                                                    "Edit Google Drive web link"
+                                                    "Edit cloud folder web link"
                                                 }
                                             )
                                         }
@@ -1599,6 +1624,18 @@ private fun DetectorScreen(
                                     ) {
                                         Text("Sync now")
                                     }
+                                    OutlinedButton(
+                                        onClick = onCreateFreshBackup,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Create fresh full backup")
+                                    }
+                                    Text(
+                                        "Rebuilds the Topics ZIP from the phone's current groups, " +
+                                            "attachments, and linked recordings, then queues upload " +
+                                            "when cloud sync is enabled.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
                                     if (cloudSyncStatus.value.message.isNotBlank()) {
                                         Text(
                                             cloudSyncStatus.value.message,
