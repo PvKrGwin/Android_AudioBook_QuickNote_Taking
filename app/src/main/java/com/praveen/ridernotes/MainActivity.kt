@@ -1450,7 +1450,8 @@ private fun DetectorScreen(
                                     Text(
                                         if (assistantRoleEnabled.value) {
                                             "Enabled. Long-press the power button once to start a " +
-                                                "Rider Notes recording and again to stop it."
+                                                "Rider Notes recording and again to stop it. During the " +
+                                                "final warning beeps, long-press to extend by 40 seconds."
                                         } else {
                                             "Use Rider Notes instead of Gemini for the power-button " +
                                                 "assistant shortcut. Android will ask you to confirm once."
