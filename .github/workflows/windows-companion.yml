@@ -7,6 +7,7 @@ on:
       - milestone-11-windows-companion
       - milestone-12-bidirectional-companion-sync
     paths:
+      - "app/**"
       - "desktopApp/**"
       - "build.gradle.kts"
       - "settings.gradle.kts"
