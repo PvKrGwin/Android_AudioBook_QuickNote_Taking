@@ -77,6 +77,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
 import com.praveen.ridernotes.cloud.CloudSyncManager
+import com.praveen.ridernotes.cloud.CloudRevision
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
@@ -115,6 +117,7 @@ class MainActivity : ComponentActivity() {
     private val cloudSyncStatus = mutableStateOf(
         CloudSyncManager.Status(null, CloudSyncManager.Mode.OFF, "")
     )
+    private val cloudConflict = mutableStateOf<CloudRevision?>(null)
     private val sharedLinkStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
@@ -283,6 +286,31 @@ class MainActivity : ComponentActivity() {
                     quickTileSetupStatus = quickTileSetupStatus,
                     onAddQuickTile = ::addQuickSettingsTile
                 )
+                cloudConflict.value?.let { revision ->
+                    AlertDialog(
+                        onDismissRequest = { },
+                        title = { Text("Newer cloud version found") },
+                        text = {
+                            Text(
+                                "The cloud backup was updated by ${revision.deviceName} at " +
+                                    SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
+                                        .format(Date(revision.modifiedAtEpochMs)) +
+                                    ". Update this phone before continuing, or keep this phone's " +
+                                    "local version as the new cloud base."
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { applyCloudRevision(revision) }) {
+                                Text("Update phone from cloud")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { keepLocalAsCloudBase(revision) }) {
+                                Text("Keep local as base")
+                            }
+                        }
+                    )
+                }
             }
         }
         handleSharedMediaIntent(intent)
@@ -305,10 +333,61 @@ class MainActivity : ComponentActivity() {
         refreshGestureActions()
         refreshSavedNotes()
         cloudSyncStatus.value = CloudSyncManager.status(this)
+        checkCloudRevision()
         savedNotes.value
             .filter { it.transcriptionStatus in setOf("PENDING", "QUEUED", "TRANSCRIBING") }
             .forEach { ScribTranscriber.enqueue(this, it.audioFile) }
         diagnosticMediaSession.isActive = true
+    }
+
+    private fun checkCloudRevision() {
+        if (CloudSyncManager.destinationUri(this) == null) return
+        Thread {
+            val conflict = CloudSyncManager.inspectRemote(this)
+            runOnUiThread {
+                cloudConflict.value = conflict
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+        }.start()
+    }
+
+    private fun applyCloudRevision(revision: CloudRevision) {
+        backupStatus.value = "Updating this phone from ${revision.deviceName}..."
+        Thread {
+            val remote = CloudSyncManager.downloadRemoteFullBackup(this)
+            val result = if (remote == null) {
+                "Cloud restore failed: full backup ZIP was not found"
+            } else if (SyncRevisionStore.revisionInside(remote)?.revisionId != revision.revisionId) {
+                "Cloud files are still synchronizing. Please wait briefly and try again."
+            } else {
+                remote.inputStream().use { TopicLibraryRepository.replaceFromFullBackup(this, it) }
+            }
+            val succeeded = result.startsWith("Cloud snapshot restored")
+            if (succeeded) SyncRevisionStore.acceptRemote(this, revision)
+            remote?.delete()
+            runOnUiThread {
+                backupStatus.value = result
+                if (succeeded) {
+                    cloudConflict.value = null
+                    refreshSavedNotes()
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+        }.start()
+    }
+
+    private fun keepLocalAsCloudBase(revision: CloudRevision) {
+        SyncRevisionStore.keepLocalOver(this, revision)
+        TopicLibraryRepository.createFreshBackup(this)
+            .onSuccess {
+                cloudConflict.value = null
+                backupStatus.value = "Local phone version kept; Sync now is recommended"
+                CloudSyncManager.enqueueNow(this)
+            }
+            .onFailure { error ->
+                backupStatus.value = "Could not prepare local base: ${error.javaClass.simpleName}"
+            }
+        cloudSyncStatus.value = CloudSyncManager.status(this)
     }
 
     override fun onPause() {
@@ -471,6 +550,7 @@ class MainActivity : ComponentActivity() {
             stopNotePlayback()
         }
         notes.forEach { SavedVoiceNoteRepository.delete(it) }
+        if (notes.isNotEmpty()) SyncRevisionStore.markLocalModified(this)
         refreshSavedNotes()
     }
 
@@ -641,6 +721,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playOrPauseNote(note: SavedVoiceNote) {
+        if (note.textOnly || note.audioFile.length() == 0L) return
         if (playingFileName.value == note.audioFile.name) {
             val player = notePlayer ?: return
             if (player.isPlaying) {
@@ -784,6 +865,7 @@ class MainActivity : ComponentActivity() {
                 importedNotes += 1
             }
             refreshSavedNotes()
+            SyncRevisionStore.markLocalModified(this)
             CloudSyncManager.enqueueNow(this)
             backupStatus.value =
                 "Backup restored: $importedNotes note(s), $importedFiles file(s). " +
@@ -870,6 +952,7 @@ class MainActivity : ComponentActivity() {
             return false
         }
         refreshSavedNotes()
+        if (updated > 0) SyncRevisionStore.markLocalModified(this)
         CloudSyncManager.enqueueNow(this)
         backupStatus.value = if (updated > 0) {
             "Link saved to $updated ${note.sourceApp} recording(s) with the same title and channel."
@@ -1645,7 +1728,13 @@ private fun DetectorScreen(
                                         enabled = cloudSyncStatus.value.destinationName != null &&
                                             cloudSyncStatus.value.mode != CloudSyncManager.Mode.OFF
                                     ) {
-                                        Text("Sync now")
+                                        Text(
+                                            if (cloudSyncStatus.value.syncRecommended) {
+                                                "Sync now — recommended"
+                                            } else {
+                                                "Sync now"
+                                            }
+                                        )
                                     }
                                     OutlinedButton(
                                         onClick = onCreateFreshBackup,
@@ -2075,18 +2164,20 @@ private fun SavedNoteCard(
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onPlay) {
-                    Text(
-                        when {
-                            !isPlaying -> "Play recording"
-                            isPaused -> "Resume"
-                            else -> "Pause"
-                        }
-                    )
-                }
-                if (isPlaying) {
-                    OutlinedButton(onClick = onStop) { Text("Stop") }
+            if (!note.textOnly && note.audioFile.length() > 0L) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onPlay) {
+                        Text(
+                            when {
+                                !isPlaying -> "Play recording"
+                                isPaused -> "Resume"
+                                else -> "Pause"
+                            }
+                        )
+                    }
+                    if (isPlaying) {
+                        OutlinedButton(onClick = onStop) { Text("Stop") }
+                    }
                 }
             }
             if (isPlaying && playbackDurationMs > 0L) {
@@ -2101,11 +2192,16 @@ private fun SavedNoteCard(
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            Text(
-                "Audio: ${note.audioFile.name}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            if (!note.transcript.isNullOrBlank()) {
+            if (note.textOnly) {
+                Text("Typed note", fontWeight = FontWeight.SemiBold)
+                Text(note.typedNote.orEmpty())
+            } else {
+                Text(
+                    "Audio: ${note.audioFile.name}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (!note.textOnly && !note.transcript.isNullOrBlank()) {
                 Text("Transcript", fontWeight = FontWeight.SemiBold)
                 if (isPlaying && playbackDurationMs > 0L) {
                     PlaybackHighlightedTranscript(
@@ -2116,7 +2212,7 @@ private fun SavedNoteCard(
                 } else {
                     Text(note.transcript)
                 }
-            } else {
+            } else if (!note.textOnly) {
                 Text(
                     "Transcript: ${note.transcriptionStatus.lowercase().replace('_', ' ')}",
                     style = MaterialTheme.typography.bodySmall

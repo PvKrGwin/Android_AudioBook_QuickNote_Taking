@@ -4,9 +4,11 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import com.praveen.ridernotes.cloud.CloudSyncManager
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -219,6 +221,7 @@ object TopicLibraryRepository {
             .put("placements", JSONArray(library.placements.map { JSONObject().put("id", it.id).put("groupId", it.groupId).put("itemId", it.itemId).put("order", it.order).put("important", it.important).put("color", it.color) }))
             .put("colorLegend", JSONObject(library.colorLegend))
         manifest(context).apply { parentFile?.mkdirs(); writeText(root.toString(2)) }
+        SyncRevisionStore.markLocalModified(context)
         rebuildBackup(context, library)
         CloudSyncManager.enqueueNow(context)
     }
@@ -231,6 +234,9 @@ object TopicLibraryRepository {
     ) {
         val base = folder(context)
         val temp = File(base, "topics.tmp")
+        val revision = if (includeAllRecordings) {
+            SyncRevisionStore.writeManifest(context, base)
+        } else null
         ZipOutputStream(temp.outputStream()).use { zip ->
             zip.putNextEntry(ZipEntry("rider_notes_backup.json"))
             zip.write(
@@ -242,8 +248,15 @@ object TopicLibraryRepository {
                     .toByteArray(Charsets.UTF_8)
             )
             zip.closeEntry()
+            if (revision != null) {
+                val revisionFile = File(base, SyncRevisionStore.MANIFEST_FILE)
+                zip.putNextEntry(ZipEntry(SyncRevisionStore.MANIFEST_FILE))
+                revisionFile.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
             base.walkTopDown().filter {
-                it.isFile && it != backup(context) && it != fullBackup(context) && it != temp
+                it.isFile && it != backup(context) && it != fullBackup(context) && it != temp &&
+                    it.name != SyncRevisionStore.MANIFEST_FILE
             }.forEach { file ->
                 zip.putNextEntry(ZipEntry(file.relativeTo(base).invariantSeparatorsPath))
                 file.inputStream().use { it.copyTo(zip) }
@@ -328,6 +341,84 @@ object TopicLibraryRepository {
         tempRoot.deleteRecursively()
         "Topic backup merged: ${cloud.groups.size} cloud group(s), ${cloud.items.size} cloud point(s); phone-only content kept"
     }.getOrElse { "Topic restore failed: ${it.javaClass.simpleName}" }
+
+    /**
+     * Replace the phone's managed Rider Notes content with one complete cloud snapshot.
+     * A safety copy of the previous full backup is retained locally before replacement.
+     */
+    @Synchronized fun replaceFromFullBackup(context: Context, input: InputStream): String = runCatching {
+        val tempRoot = File(context.cacheDir, "full_restore_${System.currentTimeMillis()}").apply { mkdirs() }
+        ZipInputStream(input).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                val safe = File(tempRoot, entry.name).canonicalFile
+                require(safe.path.startsWith(tempRoot.canonicalPath + File.separator))
+                if (!entry.isDirectory) {
+                    safe.parentFile?.mkdirs()
+                    safe.outputStream().use { zip.copyTo(it) }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        require(File(tempRoot, "library.json").exists()) { "Topic manifest is missing" }
+        require(File(tempRoot, "rider_notes_backup.json").exists()) { "Backup marker is missing" }
+
+        val localFolder = folder(context)
+        val safety = File(
+            File(context.filesDir, "safety_backups").apply { mkdirs() },
+            "RiderNotes_PreCloudRestore_${System.currentTimeMillis()}.zip"
+        )
+        rebuildBackup(
+            context = context,
+            library = load(context),
+            target = safety,
+            includeAllRecordings = true
+        )
+        localFolder.listFiles().orEmpty().filter { file ->
+            file.name !in setOf(
+                backup(context).name,
+                fullBackup(context).name,
+                SyncRevisionStore.MANIFEST_FILE
+            )
+        }.forEach { it.deleteRecursively() }
+        val voiceFolder = File(context.filesDir, "voice_notes").apply { mkdirs() }
+        voiceFolder.listFiles().orEmpty().forEach { it.deleteRecursively() }
+
+        tempRoot.walkTopDown().filter(File::isFile).forEach { source ->
+            val relative = source.relativeTo(tempRoot).invariantSeparatorsPath
+            when {
+                relative.startsWith("recordings/") -> {
+                    source.copyTo(File(voiceFolder, source.name), overwrite = true)
+                }
+                relative !in setOf("rider_notes_backup.json", SyncRevisionStore.MANIFEST_FILE) -> {
+                    val target = File(localFolder, relative)
+                    target.parentFile?.mkdirs()
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+        }
+
+        // Text-only PC notes intentionally have no audio. A zero-byte marker keeps them
+        // visible to the existing Notes list while playback remains disabled.
+        voiceFolder.listFiles().orEmpty()
+            .filter { it.extension.equals("json", true) }
+            .forEach { metadata ->
+                val json = runCatching { JSONObject(metadata.readText()) }.getOrNull() ?: return@forEach
+                if (json.optBoolean("textOnly", false)) {
+                    File(voiceFolder, metadata.nameWithoutExtension + ".m4a")
+                        .takeUnless(File::exists)
+                        ?.writeBytes(byteArrayOf())
+                }
+            }
+        // The next explicit/automatic sync rebuilds the archive from this restored state.
+        // Do not generate a new local revision while the caller is still accepting the
+        // cloud revision that was just downloaded.
+        backup(context).delete()
+        fullBackup(context).delete()
+        tempRoot.deleteRecursively()
+        "Cloud snapshot restored; ${safety.name} retained"
+    }.getOrElse { "Cloud restore failed: ${it.javaClass.simpleName}" }
 
     private fun readLibrary(file: File): TopicLibrary {
         val root = JSONObject(file.readText())

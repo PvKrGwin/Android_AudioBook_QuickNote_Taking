@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.praveen.ridernotes.media.MediaControlGateway
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 
 object RecordingController {
     @Volatile
@@ -25,6 +26,9 @@ object RecordingController {
     private var recordingRequestedAtElapsedMs: Long = 0L
 
     fun start(context: Context): String {
+        SyncRevisionStore.pendingRemote(context)?.let {
+            return "Cloud update from ${it.deviceName} needs review in Rider Notes"
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -56,6 +60,9 @@ object RecordingController {
     }
 
     fun startTopic(context: Context): String {
+        SyncRevisionStore.pendingRemote(context)?.let {
+            return "Cloud update from ${it.deviceName} needs review in Rider Notes"
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) return "Microphone permission required"

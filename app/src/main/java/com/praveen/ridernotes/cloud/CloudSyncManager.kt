@@ -25,7 +25,9 @@ object CloudSyncManager {
         val mode: Mode,
         val message: String,
         val destinationPath: String? = null,
-        val destinationWebUrl: String? = null
+        val destinationWebUrl: String? = null,
+        val syncRecommended: Boolean = false,
+        val pendingRemote: CloudRevision? = null
     )
 
     fun destinationUri(context: Context): Uri? = preferences(context)
@@ -44,7 +46,9 @@ object CloudSyncManager {
             destinationPath = name,
             destinationWebUrl = preferences(context)
                 .getString(KEY_WEB_URL, null)
-                ?.takeIf(String::isNotBlank)
+                ?.takeIf(String::isNotBlank),
+            syncRecommended = SyncRevisionStore.syncRecommended(context),
+            pendingRemote = SyncRevisionStore.pendingRemote(context)
         )
     }
 
@@ -132,6 +136,45 @@ object CloudSyncManager {
         preferences(context).edit().putString(KEY_STATUS, message).apply()
     }
 
+    fun remoteRevision(context: Context): CloudRevision? {
+        val treeUri = destinationUri(context) ?: return null
+        val folder = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        val state = folder.findFile(SyncRevisionStore.REMOTE_STATE_FILE) ?: return null
+        return runCatching {
+            context.contentResolver.openInputStream(state.uri)?.bufferedReader()?.use { reader ->
+                SyncRevisionStore.parse(reader.readText())
+            }
+        }.getOrNull()
+    }
+
+    fun inspectRemote(context: Context): CloudRevision? {
+        val remote = remoteRevision(context) ?: return null
+        val lastSynced = SyncRevisionStore.lastSyncedRevision(context)
+        return if (remote.revisionId != lastSynced &&
+            remote.deviceId != SyncRevisionStore.deviceId(context)
+        ) {
+            SyncRevisionStore.setPendingRemote(context, remote)
+            remote
+        } else {
+            SyncRevisionStore.setPendingRemote(context, null)
+            null
+        }
+    }
+
+    fun downloadRemoteFullBackup(context: Context): File? {
+        val treeUri = destinationUri(context) ?: return null
+        val folder = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        val remote = folder.findFile(FULL_BACKUP_NAME) ?: return null
+        return runCatching {
+            File(context.cacheDir, "remote_${System.currentTimeMillis()}_$FULL_BACKUP_NAME").also { target ->
+                context.contentResolver.openInputStream(remote.uri).use { input ->
+                    requireNotNull(input)
+                    target.outputStream().use(input::copyTo)
+                }
+            }
+        }.getOrNull()
+    }
+
     private fun schedule(context: Context) {
         val manager = WorkManager.getInstance(context)
         val selectedMode = mode(context)
@@ -177,5 +220,6 @@ object CloudSyncManager {
     private const val MARKER_PREFIX = "uploaded:"
     private const val PERIODIC_WORK = "rider-notes-cloud-periodic"
     private const val IMMEDIATE_WORK = "rider-notes-cloud-now"
+    private const val FULL_BACKUP_NAME = "RiderNotes_Full_Backup.zip"
     private val SYNCED_EXTENSIONS = setOf("m4a", "json", "txt", "vtt", "srt")
 }

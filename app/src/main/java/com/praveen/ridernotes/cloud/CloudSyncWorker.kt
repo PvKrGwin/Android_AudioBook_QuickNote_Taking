@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.documentfile.provider.DocumentFile
 import androidx.work.Worker
 import androidx.work.WorkerParameters
+import com.praveen.ridernotes.topics.TopicLibraryRepository
 
 class CloudSyncWorker(
     appContext: Context,
@@ -22,6 +23,29 @@ class CloudSyncWorker(
         }
 
         return try {
+            val remoteRevision = CloudSyncManager.remoteRevision(applicationContext)
+            val lastSynced = SyncRevisionStore.lastSyncedRevision(applicationContext)
+            val dirty = SyncRevisionStore.isDirty(applicationContext)
+            if (remoteRevision != null && remoteRevision.revisionId != lastSynced) {
+                val local = if (dirty) SyncRevisionStore.currentOrNextRevision(applicationContext) else null
+                if (!dirty || local?.parentRevisionId != remoteRevision.revisionId) {
+                    SyncRevisionStore.setPendingRemote(applicationContext, remoteRevision)
+                    CloudSyncManager.updateStatus(
+                        applicationContext,
+                        "Cloud update available from ${remoteRevision.deviceName}; open Rider Notes to choose"
+                    )
+                    return Result.success()
+                }
+            }
+            if (!dirty && remoteRevision != null && remoteRevision.revisionId == lastSynced &&
+                folder.findFile("RiderNotes_Full_Backup.zip") != null
+            ) {
+                CloudSyncManager.updateStatus(applicationContext, "Cloud backup is up to date")
+                return Result.success()
+            }
+
+            TopicLibraryRepository.createFreshBackup(applicationContext).getOrThrow()
+            val localRevision = SyncRevisionStore.currentOrNextRevision(applicationContext)
             var uploaded = 0
             var unchanged = 0
             val existing = folder.listFiles().associateBy { it.name }
@@ -44,6 +68,14 @@ class CloudSyncWorker(
                 CloudSyncManager.markUploaded(applicationContext, local)
                 uploaded += 1
             }
+            val stateTarget = existing[SyncRevisionStore.REMOTE_STATE_FILE]
+                ?: folder.createFile("application/json", SyncRevisionStore.REMOTE_STATE_FILE)
+                ?: error("Could not create sync state")
+            applicationContext.contentResolver.openOutputStream(stateTarget.uri, "wt").use { output ->
+                requireNotNull(output)
+                output.write(SyncRevisionStore.toJson(localRevision).toString(2).toByteArray())
+            }
+            SyncRevisionStore.markSynced(applicationContext, localRevision)
             CloudSyncManager.updateStatus(
                 applicationContext,
                 "Sync complete: $uploaded uploaded, $unchanged unchanged"

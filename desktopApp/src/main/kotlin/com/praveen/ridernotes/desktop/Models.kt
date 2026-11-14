@@ -15,7 +15,19 @@ data class DesktopNote(
     val transcriptionStatus: String,
     val transcript: String?,
     val audioFile: File?,
-    val topicOnly: Boolean
+    val topicOnly: Boolean,
+    val textOnly: Boolean = false,
+    val typedNote: String? = null
+)
+
+data class SyncManifest(
+    val schemaVersion: Int = 1,
+    val revisionId: String,
+    val parentRevisionId: String?,
+    val modifiedAtEpochMs: Long,
+    val deviceId: String,
+    val deviceName: String,
+    val deviceType: String
 )
 
 data class DesktopTopicGroup(
@@ -51,5 +63,6 @@ data class BackupSnapshot(
     val groups: List<DesktopTopicGroup>,
     val items: List<DesktopTopicItem>,
     val placements: List<DesktopTopicPlacement>,
-    val colorLegend: Map<String, String>
+    val colorLegend: Map<String, String>,
+    val syncManifest: SyncManifest?
 )

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - milestone-11-windows-companion
+      - milestone-12-bidirectional-companion-sync
     paths:
       - "desktopApp/**"
       - "build.gradle.kts"
@@ -24,7 +25,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.4.1"
-      - name: Test desktop importer
+      - name: Test desktop companion
         run: gradle :desktopApp:test
       - name: Build Windows MSI
         run: gradle :desktopApp:packageMsi

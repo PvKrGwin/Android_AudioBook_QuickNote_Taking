@@ -22,6 +22,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -29,6 +30,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,6 +68,56 @@ private fun RiderNotesDesktopApp() {
     var status by remember { mutableStateOf("Open RiderNotes_Full_Backup.zip to begin.") }
     var selectedTab by remember { mutableStateOf(0) }
     var showCloudSyncReminder by remember { mutableStateOf(true) }
+    var dirty by remember { mutableStateOf(false) }
+    var showSyncPrompt by remember { mutableStateOf(false) }
+    var showMediaNoteDialog by remember { mutableStateOf(false) }
+    var mediaDraft by remember { mutableStateOf<CapturedMedia?>(null) }
+    var mediaNoteText by remember { mutableStateOf("") }
+    var mediaTitle by remember { mutableStateOf("") }
+    var mediaSource by remember { mutableStateOf("") }
+    var mediaAuthor by remember { mutableStateOf("") }
+    var mediaPosition by remember { mutableStateOf("") }
+
+    fun loadBackup(zip: File) {
+        runCatching { BackupImporter.import(zip) }
+            .onSuccess {
+                snapshot = it
+                dirty = false
+                DesktopDeviceIdentity.rememberBackupPath(zip.absolutePath)
+                status = "Loaded ${it.notes.size} notes and ${it.groups.size} topic folders from ${zip.name}"
+            }
+            .onFailure { error ->
+                status = "Import failed: ${error.message ?: error.javaClass.simpleName}"
+            }
+    }
+
+    fun markChanged(updated: BackupSnapshot) {
+        snapshot = updated
+        dirty = true
+        status = "Local changes are ready — Sync now is recommended"
+        showSyncPrompt = true
+    }
+
+    fun publishNow() {
+        val current = snapshot ?: return
+        runCatching { BackupPublisher.publish(current) }
+            .onSuccess {
+                snapshot = it
+                dirty = false
+                showSyncPrompt = false
+                status = "Cloud-folder ZIP updated by ${DesktopDeviceIdentity.name()} at ${formatTime(System.currentTimeMillis())}"
+            }
+            .onFailure { error ->
+                status = "Sync stopped safely: ${error.message ?: error.javaClass.simpleName}"
+            }
+    }
+
+    LaunchedEffect(Unit) {
+        DesktopDeviceIdentity.lastBackupPath()
+            ?.let { File(it) }
+            ?.takeIf(File::isFile)
+            ?.let(::loadBackup)
+    }
 
     if (showCloudSyncReminder) {
         AlertDialog(
@@ -87,6 +139,55 @@ private fun RiderNotesDesktopApp() {
         )
     }
 
+    if (showSyncPrompt && dirty) {
+        AlertDialog(
+            onDismissRequest = { showSyncPrompt = false },
+            title = { Text("Sync these changes?") },
+            text = {
+                Text(
+                    "Rider Notes has unsaved cloud changes. Sync now rebuilds the complete ZIP " +
+                        "and replaces it safely in your Google Drive for Desktop folder."
+                )
+            },
+            confirmButton = { TextButton(onClick = ::publishNow) { Text("Sync now") } },
+            dismissButton = { TextButton(onClick = { showSyncPrompt = false }) { Text("Later") } }
+        )
+    }
+
+    if (showMediaNoteDialog) {
+        AlertDialog(
+            onDismissRequest = { showMediaNoteDialog = false },
+            title = { Text("Add note at paused media time") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(mediaTitle, { mediaTitle = it }, label = { Text("Media title") })
+                    OutlinedTextField(mediaSource, { mediaSource = it }, label = { Text("Source app") })
+                    OutlinedTextField(mediaAuthor, { mediaAuthor = it }, label = { Text("Author / channel") })
+                    OutlinedTextField(mediaPosition, { mediaPosition = it }, label = { Text("Position in seconds") })
+                    OutlinedTextField(mediaNoteText, { mediaNoteText = it }, label = { Text("Your note") })
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = mediaNoteText.isNotBlank() && snapshot != null,
+                    onClick = {
+                        val media = CapturedMedia(
+                            sourceApp = mediaSource.ifBlank { "Windows media" },
+                            sourcePackage = mediaDraft?.sourcePackage,
+                            title = mediaTitle.ifBlank { "Typed media note" },
+                            author = mediaAuthor.takeIf(String::isNotBlank),
+                            playbackPositionMs = mediaPosition.toDoubleOrNull()?.let { (it * 1_000).toLong() }
+                        )
+                        markChanged(BackupEditor.addTypedMediaNote(snapshot!!, media, mediaNoteText))
+                        showMediaNoteDialog = false
+                        mediaNoteText = ""
+                    }
+                ) { Text("Add note") }
+            },
+            dismissButton = { TextButton(onClick = { showMediaNoteDialog = false }) { Text("Cancel") } }
+        )
+    }
+
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
             Row(
@@ -96,20 +197,24 @@ private fun RiderNotesDesktopApp() {
             ) {
                 Column(Modifier.weight(1f)) {
                     Text("Rider Notes", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                    Text("Windows companion · read-only backup viewer")
+                    Text("Windows companion · Google Drive desktop sync")
                 }
-                Button(onClick = {
-                    chooseBackup()?.let { zip ->
-                        runCatching { BackupImporter.import(zip) }
-                            .onSuccess {
-                                snapshot = it
-                                status = "Loaded ${it.notes.size} notes and ${it.groups.size} topic folders from ${zip.name}"
-                            }
-                            .onFailure { error ->
-                                status = "Import failed: ${error.message ?: error.javaClass.simpleName}"
-                            }
+                OutlinedButton(
+                    enabled = snapshot != null,
+                    onClick = {
+                        val captured = WindowsMediaBridge.captureAndPause()
+                        mediaDraft = captured
+                        mediaTitle = captured?.title.orEmpty()
+                        mediaSource = captured?.sourceApp.orEmpty()
+                        mediaAuthor = captured?.author.orEmpty()
+                        mediaPosition = captured?.playbackPositionMs?.div(1_000.0)?.toString().orEmpty()
+                        showMediaNoteDialog = true
                     }
-                }) {
+                ) { Text("✎ Add media note") }
+                if (dirty) {
+                    Button(onClick = ::publishNow) { Text("Sync now — recommended") }
+                }
+                Button(onClick = { chooseBackup()?.let(::loadBackup) }) {
                     Text("Open backup ZIP")
                 }
             }
@@ -139,7 +244,7 @@ private fun RiderNotesDesktopApp() {
             } else if (selectedTab == 0) {
                 NotesScreen(loaded.notes.filterNot { it.topicOnly })
             } else {
-                TopicsScreen(loaded)
+                TopicsScreen(loaded, ::markChanged)
             }
         }
     }
@@ -191,6 +296,10 @@ private fun NoteCard(note: DesktopNote) {
                 note.chapter?.let { Text("Chapter / episode: $it") }
                 note.author?.let { Text("Author / channel: $it") }
                 note.playbackPositionMs?.let { Text("Media position: ${formatPosition(it)}") }
+                note.typedNote?.takeIf(String::isNotBlank)?.let {
+                    Text("Typed note", fontWeight = FontWeight.SemiBold)
+                    Text(it)
+                }
                 Text("Transcription: ${note.transcriptionStatus}")
                 note.transcript?.takeIf(String::isNotBlank)?.let {
                     Spacer(Modifier.height(4.dp))
@@ -213,15 +322,83 @@ private fun NoteCard(note: DesktopNote) {
 }
 
 @Composable
-private fun TopicsScreen(snapshot: BackupSnapshot) {
+private fun TopicsScreen(
+    snapshot: BackupSnapshot,
+    onChanged: (BackupSnapshot) -> Unit
+) {
     val orderedGroups = remember(snapshot) { flattenGroups(snapshot.groups) }
-    var selectedGroupId by remember(snapshot) {
+    var selectedGroupId by remember(snapshot.sourceZip.absolutePath) {
         mutableStateOf(orderedGroups.firstOrNull()?.first?.id)
     }
+    var groupDialogParent by remember { mutableStateOf<String?>(null) }
+    var showGroupDialog by remember { mutableStateOf(false) }
+    var groupName by remember { mutableStateOf("") }
+    var pointDialogMode by remember { mutableStateOf<String?>(null) }
+    var pointTitle by remember { mutableStateOf("") }
+    var pointBody by remember { mutableStateOf("") }
+    val recorder = remember { DesktopAudioRecorder() }
+    var recording by remember { mutableStateOf(false) }
+
+    if (showGroupDialog) {
+        AlertDialog(
+            onDismissRequest = { showGroupDialog = false },
+            title = { Text(if (groupDialogParent == null) "New topic folder" else "New subfolder") },
+            text = { OutlinedTextField(groupName, { groupName = it }, label = { Text("Folder name") }) },
+            confirmButton = {
+                TextButton(enabled = groupName.isNotBlank(), onClick = {
+                    val updated = BackupEditor.createGroup(snapshot, groupName, groupDialogParent)
+                    onChanged(updated)
+                    if (selectedGroupId == null) selectedGroupId = updated.groups.lastOrNull()?.id
+                    groupName = ""
+                    showGroupDialog = false
+                }) { Text("Create") }
+            },
+            dismissButton = { TextButton(onClick = { showGroupDialog = false }) { Text("Cancel") } }
+        )
+    }
+
+    pointDialogMode?.let { mode ->
+        AlertDialog(
+            onDismissRequest = { pointDialogMode = null },
+            title = { Text(if (mode == "TEXT") "New text point" else "New link point") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(pointTitle, { pointTitle = it }, label = { Text("Title") })
+                    OutlinedTextField(
+                        pointBody,
+                        { pointBody = it },
+                        label = { Text(if (mode == "TEXT") "Text" else "Web link") }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = pointBody.isNotBlank() && selectedGroupId != null, onClick = {
+                    val groupId = selectedGroupId ?: return@TextButton
+                    val updated = if (mode == "TEXT") {
+                        BackupEditor.addTextPoint(snapshot, groupId, pointTitle, pointBody)
+                    } else {
+                        BackupEditor.addLinkPoint(snapshot, groupId, pointTitle, pointBody)
+                    }
+                    onChanged(updated)
+                    pointTitle = ""
+                    pointBody = ""
+                    pointDialogMode = null
+                }) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = { pointDialogMode = null }) { Text("Cancel") } }
+        )
+    }
+
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Card(Modifier.width(280.dp).fillMaxHeight()) {
             Column(Modifier.fillMaxSize().padding(10.dp)) {
-                Text("Topic folders", fontWeight = FontWeight.Bold)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Topic folders", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    TextButton(onClick = {
+                        groupDialogParent = null
+                        showGroupDialog = true
+                    }) { Text("+ Folder") }
+                }
                 Spacer(Modifier.height(8.dp))
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
                     orderedGroups.forEach { (group, depth) ->
@@ -249,7 +426,42 @@ private fun TopicsScreen(snapshot: BackupSnapshot) {
             .filter { it.groupId == selectedGroupId }
             .sortedBy { it.order }
         Column(Modifier.weight(1f).fillMaxHeight()) {
-            Text(selected?.name ?: "Select a topic", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    selected?.name ?: "Select a topic",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                selected?.let { group ->
+                    TextButton(onClick = {
+                        groupDialogParent = group.id
+                        showGroupDialog = true
+                    }) { Text("+ Subfolder") }
+                    TextButton(onClick = { pointDialogMode = "TEXT" }) { Text("+ Text") }
+                    TextButton(onClick = { pointDialogMode = "LINK" }) { Text("+ Link") }
+                    TextButton(onClick = {
+                        chooseAttachment()?.let { onChanged(BackupEditor.addAttachment(snapshot, group.id, it)) }
+                    }) { Text("+ File") }
+                    if (recording) {
+                        Button(onClick = {
+                            recorder.stop()?.let { audio ->
+                                onChanged(BackupEditor.addAttachment(snapshot, group.id, audio))
+                            }
+                            recording = false
+                        }) { Text("■ Stop recording") }
+                    } else {
+                        TextButton(onClick = {
+                            runCatching { recorder.start() }
+                                .onSuccess { recording = true }
+                        }) { Text("● Record") }
+                    }
+                    TextButton(onClick = {
+                        onChanged(BackupEditor.deleteGroup(snapshot, group.id))
+                        selectedGroupId = snapshot.groups.firstOrNull { it.id != group.id }?.id
+                    }) { Text("Delete folder") }
+                }
+            }
             snapshot.colorLegend.takeIf { it.isNotEmpty() }?.let { legend ->
                 Text(legend.entries.joinToString(" · ") { "${it.key}: ${it.value}" }, fontSize = 12.sp)
             }
@@ -257,7 +469,12 @@ private fun TopicsScreen(snapshot: BackupSnapshot) {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 items(placements, key = { it.id }) { placement ->
                     itemById[placement.itemId]?.let { item ->
-                        TopicPointCard(snapshot, item, placement)
+                        TopicPointCard(
+                            snapshot = snapshot,
+                            item = item,
+                            placement = placement,
+                            onChanged = onChanged
+                        )
                     }
                 }
             }
@@ -269,7 +486,8 @@ private fun TopicsScreen(snapshot: BackupSnapshot) {
 private fun TopicPointCard(
     snapshot: BackupSnapshot,
     item: DesktopTopicItem,
-    placement: DesktopTopicPlacement
+    placement: DesktopTopicPlacement,
+    onChanged: (BackupSnapshot) -> Unit
 ) {
     var expanded by remember(placement.id) { mutableStateOf(false) }
     Card(
@@ -291,6 +509,19 @@ private fun TopicPointCard(
                 }
                 item.target?.takeIf { item.type == "LINK" }?.let { url ->
                     Button(onClick = { openUrl(url) }) { Text("Open link") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(onClick = {
+                        onChanged(BackupEditor.updatePlacement(snapshot, placement.id, important = !placement.important))
+                    }) { Text(if (placement.important) "Unstar" else "Star") }
+                    TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, -1)) }) { Text("↑") }
+                    TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, 1)) }) { Text("↓") }
+                    TextButton(onClick = {
+                        val colors = listOf("WHITE", "RED", "YELLOW", "GREEN", "BLUE", "PURPLE")
+                        val next = colors[(colors.indexOf(placement.color).coerceAtLeast(0) + 1) % colors.size]
+                        onChanged(BackupEditor.updatePlacement(snapshot, placement.id, color = next))
+                    }) { Text("Color") }
+                    TextButton(onClick = { onChanged(BackupEditor.removePlacement(snapshot, placement.id)) }) { Text("Remove") }
                 }
             } else {
                 Text("Click to expand", fontSize = 12.sp)
@@ -324,6 +555,11 @@ private fun chooseBackup(): File? {
         dialogTitle = "Open Rider Notes full backup"
         fileFilter = FileNameExtensionFilter("Rider Notes ZIP backups", "zip")
     }
+    return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+}
+
+private fun chooseAttachment(): File? {
+    val chooser = JFileChooser().apply { dialogTitle = "Add file to this topic" }
     return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
 }
 

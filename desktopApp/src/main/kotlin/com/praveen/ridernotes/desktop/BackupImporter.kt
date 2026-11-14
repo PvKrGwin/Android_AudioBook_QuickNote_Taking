@@ -5,6 +5,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.zip.ZipFile
 
 object BackupImporter {
@@ -14,9 +15,17 @@ object BackupImporter {
         val safeName = zipFile.nameWithoutExtension.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val root = File(
             File(System.getProperty("user.home"), "RiderNotesPC/imports"),
-            "${safeName}_$timestamp"
+            "${safeName}_${timestamp}_${UUID.randomUUID().toString().take(8)}"
         ).apply { mkdirs() }
         extractSafely(zipFile, root)
+
+        return readExtracted(zipFile, root)
+    }
+
+    fun reload(snapshot: BackupSnapshot): BackupSnapshot =
+        readExtracted(snapshot.sourceZip, snapshot.extractedRoot)
+
+    private fun readExtracted(zipFile: File, root: File): BackupSnapshot {
 
         val libraryFile = root.walkTopDown()
             .firstOrNull { it.isFile && it.name == "library.json" }
@@ -70,7 +79,10 @@ object BackupImporter {
             colorLegend = library.optJSONObject("colorLegend")?.let { legend ->
                 legend.keys().asSequence().associateWith { legend.optString(it) }
                     .filterValues(String::isNotBlank)
-            }.orEmpty()
+            }.orEmpty(),
+            syncManifest = root.walkTopDown()
+                .firstOrNull { it.isFile && it.name == SyncManifestCodec.FILE_NAME }
+                ?.let(SyncManifestCodec::read)
         )
     }
 
@@ -100,7 +112,10 @@ object BackupImporter {
             transcript = json.nullable("transcript")
                 ?: transcriptText?.substringAfter("\nTRANSCRIPT\n", transcriptText),
             audioFile = filesByName["$base.m4a"]?.firstOrNull(),
-            topicOnly = json.optBoolean("topicOnly", false)
+            topicOnly = json.optBoolean("topicOnly", false),
+            textOnly = json.optBoolean("textOnly", false) ||
+                json.optString("noteKind").equals("TEXT", ignoreCase = true),
+            typedNote = json.nullable("typedNote")
         )
     }.getOrNull()
 

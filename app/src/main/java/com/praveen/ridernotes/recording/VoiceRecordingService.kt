@@ -25,6 +25,7 @@ import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.transcription.ScribTranscriber
 import com.praveen.ridernotes.topics.TopicLibraryRepository
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -615,6 +616,7 @@ class VoiceRecordingService : Service() {
 
             File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
                 .writeText(json.toString(2))
+            SyncRevisionStore.markLocalModified(this)
         } catch (error: Exception) {
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(
