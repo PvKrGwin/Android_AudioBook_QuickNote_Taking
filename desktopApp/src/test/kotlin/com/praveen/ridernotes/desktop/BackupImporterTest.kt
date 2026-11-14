@@ -6,11 +6,12 @@ import java.util.zip.ZipOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.io.path.createTempDirectory
 
 class BackupImporterTest {
     @Test
     fun importsNotesAndTopicsFromFullBackup() {
-        val temp = createTempDir(prefix = "rider-notes-pc-test-")
+        val temp = createTempDirectory("rider-notes-pc-test-").toFile()
         val zip = File(temp, "RiderNotes_Full_Backup.zip")
         ZipOutputStream(zip.outputStream()).use { output ->
             output.entry(
