@@ -13,11 +13,14 @@ import com.praveen.ridernotes.recording.RecordingController
  */
 class RiderNotificationListenerService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
+        var postedNotificationIsCall = false
         sbn?.let {
             MediaControlGateway.updateNotificationMetadata(it)
-            CallControlGateway.updateNotification(it)
+            postedNotificationIsCall = CallControlGateway.updateNotification(it)
         }
-        if (CallControlGateway.hasNotificationCall()) {
+        // Do not let an unrelated Rider Notes/media notification retrigger a
+        // stale call entry and stop a recording that has only just started.
+        if (postedNotificationIsCall && CallControlGateway.hasNotificationCall()) {
             RecordingController.interruptForCall(this)
         }
         MediaControlGateway.observeActivePlayback(this)

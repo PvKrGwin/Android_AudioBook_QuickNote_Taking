@@ -36,7 +36,8 @@ object CallControlGateway {
 
     private val calls = ConcurrentHashMap<String, CallActions>()
 
-    fun updateNotification(sbn: StatusBarNotification) {
+    /** Returns true only when this specific notification represents a live call. */
+    fun updateNotification(sbn: StatusBarNotification): Boolean {
         val notification = sbn.notification
         val actions = notification.actions?.toList().orEmpty()
 
@@ -57,7 +58,7 @@ object CallControlGateway {
             answer != null || reject != null || hangUp != null
         if (!isCall || (answer == null && reject == null && hangUp == null)) {
             calls.remove(sbn.key)
-            return
+            return false
         }
 
         calls[sbn.key] = CallActions(
@@ -67,6 +68,7 @@ object CallControlGateway {
             hangUp = hangUp,
             updatedAt = SystemClock.elapsedRealtime()
         )
+        return true
     }
 
     fun removeNotification(sbn: StatusBarNotification) {
