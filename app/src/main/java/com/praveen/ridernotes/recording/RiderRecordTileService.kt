@@ -2,6 +2,7 @@ package com.praveen.ridernotes.recording
 
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.widget.Toast
@@ -49,6 +50,12 @@ class RiderRecordTileService : TileService() {
                 context,
                 ComponentName(context, RiderRecordTileService::class.java)
             )
+            context.sendBroadcast(
+                Intent(ACTION_RECORDING_STATE_CHANGED).setPackage(context.packageName)
+            )
         }
+
+        const val ACTION_RECORDING_STATE_CHANGED =
+            "com.praveen.ridernotes.action.RECORDING_STATE_CHANGED"
     }
 }

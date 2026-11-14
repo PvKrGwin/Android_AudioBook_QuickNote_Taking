@@ -81,7 +81,6 @@ import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
 import com.praveen.ridernotes.input.GestureActionConfig
-import com.praveen.ridernotes.input.FloatingRecordConfig
 import com.praveen.ridernotes.input.RemotePressPatternDetector
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.media.SharedMediaLinkStore
@@ -119,7 +118,6 @@ class MainActivity : ComponentActivity() {
     private val sharedLinkStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
-    private val floatingRecordEnabled = mutableStateOf(false)
     private val quickTileSetupStatus = mutableStateOf(
         "Add Rider Record to Quick Settings for recording without Beauty-R1"
     )
@@ -222,7 +220,6 @@ class MainActivity : ComponentActivity() {
             },
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
-        floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
         RecordingController.topicRecordingStartedAtElapsedMs?.let { startedAt ->
             topicRecordingActive.value = true
             topicRecordingStartedAtElapsedMs.value = startedAt
@@ -283,8 +280,6 @@ class MainActivity : ComponentActivity() {
                     onStopTopicRecording = ::stopTopicRecording,
                     topicRecordingActive = topicRecordingActive,
                     topicRecordingStartedAtElapsedMs = topicRecordingStartedAtElapsedMs,
-                    floatingRecordEnabled = floatingRecordEnabled,
-                    onSetFloatingRecordEnabled = ::setFloatingRecordEnabled,
                     quickTileSetupStatus = quickTileSetupStatus,
                     onAddQuickTile = ::addQuickSettingsTile
                 )
@@ -303,7 +298,6 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
-        floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
         MediaControlGateway.observeActivePlayback(this)
@@ -615,11 +609,6 @@ class MainActivity : ComponentActivity() {
         topicRecordingActive.value = false
         topicRecordingStartedAtElapsedMs.value = null
         playbackHandler.postDelayed(::refreshSavedNotes, 900L)
-    }
-
-    private fun setFloatingRecordEnabled(enabled: Boolean) {
-        FloatingRecordConfig.setEnabled(this, enabled)
-        floatingRecordEnabled.value = enabled
     }
 
     private fun stopTranscription(note: SavedVoiceNote) {
@@ -1045,8 +1034,6 @@ private fun DetectorScreen(
     onStopTopicRecording: () -> Unit,
     topicRecordingActive: State<Boolean>,
     topicRecordingStartedAtElapsedMs: State<Long?>,
-    floatingRecordEnabled: State<Boolean>,
-    onSetFloatingRecordEnabled: (Boolean) -> Unit,
     quickTileSetupStatus: State<String>,
     onAddQuickTile: () -> Unit
 ) {
@@ -1412,7 +1399,8 @@ private fun DetectorScreen(
                                     Text(
                                         "Use Rider Record on any Android phone when Beauty-R1 is not " +
                                             "connected. Tap once to start, tap again to stop, or tap " +
-                                            "during the final warning beeps to extend by 40 seconds."
+                                            "during the final warning beeps to extend by 40 seconds. " +
+                                            "A small blinking red dot confirms that recording is active."
                                     )
                                     Button(onClick = onAddQuickTile) {
                                         Text("Add Rider Record tile")
@@ -1447,33 +1435,6 @@ private fun DetectorScreen(
                                     TextButton(onClick = { showLinkGuide.value = true }) {
                                         Text("📝 Link guide: cleared vs replaced")
                                     }
-                                }
-                            }
-                        }
-                        item {
-                            Card {
-                                Column(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Checkbox(
-                                            checked = false,
-                                            onCheckedChange = null,
-                                            enabled = false
-                                        )
-                                        Text(
-                                            "Floating record button without remote — disabled",
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                    Text(
-                                        "This option is temporarily unavailable to prevent interference " +
-                                            "with Bluetooth earphones and remotes. It remains off after restart."
-                                    )
                                 }
                             }
                         }
