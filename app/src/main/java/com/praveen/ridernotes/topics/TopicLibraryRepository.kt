@@ -223,18 +223,41 @@ object TopicLibraryRepository {
         CloudSyncManager.enqueueNow(context)
     }
 
-    private fun rebuildBackup(context: Context, library: TopicLibrary = load(context)) {
+    private fun rebuildBackup(
+        context: Context,
+        library: TopicLibrary = load(context),
+        target: File = backup(context),
+        includeAllRecordings: Boolean = false
+    ) {
         val base = folder(context)
-        val zipFile = backup(context)
         val temp = File(base, "topics.tmp")
         ZipOutputStream(temp.outputStream()).use { zip ->
-            base.walkTopDown().filter { it.isFile && it != zipFile && it != temp }.forEach { file ->
+            zip.putNextEntry(ZipEntry("rider_notes_backup.json"))
+            zip.write(
+                JSONObject()
+                    .put("formatVersion", 1)
+                    .put("backupType", if (includeAllRecordings) "FULL" else "TOPICS")
+                    .put("createdAtEpochMs", System.currentTimeMillis())
+                    .toString(2)
+                    .toByteArray(Charsets.UTF_8)
+            )
+            zip.closeEntry()
+            base.walkTopDown().filter {
+                it.isFile && it != backup(context) && it != fullBackup(context) && it != temp
+            }.forEach { file ->
                 zip.putNextEntry(ZipEntry(file.relativeTo(base).invariantSeparatorsPath))
                 file.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
             }
             val voiceFolder = File(context.filesDir, "voice_notes")
-            library.items.filter { it.type == TYPE_RECORDING }.mapNotNull { it.target }.distinct().forEach { audioName ->
+            val audioNames = if (includeAllRecordings) {
+                voiceFolder.listFiles().orEmpty()
+                    .filter { it.isFile && it.extension.equals("m4a", ignoreCase = true) }
+                    .map { it.name }
+            } else {
+                library.items.filter { it.type == TYPE_RECORDING }.mapNotNull { it.target }.distinct()
+            }
+            audioNames.forEach { audioName ->
                 val baseName = audioName.substringBeforeLast('.')
                 listOf("m4a", "json", "txt", "vtt", "srt").forEach { extension ->
                     val file = File(voiceFolder, "$baseName.$extension")
@@ -246,15 +269,21 @@ object TopicLibraryRepository {
                 }
             }
         }
-        temp.copyTo(zipFile, overwrite = true)
+        temp.copyTo(target, overwrite = true)
         temp.delete()
     }
 
     /** Rebuild the complete Topics archive from the phone's current local state. */
     @Synchronized
     fun createFreshBackup(context: Context): Result<File> = runCatching {
-        rebuildBackup(context, load(context))
-        backup(context).also { require(it.exists() && it.length() > 0L) }
+        val output = fullBackup(context)
+        rebuildBackup(
+            context = context,
+            library = load(context),
+            target = output,
+            includeAllRecordings = true
+        )
+        output.also { require(it.exists() && it.length() > 0L) }
     }
 
     /** Merge a topic backup without replacing any file or entity already on this phone. */
@@ -320,6 +349,7 @@ object TopicLibraryRepository {
     private fun folder(context: Context) = File(context.filesDir, "topic_library").apply { mkdirs() }
     private fun manifest(context: Context) = File(folder(context), "library.json")
     private fun backup(context: Context) = File(folder(context), "RiderNotes_Topics_Backup.zip")
+    private fun fullBackup(context: Context) = File(folder(context), "RiderNotes_Full_Backup.zip")
     private fun id() = UUID.randomUUID().toString()
     private fun now() = System.currentTimeMillis()
     private fun JSONArray?.objects(): List<JSONObject> = if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it) }

@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "RiderNotes"
 include(":app")
+include(":desktopApp")

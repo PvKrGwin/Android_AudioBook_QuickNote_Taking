@@ -1737,9 +1737,9 @@ private fun DetectorScreen(
                                         Text("Create fresh full backup")
                                     }
                                     Text(
-                                        "Rebuilds the Topics ZIP from the phone's current groups, " +
-                                            "attachments, and linked recordings, then queues upload " +
-                                            "when cloud sync is enabled.",
+                                        "Creates RiderNotes_Full_Backup.zip with every note, transcript, " +
+                                            "recording, Topic folder, and attachment, then queues upload " +
+                                            "when cloud sync is enabled. This ZIP can be opened by Rider Notes PC.",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     if (cloudSyncStatus.value.message.isNotBlank()) {
