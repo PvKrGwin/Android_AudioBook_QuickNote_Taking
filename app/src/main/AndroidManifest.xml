@@ -54,6 +54,29 @@
             </intent-filter>
         </activity>
 
+        <!--
+          A complete VoiceInteractionService declaration is required for Rider Notes
+          to appear in Android/OEM Digital Assistant selection screens. The selected
+          service remains lightweight and acts only when the assistant is invoked.
+        -->
+        <service
+            android:name=".assistant.RiderVoiceInteractionService"
+            android:exported="true"
+            android:label="Rider Notes"
+            android:permission="android.permission.BIND_VOICE_INTERACTION">
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/rider_voice_interaction_service" />
+        </service>
+
+        <service
+            android:name=".assistant.RiderVoiceInteractionSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION" />
+
         <service
             android:name=".input.BleButtonAccessibilityService"
             android:exported="true"
