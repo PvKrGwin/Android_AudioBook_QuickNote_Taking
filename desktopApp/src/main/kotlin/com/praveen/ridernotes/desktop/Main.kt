@@ -129,7 +129,18 @@ private fun RiderNotesDesktopApp(
     }
 
     fun markChanged(updated: BackupSnapshot) {
-        val health = syncObservation?.health
+        // Re-check at the exact moment an edit is committed. The background watcher is useful
+        // for passive viewing, but this closes the small gap between two polling cycles.
+        val immediateObservation = snapshot?.let(DesktopSyncMonitor::inspect)
+        if (immediateObservation != null) syncObservation = immediateObservation
+        if (immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION) {
+            snapshot = updated
+            dirty = true
+            showCloudChangeDialog = true
+            status = "A newer Drive version was found before this edit was synchronized"
+            return
+        }
+        val health = immediateObservation?.health ?: syncObservation?.health
         if (!offlineEditAcknowledged &&
             (health == DesktopSyncHealth.OFFLINE_UNVERIFIED || health == DesktopSyncHealth.DRIVE_UNVERIFIED)
         ) {
