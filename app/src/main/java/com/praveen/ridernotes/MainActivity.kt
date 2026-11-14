@@ -2,6 +2,7 @@ package com.praveen.ridernotes
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.role.RoleManager
 import android.content.ClipData
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
@@ -117,6 +118,7 @@ class MainActivity : ComponentActivity() {
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
     private val floatingRecordEnabled = mutableStateOf(false)
+    private val assistantRoleEnabled = mutableStateOf(false)
     private var remoteTraining = false
     private var remoteTrainingDevice: String? = null
     private val remoteTrainingSignals = linkedSetOf<String>()
@@ -131,6 +133,28 @@ class MainActivity : ComponentActivity() {
         }
     }
     private var pendingExportNotes: List<SavedVoiceNote> = emptyList()
+
+    private val assistantRoleLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        assistantRoleEnabled.value = isAssistantRoleEnabled()
+        backupStatus.value = if (assistantRoleEnabled.value) {
+            "Power-button assistant mode enabled"
+        } else {
+            "Rider Notes was not selected as the assistant"
+        }
+    }
+
+    private val assistantPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        if (result[Manifest.permission.RECORD_AUDIO] == true || hasMicrophonePermission()) {
+            microphoneEnabled.value = true
+            requestAssistantRole()
+        } else {
+            backupStatus.value = "Microphone permission is required for assistant recording"
+        }
+    }
 
     private val exportBackupLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
@@ -278,7 +302,9 @@ class MainActivity : ComponentActivity() {
                     topicRecordingActive = topicRecordingActive,
                     topicRecordingStartedAtElapsedMs = topicRecordingStartedAtElapsedMs,
                     floatingRecordEnabled = floatingRecordEnabled,
-                    onSetFloatingRecordEnabled = ::setFloatingRecordEnabled
+                    onSetFloatingRecordEnabled = ::setFloatingRecordEnabled,
+                    assistantRoleEnabled = assistantRoleEnabled,
+                    onConfigureAssistant = ::configurePowerAssistant
                 )
             }
         }
@@ -296,6 +322,7 @@ class MainActivity : ComponentActivity() {
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
         floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
+        assistantRoleEnabled.value = isAssistantRoleEnabled()
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
         MediaControlGateway.observeActivePlayback(this)
@@ -543,6 +570,41 @@ class MainActivity : ComponentActivity() {
         CloudSyncManager.enqueueNow(this)
         cloudSyncStatus.value = CloudSyncManager.status(this)
     }
+
+    private fun configurePowerAssistant() {
+        if (!hasMicrophonePermission()) {
+            val permissions = mutableListOf(Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                permissions += Manifest.permission.POST_NOTIFICATIONS
+            }
+            assistantPermissionLauncher.launch(permissions.toTypedArray())
+            return
+        }
+        requestAssistantRole()
+    }
+
+    private fun requestAssistantRole() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roles = getSystemService(RoleManager::class.java)
+            if (!roles.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
+                backupStatus.value = "This phone does not expose the Android Assistant role"
+                return
+            }
+            if (roles.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
+                backupStatus.value = "Power-button assistant mode is already enabled"
+                return
+            }
+            assistantRoleLauncher.launch(roles.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
+        } else {
+            runCatching { startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)) }
+                .onFailure { backupStatus.value = "Open Android Default apps and select the assistant" }
+        }
+    }
+
+    private fun isAssistantRoleEnabled(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            getSystemService(RoleManager::class.java)
+                .isRoleHeld(RoleManager.ROLE_ASSISTANT)
 
     private fun createFreshBackup() {
         TopicLibraryRepository.createFreshBackup(this)
@@ -1013,7 +1075,9 @@ private fun DetectorScreen(
     topicRecordingActive: State<Boolean>,
     topicRecordingStartedAtElapsedMs: State<Long?>,
     floatingRecordEnabled: State<Boolean>,
-    onSetFloatingRecordEnabled: (Boolean) -> Unit
+    onSetFloatingRecordEnabled: (Boolean) -> Unit,
+    assistantRoleEnabled: State<Boolean>,
+    onConfigureAssistant: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
     val selectedTab = remember { mutableStateOf(0) }
@@ -1366,6 +1430,42 @@ private fun DetectorScreen(
                                     .height(170.dp),
                                 contentScale = ContentScale.Fit
                             )
+                        }
+                        item {
+                            Card {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        "Power-button assistant mode",
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        if (assistantRoleEnabled.value) {
+                                            "Enabled. Long-press the power button once to start a " +
+                                                "Rider Notes recording and again to stop it."
+                                        } else {
+                                            "Use Rider Notes instead of Gemini for the power-button " +
+                                                "assistant shortcut. Android will ask you to confirm once."
+                                        }
+                                    )
+                                    Button(onClick = onConfigureAssistant) {
+                                        Text(
+                                            if (assistantRoleEnabled.value) {
+                                                "Assistant mode enabled"
+                                            } else {
+                                                "Set Rider Notes as assistant"
+                                            }
+                                        )
+                                    }
+                                    Text(
+                                        "Rider Notes does not listen continuously. The microphone starts " +
+                                            "only after the physical shortcut is invoked.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
                         }
                         item {
                             Card {
