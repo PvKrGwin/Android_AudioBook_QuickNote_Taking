@@ -138,6 +138,25 @@ object MediaControlGateway {
                 )
             )
         }
+        if (controller.packageName in UDEMY_PACKAGES) {
+            val diagnostic = (
+                metadataTextEntries(metadata) +
+                    notificationTextByPackage[controller.packageName].orEmpty()
+                        .mapIndexed { index, value -> "notification.$index" to value }
+                )
+                .distinctBy { it.first to it.second }
+                .joinToString(" | ") { (key, value) -> "$key=${value.take(120)}" }
+                .take(1_200)
+            ButtonEventStore.record(
+                ButtonEvent.mediaResult(
+                    "Udemy metadata: course=${mediaTitle.orEmpty()}, " +
+                        "module=${mediaModule.orEmpty()}, " +
+                        "chapter=${mediaChapter.orEmpty()}, " +
+                        "instructor=${mediaAuthor.orEmpty()}; raw=[$diagnostic]",
+                    true
+                )
+            )
+        }
         val metadataEntries = (
             mediaLinkEntries(controller, metadata) +
                 notificationLinkEntriesByPackage[controller.packageName].orEmpty()
@@ -893,6 +912,47 @@ object MediaControlGateway {
                 )
             }
 
+            in UDEMY_PACKAGES -> {
+                val allText = listOfNotNull(
+                    title, displayTitle, displaySubtitle, displayDescription,
+                    album, rawAuthor, artist, albumArtist
+                ) + metadataTextValues(metadata) + notificationText
+                val rawChapter = title ?: displayTitle ?: displayDescription
+                val moduleNumber = allText.asSequence()
+                    .mapNotNull { candidate ->
+                        Regex("(?i)\\b(?:module|section|unit|week)\\s*[-:]?\\s*([0-9]+)\\b")
+                            .find(candidate)?.groupValues?.getOrNull(1)
+                    }
+                    .firstOrNull()
+                // Udemy publishes the lecture/video as TITLE. The course name is
+                // usually DISPLAY_SUBTITLE or ALBUM—the reverse of our generic mapper.
+                val courseTitle = listOfNotNull(
+                    displaySubtitle,
+                    album,
+                    artist,
+                    notificationText.firstOrNull()
+                ).firstOrNull { candidate ->
+                    candidate.isNotBlank() &&
+                        !candidate.equals(rawChapter, ignoreCase = true) &&
+                        !candidate.matches(
+                            Regex("(?i)^\\s*(?:module|section|unit|week)\\s*[-:]?\\s*\\d+.*$")
+                        )
+                }
+                val instructor = listOfNotNull(albumArtist, rawAuthor, artist)
+                    .firstOrNull { candidate ->
+                        !candidate.equals(courseTitle, ignoreCase = true) &&
+                            !candidate.equals(rawChapter, ignoreCase = true)
+                    }
+                MappedMediaFields(
+                    title = courseTitle ?: "Udemy course",
+                    module = moduleNumber?.let { "Module $it" },
+                    chapter = rawChapter?.takeUnless {
+                        it.equals(courseTitle, ignoreCase = true)
+                    },
+                    author = instructor
+                )
+            }
+
             else -> {
                 val chapter = displaySubtitle ?: album
                 MappedMediaFields(title, null, chapter, author)
@@ -907,4 +967,9 @@ object MediaControlGateway {
         } catch (_: Exception) {
             packageName
         }
+
+    private val UDEMY_PACKAGES = setOf(
+        "com.udemy.android",
+        "com.udemy.android.ufb"
+    )
 }
