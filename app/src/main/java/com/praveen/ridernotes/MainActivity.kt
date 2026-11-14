@@ -119,6 +119,7 @@ class MainActivity : ComponentActivity() {
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
     private val floatingRecordEnabled = mutableStateOf(false)
     private val assistantRoleEnabled = mutableStateOf(false)
+    private val assistantSetupStatus = mutableStateOf("Not configured")
     private var remoteTraining = false
     private var remoteTrainingDevice: String? = null
     private val remoteTrainingSignals = linkedSetOf<String>()
@@ -138,11 +139,12 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) {
         assistantRoleEnabled.value = isAssistantRoleEnabled()
-        backupStatus.value = if (assistantRoleEnabled.value) {
+        assistantSetupStatus.value = if (assistantRoleEnabled.value) {
             "Power-button assistant mode enabled"
         } else {
-            "Rider Notes was not selected as the assistant"
+            "Rider Notes was not selected. Opening Android assistant settings…"
         }
+        if (!assistantRoleEnabled.value) openAssistantSettings()
     }
 
     private val assistantPermissionLauncher = registerForActivityResult(
@@ -152,7 +154,8 @@ class MainActivity : ComponentActivity() {
             microphoneEnabled.value = true
             requestAssistantRole()
         } else {
-            backupStatus.value = "Microphone permission is required for assistant recording"
+            assistantSetupStatus.value =
+                "Microphone permission is required for assistant recording"
         }
     }
 
@@ -304,6 +307,7 @@ class MainActivity : ComponentActivity() {
                     floatingRecordEnabled = floatingRecordEnabled,
                     onSetFloatingRecordEnabled = ::setFloatingRecordEnabled,
                     assistantRoleEnabled = assistantRoleEnabled,
+                    assistantSetupStatus = assistantSetupStatus,
                     onConfigureAssistant = ::configurePowerAssistant
                 )
             }
@@ -323,6 +327,9 @@ class MainActivity : ComponentActivity() {
         microphoneEnabled.value = hasMicrophonePermission()
         floatingRecordEnabled.value = FloatingRecordConfig.isEnabled(this)
         assistantRoleEnabled.value = isAssistantRoleEnabled()
+        if (assistantRoleEnabled.value) {
+            assistantSetupStatus.value = "Power-button assistant mode enabled"
+        }
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
         MediaControlGateway.observeActivePlayback(this)
@@ -572,6 +579,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun configurePowerAssistant() {
+        if (isAssistantRoleEnabled()) {
+            assistantSetupStatus.value = "Power-button assistant mode is enabled"
+            openAssistantSettings()
+            return
+        }
+        assistantSetupStatus.value = "Preparing Android assistant setup…"
         val permissions = mutableListOf<String>()
         if (!hasMicrophonePermission()) {
             permissions += Manifest.permission.RECORD_AUDIO
@@ -593,18 +606,39 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roles = getSystemService(RoleManager::class.java)
             if (!roles.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
-                backupStatus.value = "This phone does not expose the Android Assistant role"
+                assistantSetupStatus.value =
+                    "The standard assistant dialog is unavailable. Opening Android settings…"
+                openAssistantSettings()
                 return
             }
             if (roles.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-                backupStatus.value = "Power-button assistant mode is already enabled"
+                assistantSetupStatus.value = "Power-button assistant mode is already enabled"
                 return
             }
+            assistantSetupStatus.value = "Confirm Rider Notes in the Android assistant dialog"
             assistantRoleLauncher.launch(roles.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
         } else {
-            runCatching { startActivity(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)) }
-                .onFailure { backupStatus.value = "Open Android Default apps and select the assistant" }
+            openAssistantSettings()
         }
+    }
+
+    private fun openAssistantSettings() {
+        val candidates = listOf(
+            Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS),
+            Intent(Settings.ACTION_VOICE_INPUT_SETTINGS),
+            Intent(Settings.ACTION_SETTINGS)
+        )
+        val target = candidates.firstOrNull { it.resolveActivity(packageManager) != null }
+        if (target == null) {
+            assistantSetupStatus.value =
+                "Open Android Settings → Apps → Default apps → Digital assistant app"
+            return
+        }
+        runCatching { startActivity(target) }
+            .onFailure {
+                assistantSetupStatus.value =
+                    "Open Android Settings → Apps → Default apps → Digital assistant app"
+            }
     }
 
     private fun isAssistantRoleEnabled(): Boolean =
@@ -1083,6 +1117,7 @@ private fun DetectorScreen(
     floatingRecordEnabled: State<Boolean>,
     onSetFloatingRecordEnabled: (Boolean) -> Unit,
     assistantRoleEnabled: State<Boolean>,
+    assistantSetupStatus: State<String>,
     onConfigureAssistant: () -> Unit
 ) {
     val events = ButtonEventStore.events.collectAsState()
@@ -1460,12 +1495,21 @@ private fun DetectorScreen(
                                     Button(onClick = onConfigureAssistant) {
                                         Text(
                                             if (assistantRoleEnabled.value) {
-                                                "Assistant mode enabled"
+                                                "Open assistant settings"
                                             } else {
                                                 "Set Rider Notes as assistant"
                                             }
                                         )
                                     }
+                                    Text(
+                                        assistantSetupStatus.value,
+                                        color = if (assistantRoleEnabled.value) {
+                                            MaterialTheme.colorScheme.primary
+                                        } else {
+                                            MaterialTheme.colorScheme.error
+                                        },
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                     Text(
                                         "Rider Notes does not listen continuously. The microphone starts " +
                                             "only after the physical shortcut is invoked.",
