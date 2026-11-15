@@ -30,7 +30,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "RiderNotesPC"
-            packageVersion = "0.1.3"
+            packageVersion = "0.1.4"
             description = "Windows companion for Rider Notes backups"
             vendor = "Praveen Kumar V"
             // Compose Desktop and JavaFX Media need more than java.desktop at runtime.

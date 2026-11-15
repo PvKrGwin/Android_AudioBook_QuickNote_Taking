@@ -59,6 +59,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import javax.imageio.ImageIO
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
 
@@ -80,6 +81,11 @@ fun main() = application {
         trayAvailable = runCatching { tray.install() }.getOrDefault(false)
         onDispose { tray.close() }
     }
+    val appIcon = remember {
+        requireNotNull(object {}.javaClass.getResourceAsStream("/rider_notes_logo.png")).use {
+            ImageIO.read(it)
+        }
+    }
     Window(
         onCloseRequest = {
             if (trayAvailable) windowVisible = false else exitApplication()
@@ -87,6 +93,11 @@ fun main() = application {
         visible = windowVisible,
         title = "Rider Notes PC"
     ) {
+        LaunchedEffect(window, appIcon) {
+            // AWT safely decodes this icon for the title bar/taskbar. Using Compose's
+            // painterResource here caused Skia to reject the same packaged artwork.
+            window.iconImage = appIcon
+        }
         MaterialTheme {
             RiderNotesDesktopApp(mediaNoteRequest, tray)
         }
