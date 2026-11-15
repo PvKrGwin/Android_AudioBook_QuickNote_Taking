@@ -26,12 +26,23 @@ class DesktopAudioPlayer : AutoCloseable {
         private set
 
     private var player: MediaPlayer? = null
+    private val runtimeReady: Boolean
 
     init {
-        JavaFxRuntime.start()
+        val startup = JavaFxRuntime.start()
+        runtimeReady = startup.isSuccess
+        startup.exceptionOrNull()?.let { error ->
+            state = state.copy(
+                error = "Windows audio engine is unavailable: ${error.message ?: error.javaClass.simpleName}"
+            )
+        }
     }
 
     fun playOrPause(file: File) {
+        if (!runtimeReady) {
+            state = state.copy(file = file, playing = false, paused = false)
+            return
+        }
         if (state.file?.absolutePath == file.absolutePath && player != null) {
             Platform.runLater {
                 if (state.playing && !state.paused) {
@@ -81,12 +92,14 @@ class DesktopAudioPlayer : AutoCloseable {
     }
 
     fun seek(positionMs: Long) {
+        if (!runtimeReady) return
         Platform.runLater {
             player?.seek(Duration.millis(positionMs.coerceAtLeast(0L).toDouble()))
         }
     }
 
     fun stop() {
+        if (!runtimeReady) return
         Platform.runLater {
             player?.stop()
             state = state.copy(positionMs = 0L, playing = false, paused = false)
@@ -94,7 +107,7 @@ class DesktopAudioPlayer : AutoCloseable {
     }
 
     override fun close() {
-        Platform.runLater { disposePlayer() }
+        if (runtimeReady) Platform.runLater { disposePlayer() }
     }
 
     private fun disposePlayer() {
@@ -108,19 +121,23 @@ private object JavaFxRuntime {
     @Volatile private var started = false
 
     @Synchronized
-    fun start() {
-        if (started) return
+    fun start(): Result<Unit> {
+        if (started) return Result.success(Unit)
         val ready = CountDownLatch(1)
-        runCatching {
+        return runCatching {
             Platform.startup {
                 Platform.setImplicitExit(false)
                 ready.countDown()
             }
-            ready.await(5, TimeUnit.SECONDS)
-        }.onFailure {
+            check(ready.await(10, TimeUnit.SECONDS)) { "JavaFX audio startup timed out" }
+            started = true
+        }.recoverCatching {
             // Platform.startup throws when another component already initialized JavaFX.
-            if (it !is IllegalStateException) throw it
+            if (it is IllegalStateException && it.message?.contains("Toolkit already initialized") == true) {
+                started = true
+            } else {
+                throw it
+            }
         }
-        started = true
     }
 }

@@ -30,7 +30,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "RiderNotesPC"
-            packageVersion = "0.1.1"
+            packageVersion = "0.1.2"
             description = "Windows companion for Rider Notes backups"
             vendor = "Praveen Kumar V"
             // Compose Desktop and JavaFX Media need more than java.desktop at runtime.
@@ -49,6 +49,9 @@ compose.desktop {
                 "jdk.unsupported"
             )
             windows {
+                // Keep the console for this reliability build so startup failures provide
+                // actionable diagnostics instead of only "Failed to launch JVM".
+                console = true
                 menuGroup = "Rider Notes"
                 shortcut = true
                 perUserInstall = true

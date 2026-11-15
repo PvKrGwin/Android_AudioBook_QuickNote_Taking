@@ -33,13 +33,35 @@ jobs:
         run: |
           gradle :desktopApp:createDistributable
           $jvm = "desktopApp/build/compose/binaries/main/app/RiderNotesPC/runtime/bin/server/jvm.dll"
+          $exe = "desktopApp/build/compose/binaries/main/app/RiderNotesPC/RiderNotesPC.exe"
           if (-not (Test-Path $jvm)) {
             throw "Packaged Java runtime is missing $jvm"
           }
+          if (-not (Test-Path $exe)) {
+            throw "Packaged application launcher is missing $exe"
+          }
           Write-Host "Verified bundled JVM: $jvm"
+          $stdout = Join-Path $env:RUNNER_TEMP "rider-notes-stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "rider-notes-stderr.log"
+          $process = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Start-Sleep -Seconds 12
+          if ($process.HasExited) {
+            if (Test-Path $stdout) { Get-Content $stdout }
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Packaged Rider Notes exited during the startup smoke test with code $($process.ExitCode)"
+          }
+          Stop-Process -Id $process.Id -Force
+          Write-Host "Packaged Rider Notes stayed running during the startup smoke test"
       - name: Build Windows MSI
         run: gradle :desktopApp:packageMsi
       - uses: actions/upload-artifact@v4
         with:
           name: RiderNotesPC-Windows
           path: desktopApp/build/compose/binaries/main/msi/*.msi
+      - name: Create portable Windows ZIP
+        shell: pwsh
+        run: Compress-Archive -Path desktopApp/build/compose/binaries/main/app/RiderNotesPC -DestinationPath desktopApp/build/RiderNotesPC-Portable.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RiderNotesPC-Portable
+          path: desktopApp/build/RiderNotesPC-Portable.zip
