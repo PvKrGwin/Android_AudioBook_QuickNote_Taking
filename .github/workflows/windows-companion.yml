@@ -28,6 +28,15 @@ jobs:
           gradle-version: "9.4.1"
       - name: Test Android and desktop companion
         run: gradle :app:testDebugUnitTest :desktopApp:test
+      - name: Build and verify bundled Windows runtime
+        shell: pwsh
+        run: |
+          gradle :desktopApp:createDistributable
+          $jvm = "desktopApp/build/compose/binaries/main/app/RiderNotesPC/runtime/bin/server/jvm.dll"
+          if (-not (Test-Path $jvm)) {
+            throw "Packaged Java runtime is missing $jvm"
+          }
+          Write-Host "Verified bundled JVM: $jvm"
       - name: Build Windows MSI
         run: gradle :desktopApp:packageMsi
       - uses: actions/upload-artifact@v4
