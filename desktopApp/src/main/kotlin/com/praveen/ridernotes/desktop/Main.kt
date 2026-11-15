@@ -922,8 +922,64 @@ private fun TopicsScreen(
     }
     var showBulkColorDialog by remember { mutableStateOf(false) }
     var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var linkPlacementId by remember { mutableStateOf<String?>(null) }
+    var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     val recorder = remember { DesktopAudioRecorder() }
     var recording by remember { mutableStateOf(false) }
+
+    if (linkPlacementId != null) {
+        val sourcePlacement = snapshot.placements.firstOrNull { it.id == linkPlacementId }
+        val selectedFolder = snapshot.groups.firstOrNull { it.id == linkPickerGroupId }
+        val children = snapshot.groups
+            .filter { it.parentId == linkPickerGroupId }
+            .sortedBy { it.order }
+        val alreadyLinkedHere = selectedFolder != null && sourcePlacement != null &&
+            snapshot.placements.any {
+                it.itemId == sourcePlacement.itemId && it.groupId == selectedFolder.id
+            }
+        AlertDialog(
+            onDismissRequest = { linkPlacementId = null; linkPickerGroupId = null },
+            title = { Text(selectedFolder?.let { topicGroupPath(snapshot.groups, it) } ?: "Choose destination folder") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (selectedFolder != null) {
+                        Button(
+                            enabled = !alreadyLinkedHere && sourcePlacement != null,
+                            onClick = {
+                                val updated = BackupEditor.linkPlacementToGroup(
+                                    snapshot,
+                                    linkPlacementId!!,
+                                    selectedFolder.id
+                                )
+                                onChanged(updated)
+                                linkPlacementId = null
+                                linkPickerGroupId = null
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (alreadyLinkedHere) "Already linked here" else "Link to this folder")
+                        }
+                    }
+                    LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                        items(children, key = { it.id }) { group ->
+                            TextButton(
+                                onClick = { linkPickerGroupId = group.id },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("📁 ${group.name}") }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { linkPlacementId = null; linkPickerGroupId = null }) { Text("Cancel") }
+            },
+            dismissButton = {
+                if (selectedFolder != null) {
+                    TextButton(onClick = { linkPickerGroupId = selectedFolder.parentId }) { Text("← Back") }
+                }
+            }
+        )
+    }
 
     if (pendingPointDeleteIds.isNotEmpty()) {
         AlertDialog(
@@ -1270,6 +1326,10 @@ private fun TopicsScreen(
                             linkedNote = linkedNote,
                             audioPlayer = audioPlayer,
                             onChanged = onChanged,
+                            onRequestLink = {
+                                linkPlacementId = placement.id
+                                linkPickerGroupId = null
+                            },
                             onRequestDelete = { pendingPointDeleteIds = setOf(placement.id) }
                         )
                     }
@@ -1290,6 +1350,7 @@ private fun TopicPointCard(
     linkedNote: DesktopNote?,
     audioPlayer: DesktopAudioPlayer,
     onChanged: (BackupSnapshot) -> Unit,
+    onRequestLink: () -> Unit,
     onRequestDelete: () -> Unit
 ) {
     var expanded by remember(placement.id) { mutableStateOf(false) }
@@ -1409,6 +1470,7 @@ private fun TopicPointCard(
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, -1)) }) { Text("↑") }
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, 1)) }) { Text("↓") }
                     TextButton(onClick = { showColorDialog = true }) { Text("Color") }
+                    TextButton(onClick = onRequestLink) { Text("Link to another folder") }
                     TextButton(onClick = onRequestDelete) { Text("Remove") }
                 }
             } else {
@@ -1416,6 +1478,18 @@ private fun TopicPointCard(
             }
         }
     }
+}
+
+private fun topicGroupPath(groups: List<DesktopTopicGroup>, group: DesktopTopicGroup): String {
+    val names = mutableListOf(group.name)
+    var parentId = group.parentId
+    val visited = mutableSetOf(group.id)
+    while (parentId != null && visited.add(parentId)) {
+        val parent = groups.firstOrNull { it.id == parentId } ?: break
+        names += parent.name
+        parentId = parent.parentId
+    }
+    return names.asReversed().joinToString(" › ")
 }
 
 @Composable

@@ -225,6 +225,28 @@ object BackupEditor {
         return removePlacements(snapshot, setOf(placementId))
     }
 
+    fun linkPlacementToGroup(
+        snapshot: BackupSnapshot,
+        placementId: String,
+        targetGroupId: String
+    ): BackupSnapshot {
+        val source = snapshot.placements.firstOrNull { it.id == placementId } ?: return snapshot
+        require(snapshot.groups.any { it.id == targetGroupId }) { "Topic folder no longer exists" }
+        if (snapshot.placements.any { it.itemId == source.itemId && it.groupId == targetGroupId }) {
+            return snapshot
+        }
+        DesktopUndoStore.capture(snapshot)
+        val linked = DesktopTopicPlacement(
+            id = id(),
+            groupId = targetGroupId,
+            itemId = source.itemId,
+            order = snapshot.placements.count { it.groupId == targetGroupId },
+            important = source.important,
+            color = source.color
+        )
+        return saveLibrary(snapshot, placements = snapshot.placements + linked)
+    }
+
     fun removePlacements(snapshot: BackupSnapshot, placementIds: Set<String>): BackupSnapshot {
         val existingIds = snapshot.placements.mapTo(mutableSetOf()) { it.id }
         val targets = placementIds.intersect(existingIds)

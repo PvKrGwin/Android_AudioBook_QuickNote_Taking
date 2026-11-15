@@ -233,6 +233,45 @@ class BackupEditingTest {
         assertEquals("Verified", snapshot.colorLegend["GREEN"])
     }
 
+    @Test
+    fun linkingPointSharesOneItemAndSurvivesRemovingEitherPlacement() {
+        val temp = createTempDirectory("rider-notes-topic-link-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Biology", null)
+        snapshot = BackupEditor.createGroup(snapshot, "Research", null)
+        val biology = snapshot.groups.first { it.name == "Biology" }
+        val research = snapshot.groups.first { it.name == "Research" }
+        snapshot = BackupEditor.addTextPoint(snapshot, biology.id, "Cells", "Shared note")
+        val original = snapshot.placements.single()
+
+        snapshot = BackupEditor.linkPlacementToGroup(snapshot, original.id, research.id)
+        assertEquals(1, snapshot.items.size)
+        assertEquals(2, snapshot.placements.size)
+        assertEquals(1, snapshot.placements.map { it.itemId }.distinct().size)
+        assertEquals(setOf(biology.id, research.id), snapshot.placements.map { it.groupId }.toSet())
+
+        val duplicateAttempt = BackupEditor.linkPlacementToGroup(snapshot, original.id, research.id)
+        assertEquals(2, duplicateAttempt.placements.size)
+
+        snapshot = BackupEditor.removePlacement(snapshot, original.id)
+        assertEquals(1, snapshot.placements.size)
+        assertEquals(1, snapshot.items.size)
+        assertEquals(research.id, snapshot.placements.single().groupId)
+
+        snapshot = DesktopUndoStore.restore(snapshot)
+        assertEquals(2, snapshot.placements.size)
+        assertEquals(1, snapshot.items.size)
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())
