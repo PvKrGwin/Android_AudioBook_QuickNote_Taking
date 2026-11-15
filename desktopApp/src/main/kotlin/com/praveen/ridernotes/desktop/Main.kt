@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ContextMenuArea
 import androidx.compose.foundation.ContextMenuItem
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -48,11 +49,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
@@ -636,6 +639,7 @@ private fun NotesScreen(
     var topicPickerNote by remember { mutableStateOf<DesktopNote?>(null) }
     var pendingDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDeleteLabel by remember { mutableStateOf("") }
+    var sidebarWidth by remember { mutableStateOf(300f) }
     val searching = searchQuery.isNotBlank()
     val searchMatches = if (searching) notes.filter { noteMatchesSearch(it, searchQuery) } else emptyList()
     val folderNotes = grouped[selectedSource].orEmpty().filter { it.title == selectedTitle }
@@ -691,8 +695,8 @@ private fun NotesScreen(
         )
     }
 
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Card(Modifier.width(300.dp).fillMaxHeight()) {
+    Row(Modifier.fillMaxSize()) {
+        Card(Modifier.width(sidebarWidth.dp).fillMaxHeight()) {
             Column(Modifier.fillMaxSize().padding(7.dp)) {
                 Text("Media folders", fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
@@ -734,7 +738,17 @@ private fun NotesScreen(
                 }
             }
         }
-        Column(Modifier.weight(1f).fillMaxHeight()) {
+        Box(
+            Modifier.width(8.dp).fillMaxHeight()
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures { change, dragAmount ->
+                        change.consume()
+                        sidebarWidth = (sidebarWidth + dragAmount).coerceIn(190f, 520f)
+                    }
+                }
+        )
+        Column(Modifier.weight(1f).fillMaxHeight().padding(start = 10.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (searching) "Search results (${visibleNotes.size})" else selectedTitle ?: "Select a media title",
@@ -1054,6 +1068,7 @@ private fun TopicsScreen(
     var filterStarred by remember { mutableStateOf(false) }
     var showFilterColorDialog by remember { mutableStateOf(false) }
     var showTopicTools by remember { mutableStateOf(false) }
+    var sidebarWidth by remember { mutableStateOf(250f) }
     val recorder = remember { DesktopAudioRecorder() }
     var recording by remember { mutableStateOf(false) }
 
@@ -1369,8 +1384,8 @@ private fun TopicsScreen(
         )
     }
 
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(Modifier.width(250.dp).fillMaxHeight()) {
+    Row(Modifier.fillMaxSize()) {
+        Card(Modifier.width(sidebarWidth.dp).fillMaxHeight()) {
             Column(Modifier.fillMaxSize().padding(7.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Topic folders", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
@@ -1426,12 +1441,23 @@ private fun TopicsScreen(
             }
         }
 
+        Box(
+            Modifier.width(8.dp).fillMaxHeight()
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures { change, dragAmount ->
+                        change.consume()
+                        sidebarWidth = (sidebarWidth + dragAmount).coerceIn(190f, 520f)
+                    }
+                }
+        )
+
         val selected = snapshot.groups.firstOrNull { it.id == selectedGroupId }
         val itemById = snapshot.items.associateBy { it.id }
         val placements = (if (searchMode) searchedPlacements else snapshot.placements.filter { it.groupId == selectedGroupId })
             .filter { topicPlacementMatches(it, filterColor, filterStarred) }
             .sortedBy { it.order }
-        Column(Modifier.weight(1f).fillMaxHeight()) {
+        Column(Modifier.weight(1f).fillMaxHeight().padding(start = 12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (searchMode) "Search results (${placements.size})" else selected?.name ?: "Select a topic",
@@ -1606,7 +1632,7 @@ private fun TopicsScreen(
                                         linkPlacementId = placement.id
                                         linkPickerGroupId = null
                                     },
-                                    onGoToOriginalNote = linkedNote?.let { note ->
+                                    onGoToOriginalNote = linkedNote?.takeUnless { it.topicOnly }?.let { note ->
                                         { onGoToOriginalNote(note) }
                                     },
                                     onRequestDelete = { pendingPointDeleteIds = setOf(placement.id) }
@@ -1640,6 +1666,8 @@ private fun TopicPointCard(
     val playback = audioPlayer.state
     val isCurrent = playback.file?.absolutePath == linkedNote?.audioFile?.absolutePath
     val linkedBrowseUrl = linkedNote?.let(::noteBrowseUrl)
+    val originalMissing = item.type == "RECORDING" &&
+        (linkedNote == null || linkedNote.audioFile?.exists() != true)
     if (showColorDialog) {
         AlertDialog(
             onDismissRequest = { showColorDialog = false },
@@ -1678,14 +1706,23 @@ private fun TopicPointCard(
                 Text(
                     "$serialNumber. ${item.title}",
                     fontWeight = FontWeight.Bold,
-                    color = if (linkedBrowseUrl != null) MaterialTheme.colorScheme.primary
+                    color = if (originalMissing) Color(0xFFC62828)
+                    else if (linkedBrowseUrl != null) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurface,
+                    textDecoration = if (originalMissing) TextDecoration.LineThrough else TextDecoration.None,
                     modifier = Modifier.weight(1f).then(
                         if (linkedBrowseUrl != null) Modifier.clickable { openUrl(linkedBrowseUrl) }
                         else Modifier
                     )
                 )
                 if (placement.important) Text("★", color = Color(0xFFFFA000), fontSize = 20.sp)
+            }
+            if (originalMissing) {
+                Text(
+                    "Original Notes recording is missing — restore it from backup to reactivate this point.",
+                    color = Color(0xFFC62828),
+                    fontSize = 12.sp
+                )
             }
             if (expanded) {
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
