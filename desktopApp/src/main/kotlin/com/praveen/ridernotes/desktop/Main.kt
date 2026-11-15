@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -771,6 +772,12 @@ private fun TopicsScreen(
     audioPlayer: DesktopAudioPlayer
 ) {
     val orderedGroups = remember(snapshot) { flattenGroups(snapshot.groups) }
+    var expandedGroupIds by remember(snapshot.sourceZip.absolutePath) {
+        mutableStateOf(snapshot.groups.filter { it.parentId == null }.map { it.id }.toSet())
+    }
+    val visibleGroups = remember(snapshot.groups, expandedGroupIds) {
+        visibleTopicGroups(snapshot.groups, expandedGroupIds)
+    }
     var selectedGroupId by remember(snapshot.sourceZip.absolutePath) {
         mutableStateOf(orderedGroups.firstOrNull()?.first?.id)
     }
@@ -795,6 +802,7 @@ private fun TopicsScreen(
                 TextButton(enabled = groupName.isNotBlank(), onClick = {
                     val updated = BackupEditor.createGroup(snapshot, groupName, groupDialogParent)
                     onChanged(updated)
+                    groupDialogParent?.let { expandedGroupIds = expandedGroupIds + it }
                     if (selectedGroupId == null) selectedGroupId = updated.groups.lastOrNull()?.id
                     groupName = ""
                     showGroupDialog = false
@@ -886,8 +894,8 @@ private fun TopicsScreen(
     }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(Modifier.width(280.dp).fillMaxHeight()) {
-            Column(Modifier.fillMaxSize().padding(10.dp)) {
+        Card(Modifier.width(250.dp).fillMaxHeight()) {
+            Column(Modifier.fillMaxSize().padding(7.dp)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Topic folders", fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     TextButton(onClick = {
@@ -895,21 +903,47 @@ private fun TopicsScreen(
                         showGroupDialog = true
                     }) { Text("+ Folder") }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(4.dp))
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    orderedGroups.forEach { (group, depth) ->
-                        val label = "  ".repeat(depth) +
-                            (if (depth == 0) "📁 " else "↳ ") + group.name
-                        if (selectedGroupId == group.id) {
-                            Button(
-                                onClick = { selectedGroupId = group.id },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                            ) { Text(label) }
-                        } else {
-                            OutlinedButton(
-                                onClick = { selectedGroupId = group.id },
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                            ) { Text(label) }
+                    visibleGroups.forEach { (group, depth) ->
+                        val hasChildren = snapshot.groups.any { it.parentId == group.id }
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .padding(start = (depth * 12).dp, top = 1.dp, bottom = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (hasChildren) {
+                                TextButton(
+                                    onClick = {
+                                        expandedGroupIds = if (group.id in expandedGroupIds) {
+                                            expandedGroupIds - group.id
+                                        } else {
+                                            expandedGroupIds + group.id
+                                        }
+                                    },
+                                    modifier = Modifier.width(28.dp).heightIn(min = 28.dp),
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text(if (group.id in expandedGroupIds) "▾" else "▸", fontSize = 13.sp)
+                                }
+                            } else {
+                                Spacer(Modifier.width(28.dp))
+                            }
+                            val buttonModifier = Modifier.weight(1f).heightIn(min = 30.dp)
+                            val label = "📁 ${group.name}"
+                            if (selectedGroupId == group.id) {
+                                Button(
+                                    onClick = { selectedGroupId = group.id },
+                                    modifier = buttonModifier,
+                                    contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)
+                                ) { Text(label, fontSize = 12.sp) }
+                            } else {
+                                OutlinedButton(
+                                    onClick = { selectedGroupId = group.id },
+                                    modifier = buttonModifier,
+                                    contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)
+                                ) { Text(label, fontSize = 12.sp) }
+                            }
                         }
                     }
                 }
@@ -1299,6 +1333,22 @@ private fun flattenGroups(groups: List<DesktopTopicGroup>): List<Pair<DesktopTop
         byParent[parentId].orEmpty().sortedBy { it.order }.forEach { group ->
             output += group to depth
             visit(group.id, depth + 1)
+        }
+    }
+    visit(null, 0)
+    return output
+}
+
+internal fun visibleTopicGroups(
+    groups: List<DesktopTopicGroup>,
+    expandedIds: Set<String>
+): List<Pair<DesktopTopicGroup, Int>> {
+    val byParent = groups.groupBy { it.parentId }
+    val output = mutableListOf<Pair<DesktopTopicGroup, Int>>()
+    fun visit(parentId: String?, depth: Int) {
+        byParent[parentId].orEmpty().sortedBy { it.order }.forEach { group ->
+            output += group to depth
+            if (group.id in expandedIds) visit(group.id, depth + 1)
         }
     }
     visit(null, 0)

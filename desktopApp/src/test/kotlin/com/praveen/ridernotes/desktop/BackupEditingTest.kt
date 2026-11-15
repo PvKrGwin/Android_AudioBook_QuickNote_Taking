@@ -146,6 +146,29 @@ class BackupEditingTest {
         assertEquals("Biology", snapshot.groups.single().name)
     }
 
+    @Test
+    fun topicTreeOnlyShowsChildrenOfExpandedFolders() {
+        val groups = listOf(
+            DesktopTopicGroup("biology", "Biology", null, 0),
+            DesktopTopicGroup("plants", "Plants", "biology", 0),
+            DesktopTopicGroup("cells", "Plant cells", "plants", 0),
+            DesktopTopicGroup("history", "History", null, 1)
+        )
+
+        assertEquals(
+            listOf("biology", "history"),
+            visibleTopicGroups(groups, emptySet()).map { it.first.id }
+        )
+        assertEquals(
+            listOf("biology", "plants", "history"),
+            visibleTopicGroups(groups, setOf("biology")).map { it.first.id }
+        )
+        assertEquals(
+            listOf("biology", "plants", "cells", "history"),
+            visibleTopicGroups(groups, setOf("biology", "plants")).map { it.first.id }
+        )
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())
