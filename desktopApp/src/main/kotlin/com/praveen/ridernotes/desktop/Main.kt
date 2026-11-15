@@ -113,6 +113,7 @@ private fun RiderNotesDesktopApp(
     var mediaModule by remember { mutableStateOf("") }
     var mediaChapter by remember { mutableStateOf("") }
     var mediaPosition by remember { mutableStateOf("") }
+    var mediaSourceUrl by remember { mutableStateOf("") }
     var syncObservation by remember { mutableStateOf<DesktopSyncObservation?>(null) }
     var showCloudChangeDialog by remember { mutableStateOf(false) }
     var dismissedCloudRevision by remember { mutableStateOf<String?>(null) }
@@ -190,7 +191,8 @@ private fun RiderNotesDesktopApp(
         mediaAuthor = captured?.author.orEmpty()
         mediaModule = captured?.module.orEmpty()
         mediaChapter = captured?.chapter.orEmpty()
-        mediaPosition = captured?.playbackPositionMs?.div(1_000.0)?.toString().orEmpty()
+        mediaPosition = captured?.playbackPositionMs?.let(::formatPositionInput).orEmpty()
+        mediaSourceUrl = captured?.sourceUrl.orEmpty()
         showMediaNoteDialog = true
     }
 
@@ -360,7 +362,16 @@ private fun RiderNotesDesktopApp(
                     OutlinedTextField(mediaAuthor, { mediaAuthor = it }, label = { Text("Author / channel") })
                     OutlinedTextField(mediaModule, { mediaModule = it }, label = { Text("Module (optional)") })
                     OutlinedTextField(mediaChapter, { mediaChapter = it }, label = { Text("Chapter / episode (optional)") })
-                    OutlinedTextField(mediaPosition, { mediaPosition = it }, label = { Text("Position in seconds") })
+                    OutlinedTextField(
+                        mediaPosition,
+                        { mediaPosition = it },
+                        label = { Text("Media position (mm:ss or hh:mm:ss)") }
+                    )
+                    OutlinedTextField(
+                        mediaSourceUrl,
+                        { mediaSourceUrl = it },
+                        label = { Text("Source link (optional, verify before saving)") }
+                    )
                     OutlinedTextField(mediaNoteText, { mediaNoteText = it }, label = { Text("Your note") })
                 }
             },
@@ -375,8 +386,8 @@ private fun RiderNotesDesktopApp(
                             author = mediaAuthor.takeIf(String::isNotBlank),
                             module = mediaModule.takeIf(String::isNotBlank),
                             chapter = mediaChapter.takeIf(String::isNotBlank),
-                            sourceUrl = mediaDraft?.sourceUrl,
-                            playbackPositionMs = mediaPosition.toDoubleOrNull()?.let { (it * 1_000).toLong() }
+                            sourceUrl = mediaSourceUrl.trim().takeIf(String::isNotBlank),
+                            playbackPositionMs = parsePositionInput(mediaPosition)
                         )
                         markChanged(BackupEditor.addTypedMediaNote(snapshot!!, media, mediaNoteText))
                         showMediaNoteDialog = false
@@ -557,7 +568,17 @@ private fun NoteCard(
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(note.title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                val browseUrl = noteBrowseUrl(note)
+                Text(
+                    note.title,
+                    fontWeight = FontWeight.Bold,
+                    color = if (browseUrl != null) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f).then(
+                        if (browseUrl != null) Modifier.clickable { openUrl(browseUrl) }
+                        else Modifier
+                    )
+                )
                 onAddToTopics?.let {
                     TextButton(onClick = it) {
                         Text("⋮", fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -881,13 +902,23 @@ private fun TopicPointCard(
     var expanded by remember(placement.id) { mutableStateOf(false) }
     val playback = audioPlayer.state
     val isCurrent = playback.file?.absolutePath == linkedNote?.audioFile?.absolutePath
+    val linkedBrowseUrl = linkedNote?.let(::noteBrowseUrl)
     Card(
         modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         colors = CardDefaults.cardColors(containerColor = topicColor(placement.color))
     ) {
         Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(item.title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    item.title,
+                    fontWeight = FontWeight.Bold,
+                    color = if (linkedBrowseUrl != null) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f).then(
+                        if (linkedBrowseUrl != null) Modifier.clickable { openUrl(linkedBrowseUrl) }
+                        else Modifier
+                    )
+                )
                 if (placement.important) Text("★", color = Color(0xFFFFA000), fontSize = 20.sp)
             }
             if (expanded) {
@@ -1179,4 +1210,43 @@ private fun formatPosition(positionMs: Long): String {
     val seconds = totalSeconds % 60L
     return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
     else "%d:%02d".format(minutes, seconds)
+}
+
+private fun formatPositionInput(positionMs: Long): String = formatPosition(positionMs)
+
+private fun parsePositionInput(value: String): Long? {
+    val trimmed = value.trim()
+    if (trimmed.isBlank()) return null
+    val parts = trimmed.split(':')
+    val totalSeconds = when (parts.size) {
+        1 -> parts.single().toDoubleOrNull()
+        2 -> {
+            val minutes = parts[0].toLongOrNull() ?: return null
+            val seconds = parts[1].toDoubleOrNull() ?: return null
+            minutes * 60.0 + seconds
+        }
+        3 -> {
+            val hours = parts[0].toLongOrNull() ?: return null
+            val minutes = parts[1].toLongOrNull() ?: return null
+            val seconds = parts[2].toDoubleOrNull() ?: return null
+            hours * 3_600.0 + minutes * 60.0 + seconds
+        }
+        else -> return null
+    }
+    return (totalSeconds * 1_000.0).toLong().takeIf { it >= 0L }
+}
+
+private fun noteBrowseUrl(note: DesktopNote): String? {
+    note.sourceUrl?.takeIf(String::isNotBlank)?.let { return it }
+    val query = java.net.URLEncoder.encode(
+        listOfNotNull(note.title, note.author).joinToString(" "),
+        Charsets.UTF_8
+    )
+    return when {
+        note.sourceApp.contains("YouTube Music", ignoreCase = true) ->
+            "https://music.youtube.com/search?q=$query"
+        note.sourceApp.contains("YouTube", ignoreCase = true) ->
+            "https://www.youtube.com/results?search_query=$query"
+        else -> null
+    }
 }

@@ -685,23 +685,33 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createFreshBackup() {
-        TopicLibraryRepository.createFreshBackup(this)
-            .onSuccess { backup ->
-                val status = CloudSyncManager.status(this)
-                if (status.destinationName != null && status.mode != CloudSyncManager.Mode.OFF) {
-                    CloudSyncManager.enqueueNow(this)
-                    backupStatus.value =
-                        "Fresh full backup created (${backup.length() / 1024} KB); cloud sync queued"
-                } else {
-                    backupStatus.value =
-                        "Fresh full backup created locally (${backup.length() / 1024} KB); enable cloud sync to upload"
+        if (backupStatus.value.startsWith("Creating fresh full backup")) return
+        backupStatus.value = "Creating fresh full backup… Please keep Rider Notes open."
+        SyncRevisionStore.markLocalModified(this)
+        Thread {
+            TopicLibraryRepository.createFreshBackup(this)
+                .onSuccess { backup ->
+                    runOnUiThread {
+                        val status = CloudSyncManager.status(this)
+                        backupStatus.value = if (
+                            status.destinationName != null &&
+                            status.mode != CloudSyncManager.Mode.OFF
+                        ) {
+                            "Fresh full backup ready (${backup.length() / 1024} KB). Press Sync now to upload it to ${status.destinationName}."
+                        } else {
+                            "Fresh full backup ready locally (${backup.length() / 1024} KB). Choose a cloud folder and enable sync before pressing Sync now."
+                        }
+                        cloudSyncStatus.value = CloudSyncManager.status(this)
+                    }
                 }
-                cloudSyncStatus.value = CloudSyncManager.status(this)
-            }
-            .onFailure { error ->
-                backupStatus.value =
-                    "Fresh backup failed: ${error.javaClass.simpleName}"
-            }
+                .onFailure { error ->
+                    runOnUiThread {
+                        backupStatus.value =
+                            "Fresh backup failed: ${error.javaClass.simpleName}"
+                        cloudSyncStatus.value = CloudSyncManager.status(this)
+                    }
+                }
+        }.start()
     }
 
     private fun startTopicRecording(groupId: String, index: Int?) {
@@ -1772,14 +1782,21 @@ private fun DetectorScreen(
                                     }
                                     OutlinedButton(
                                         onClick = onCreateFreshBackup,
+                                        enabled = !backupStatus.value.startsWith("Creating fresh full backup"),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text("Create fresh full backup")
+                                        Text(
+                                            if (backupStatus.value.startsWith("Creating fresh full backup")) {
+                                                "Creating fresh full backup…"
+                                            } else {
+                                                "Create fresh full backup"
+                                            }
+                                        )
                                     }
                                     Text(
                                         "Creates RiderNotes_Full_Backup.zip with every note, transcript, " +
-                                            "recording, Topic folder, and attachment, then queues upload " +
-                                            "when cloud sync is enabled. This ZIP can be opened by Rider Notes PC.",
+                                            "recording, Topic folder, and attachment. When it is ready, " +
+                                            "press Sync now to upload it. This ZIP can be opened by Rider Notes PC.",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     if (cloudSyncStatus.value.message.isNotBlank()) {

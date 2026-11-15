@@ -45,6 +45,8 @@ Topics supports nested folders, ordered text, web links, attachments, and record
 
 Play media on Windows and choose **Add media note** in the app or notification-area tray. Rider Notes pauses the current Windows media session, fills available metadata and playback position, and asks for a typed note.
 
+The position is shown as `mm:ss` or `hh:mm:ss`. For a matching visible YouTube, YouTube Music, Coursera, Udemy, or Netflix browser tab, Rider Notes makes a best-effort attempt to capture the page link. Always verify the editable link before saving. Windows may omit chapter, module, creator, or web-link metadata; any missing field can be entered manually. A linked YouTube title opens the stored video, while a title without a captured link opens a YouTube search.
+
 ## Startup and tray
 
 **Startup: On** creates a Windows Startup shortcut. Rider Notes then launches after Windows sign-in and remains available in the system tray when the main window is closed. Drive for Desktop must also be running for automatic cloud-folder synchronization.
