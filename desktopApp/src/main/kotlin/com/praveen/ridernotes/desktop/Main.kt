@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -55,12 +56,17 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import kotlinx.coroutines.delay
 import java.awt.Desktop
+import java.awt.Image
+import java.awt.image.BufferedImage
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import javax.imageio.ImageIO
+import javax.swing.ImageIcon
 import javax.swing.JFileChooser
+import javax.swing.JLabel
+import javax.swing.SwingConstants
 import javax.swing.filechooser.FileNameExtensionFilter
 
 fun main() = application {
@@ -99,7 +105,7 @@ fun main() = application {
             window.iconImage = appIcon
         }
         MaterialTheme {
-            RiderNotesDesktopApp(mediaNoteRequest, tray)
+            RiderNotesDesktopApp(mediaNoteRequest, tray, appIcon)
         }
     }
 }
@@ -107,7 +113,8 @@ fun main() = application {
 @Composable
 private fun RiderNotesDesktopApp(
     externalMediaNoteRequest: Int,
-    tray: DesktopTrayController
+    tray: DesktopTrayController,
+    appIcon: BufferedImage
 ) {
     var snapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
     var baseSnapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
@@ -437,6 +444,18 @@ private fun RiderNotesDesktopApp(
                     Text("Rider Notes", fontSize = 26.sp, fontWeight = FontWeight.Bold)
                     Text("Windows companion · Google Drive desktop sync")
                 }
+                SwingPanel(
+                    factory = {
+                        JLabel(
+                            ImageIcon(appIcon.getScaledInstance(76, 76, Image.SCALE_SMOOTH))
+                        ).apply {
+                            horizontalAlignment = SwingConstants.CENTER
+                            verticalAlignment = SwingConstants.CENTER
+                            isOpaque = false
+                        }
+                    },
+                    modifier = Modifier.width(94.dp).height(76.dp)
+                )
                 OutlinedButton(
                     enabled = snapshot != null,
                     onClick = ::requestMediaNote
