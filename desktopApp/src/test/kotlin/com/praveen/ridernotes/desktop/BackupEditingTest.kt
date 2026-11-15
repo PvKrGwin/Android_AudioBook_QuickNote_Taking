@@ -58,6 +58,68 @@ class BackupEditingTest {
         }
     }
 
+    @Test
+    fun youtubeLinkBackfillsOlderNotesAndIsInheritedByFutureNotes() {
+        val temp = createTempDirectory("rider-notes-youtube-links-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+            output.entry(
+                "recordings/old.json",
+                """{"recordedAtEpochMs":1,"title":"  Shared   Video ","sourceApp":"youtube","author":"My Channel","playbackPositionMs":10000}"""
+            )
+            output.entry("recordings/old.m4a", "")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.addTypedMediaNote(
+            snapshot,
+            CapturedMedia(
+                sourceApp = "YouTube",
+                sourcePackage = "com.google.android.youtube",
+                title = "Shared Video",
+                author = "my channel",
+                playbackPositionMs = 20_000L,
+                sourceUrl = "https://youtu.be/AbCdEf12345?t=20"
+            ),
+            "Linked note"
+        )
+
+        assertEquals(2, snapshot.notes.size)
+        assertTrue(snapshot.notes.all {
+            it.sourceUrl == "https://www.youtube.com/watch?v=AbCdEf12345"
+        })
+
+        snapshot = BackupEditor.addTypedMediaNote(
+            snapshot,
+            CapturedMedia(
+                sourceApp = "YouTube",
+                sourcePackage = "com.google.android.youtube",
+                title = "Shared Video",
+                author = "My Channel",
+                playbackPositionMs = 30_000L
+            ),
+            "Future note"
+        )
+
+        assertEquals(3, snapshot.notes.size)
+        assertTrue(snapshot.notes.all {
+            it.sourceUrl == "https://www.youtube.com/watch?v=AbCdEf12345"
+        })
+        assertEquals(
+            "https://www.youtube.com/watch?v=AbCdEf12345&t=30s",
+            DesktopYouTubeLinks.atPosition(
+                snapshot.notes.first { it.typedNote == "Future note" }.sourceApp,
+                snapshot.notes.first { it.typedNote == "Future note" }.sourceUrl,
+                snapshot.notes.first { it.typedNote == "Future note" }.playbackPositionMs
+            )
+        )
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())

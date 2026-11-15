@@ -1237,7 +1237,11 @@ private fun parsePositionInput(value: String): Long? {
 }
 
 private fun noteBrowseUrl(note: DesktopNote): String? {
-    note.sourceUrl?.takeIf(String::isNotBlank)?.let { return it }
+    DesktopYouTubeLinks.atPosition(
+        note.sourceApp,
+        note.sourceUrl,
+        note.playbackPositionMs
+    )?.let { return it }
     val query = java.net.URLEncoder.encode(
         listOfNotNull(note.title, note.author).joinToString(" "),
         Charsets.UTF_8

@@ -23,6 +23,11 @@ object BackupEditor {
         noteText: String
     ): BackupSnapshot {
         require(noteText.isNotBlank()) { "The note is empty" }
+        val inheritedUrl = DesktopYouTubeLinks.canonicalUrl(media.sourceApp, media.sourceUrl)
+            ?: snapshot.notes.asSequence()
+                .filter { DesktopYouTubeLinks.sameIdentity(it, media) }
+                .mapNotNull { DesktopYouTubeLinks.canonicalUrl(it.sourceApp, it.sourceUrl) }
+                .firstOrNull()
         val recordedAt = System.currentTimeMillis()
         val base = "RiderTextNote_${recordedAt}_${UUID.randomUUID().toString().take(8)}"
         val recordings = File(snapshot.extractedRoot, "recordings").apply { mkdirs() }
@@ -40,7 +45,7 @@ object BackupEditor {
             .put("subtitleOrChapter", media.chapter ?: JSONObject.NULL)
             .put("author", media.author ?: JSONObject.NULL)
             .put("playbackPositionMs", media.playbackPositionMs ?: JSONObject.NULL)
-            .put("sourceUrl", media.sourceUrl ?: JSONObject.NULL)
+            .put("sourceUrl", inheritedUrl ?: media.sourceUrl ?: JSONObject.NULL)
             .put("transcriptionStatus", "NOT_REQUESTED")
             .put("typedNote", noteText.trim())
             .put("originDeviceId", DesktopDeviceIdentity.id())
@@ -63,7 +68,42 @@ object BackupEditor {
                 appendLine(noteText.trim())
             }
         )
-        return BackupImporter.reload(snapshot)
+        val reloaded = BackupImporter.reload(snapshot)
+        return inheritedUrl?.let { applyYouTubeLinkToMatchingNotes(reloaded, media, it) }
+            ?: reloaded
+    }
+
+    /**
+     * Backfill a verified YouTube/YouTube Music URL across notes representing
+     * the same service, title and channel. Playback positions remain per-note.
+     */
+    internal fun applyYouTubeLinkToMatchingNotes(
+        snapshot: BackupSnapshot,
+        media: CapturedMedia,
+        sourceUrl: String
+    ): BackupSnapshot {
+        val canonical = DesktopYouTubeLinks.canonicalUrl(media.sourceApp, sourceUrl)
+            ?: return snapshot
+        val matchingIds = snapshot.notes.asSequence()
+            .filter { DesktopYouTubeLinks.sameIdentity(it, media) }
+            .mapTo(mutableSetOf()) { it.id }
+        if (matchingIds.isEmpty()) return snapshot
+
+        var changed = false
+        snapshot.extractedRoot.walkTopDown()
+            .filter { it.isFile && it.extension.equals("json", ignoreCase = true) }
+            .filter { it.nameWithoutExtension in matchingIds }
+            .forEach { metadataFile ->
+                runCatching {
+                    val json = JSONObject(metadataFile.readText())
+                    if (json.optString("sourceUrl") != canonical) {
+                        json.put("sourceUrl", canonical)
+                        metadataFile.writeText(json.toString(2))
+                        changed = true
+                    }
+                }
+            }
+        return if (changed) BackupImporter.reload(snapshot) else snapshot
     }
 
     fun createGroup(snapshot: BackupSnapshot, name: String, parentId: String?): BackupSnapshot {
