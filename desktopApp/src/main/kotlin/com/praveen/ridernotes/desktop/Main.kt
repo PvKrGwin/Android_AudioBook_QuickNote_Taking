@@ -46,7 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
@@ -81,13 +80,11 @@ fun main() = application {
         trayAvailable = runCatching { tray.install() }.getOrDefault(false)
         onDispose { tray.close() }
     }
-    val appIcon = painterResource("rider_notes_logo.png")
     Window(
         onCloseRequest = {
             if (trayAvailable) windowVisible = false else exitApplication()
         },
         visible = windowVisible,
-        icon = appIcon,
         title = "Rider Notes PC"
     ) {
         MaterialTheme {

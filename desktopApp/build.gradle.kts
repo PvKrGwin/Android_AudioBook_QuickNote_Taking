@@ -49,9 +49,7 @@ compose.desktop {
                 "jdk.unsupported"
             )
             windows {
-                // Keep the console for this reliability build so startup failures provide
-                // actionable diagnostics instead of only "Failed to launch JVM".
-                console = true
+                console = false
                 menuGroup = "Rider Notes"
                 shortcut = true
                 perUserInstall = true
