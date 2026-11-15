@@ -169,6 +169,36 @@ class BackupEditingTest {
         )
     }
 
+    @Test
+    fun deleteNotesRemovesCompanionFilesAndUndoRestoresThem() {
+        val temp = createTempDirectory("rider-notes-delete-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+            output.entry(
+                "recordings/delete-me.json",
+                """{"recordedAtEpochMs":1,"title":"Video","sourceApp":"YouTube"}"""
+            )
+            output.entry("recordings/delete-me.m4a", "audio")
+            output.entry("recordings/delete-me.txt", "transcript")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        assertEquals(1, snapshot.notes.size)
+        snapshot = BackupEditor.deleteNotes(snapshot, setOf("delete-me"))
+        assertTrue(snapshot.notes.isEmpty())
+        assertTrue(snapshot.extractedRoot.walkTopDown().none { it.name.startsWith("delete-me.") })
+
+        snapshot = DesktopUndoStore.restore(snapshot)
+        assertEquals(1, snapshot.notes.size)
+        assertTrue(snapshot.extractedRoot.walkTopDown().any { it.name == "delete-me.m4a" })
+        assertTrue(snapshot.extractedRoot.walkTopDown().any { it.name == "delete-me.txt" })
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())

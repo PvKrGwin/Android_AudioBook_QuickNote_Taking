@@ -25,6 +25,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
@@ -131,13 +132,18 @@ private fun RiderNotesDesktopApp(
     fun loadBackup(zip: File) {
         runCatching { BackupImporter.import(zip) }
             .onSuccess {
+                audioPlayer.stop()
                 snapshot = it
                 baseSnapshot = runCatching { BackupImporter.import(zip) }.getOrDefault(it)
+                selectedTab = 0
                 dirty = false
                 syncSucceeded = false
                 undoReturnsDirty = false
                 DesktopUndoStore.clear()
                 offlineEditAcknowledged = false
+                showCloudChangeDialog = false
+                showSyncPrompt = false
+                showMediaNoteDialog = false
                 syncObservation = DesktopSyncMonitor.inspect(it)
                 DesktopDeviceIdentity.rememberBackupPath(zip.absolutePath)
                 status = "Loaded ${it.notes.size} notes and ${it.groups.size} topic folders from ${zip.name}"
@@ -462,9 +468,6 @@ private fun RiderNotesDesktopApp(
                         }
                     )
                 }
-                Button(onClick = { chooseBackup()?.let(::loadBackup) }) {
-                    Text("Open backup ZIP")
-                }
                 if (WindowsStartupManager.isSupported()) {
                     OutlinedButton(onClick = {
                         val target = !startupEnabled
@@ -475,6 +478,23 @@ private fun RiderNotesDesktopApp(
                             }
                             .onFailure { status = it.message ?: "Could not change Windows startup" }
                     }) { Text(if (startupEnabled) "Startup: On" else "Startup: Off") }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Current ZIP: ${snapshot?.sourceZip?.absolutePath ?: "No backup ZIP selected"}",
+                        modifier = Modifier.weight(1f),
+                        fontSize = 12.sp
+                    )
+                    Button(onClick = { chooseBackup()?.let(::loadBackup) }) {
+                        Text(if (snapshot == null) "Open ZIP" else "Change ZIP")
+                    }
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -536,26 +556,59 @@ private fun NotesScreen(
     val notes = snapshot.notes.filterNot { it.topicOnly }
     var expandedSources by remember(notes) { mutableStateOf(emptySet<String>()) }
     var expandedTitles by remember(notes) { mutableStateOf(emptySet<String>()) }
+    var selectedNoteIds by remember(snapshot.extractedRoot.absolutePath) { mutableStateOf(emptySet<String>()) }
     var topicPickerNote by remember { mutableStateOf<DesktopNote?>(null) }
     val grouped = notes.groupBy { it.sourceApp }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+
+    fun deleteNotes(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        audioPlayer.stop()
+        onChanged(BackupEditor.deleteNotes(snapshot, ids))
+        selectedNoteIds = selectedNoteIds - ids
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        item(key = "note-selection-toolbar") {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("Selected: ${selectedNoteIds.size}", modifier = Modifier.weight(1f))
+                OutlinedButton(
+                    enabled = notes.isNotEmpty() && selectedNoteIds.size != notes.size,
+                    onClick = { selectedNoteIds = notes.mapTo(mutableSetOf()) { it.id } }
+                ) { Text("Select all") }
+                Button(
+                    enabled = selectedNoteIds.isNotEmpty(),
+                    onClick = { deleteNotes(selectedNoteIds) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
+                ) { Text("🗑 Delete selected") }
+                OutlinedButton(
+                    enabled = selectedNoteIds.isNotEmpty(),
+                    onClick = { selectedNoteIds = emptySet() }
+                ) { Text("↻ Clear selection") }
+            }
+        }
         grouped.forEach { (source, sourceNotes) ->
             item(key = "source:$source") {
                 val expanded = source in expandedSources
-                OutlinedButton(
-                    onClick = {
-                        expandedSources = if (expanded) {
-                            expandedSources - source
-                        } else {
-                            expandedSources + source
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("${if (expanded) "▼" else "▶"} $source (${sourceNotes.size})")
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedButton(
+                        onClick = {
+                            expandedSources = if (expanded) expandedSources - source
+                            else expandedSources + source
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("${if (expanded) "▼" else "▶"} $source (${sourceNotes.size})")
+                    }
+                    TextButton(onClick = { deleteNotes(sourceNotes.mapTo(mutableSetOf()) { it.id }) }) {
+                        Text("🗑", fontSize = 18.sp)
+                    }
                 }
             }
             if (source in expandedSources) {
@@ -565,19 +618,37 @@ private fun NotesScreen(
                     val titleKey = "$source::$title"
                     item(key = "title:$titleKey") {
                         val expanded = titleKey in expandedTitles
-                        OutlinedButton(
-                            onClick = {
-                                expandedTitles = if (expanded) expandedTitles - titleKey
-                                else expandedTitles + titleKey
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(start = 18.dp)
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 18.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("${if (expanded) "▼" else "▶"} $title (${titleNotes.size})")
+                            OutlinedButton(
+                                onClick = {
+                                    expandedTitles = if (expanded) expandedTitles - titleKey
+                                    else expandedTitles + titleKey
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("${if (expanded) "▼" else "▶"} $title (${titleNotes.size})")
+                            }
+                            TextButton(onClick = { deleteNotes(titleNotes.mapTo(mutableSetOf()) { it.id }) }) {
+                                Text("🗑", fontSize = 18.sp)
+                            }
                         }
                     }
                     if (titleKey in expandedTitles) {
                         items(titleNotes.sortedByDescending { it.recordedAtEpochMs }, key = { it.id }) {
-                            note -> NoteCard(note, audioPlayer) { topicPickerNote = note }
+                            note -> NoteCard(
+                                note = note,
+                                audioPlayer = audioPlayer,
+                                selected = note.id in selectedNoteIds,
+                                onSelectedChange = { selected ->
+                                    selectedNoteIds = if (selected) selectedNoteIds + note.id
+                                    else selectedNoteIds - note.id
+                                },
+                                onDelete = { deleteNotes(setOf(note.id)) },
+                                onAddToTopics = { topicPickerNote = note }
+                            )
                         }
                     }
                 }
@@ -602,6 +673,9 @@ private fun NotesScreen(
 private fun NoteCard(
     note: DesktopNote,
     audioPlayer: DesktopAudioPlayer,
+    selected: Boolean = false,
+    onSelectedChange: ((Boolean) -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
     onAddToTopics: (() -> Unit)? = null
 ) {
     var expanded by remember(note.id) { mutableStateOf(false) }
@@ -613,6 +687,9 @@ private fun NoteCard(
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                onSelectedChange?.let { change ->
+                    Checkbox(checked = selected, onCheckedChange = change)
+                }
                 val browseUrl = noteBrowseUrl(note)
                 Text(
                     note.title,
@@ -628,6 +705,9 @@ private fun NoteCard(
                     TextButton(onClick = it) {
                         Text("⋮", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                     }
+                }
+                onDelete?.let {
+                    TextButton(onClick = it) { Text("🗑", fontSize = 18.sp) }
                 }
             }
             Text("${note.sourceApp} · ${formatTime(note.recordedAtEpochMs)}")
@@ -673,6 +753,12 @@ private fun NoteCard(
                     }
                     note.sourceUrl?.let { url ->
                         OutlinedButton(onClick = { openUrl(url) }) { Text("Open source") }
+                    }
+                    onDelete?.let {
+                        Button(
+                            onClick = it,
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
+                        ) { Text("Delete note") }
                     }
                 }
                 if (isCurrent && playback.durationMs > 0L) {
@@ -1286,9 +1372,15 @@ private fun UserManualScreen() {
         ManualSection(
             "Notes and Topics",
             "Notes are grouped by source and title. Expand a note to view metadata, transcript, playback controls, and source link. " +
+                "Use the note checkboxes for Select all or Delete selected, or use the trash icon on a source/title heading to delete that entire category. " +
+                "The most recent deletion can be restored with Undo before synchronization. " +
                 "Use ⋮ to add the recording to an existing Topic folder or create a new folder/subfolder. " +
                 "Topics can contain text, links, files, recordings, stars, colours, and ordered points. " +
                 "Color opens the full palette; Edit legend defines each colour's meaning. Undo reverses the most recent PC edit before synchronization."
+        )
+        ManualSection(
+            "Changing the active backup",
+            "The complete active ZIP path is always shown at the top. Open ZIP or Change ZIP selects another full backup and completely reloads Notes, Topics, revision status, playback, selections, and the one-step Undo history from that file."
         )
         ManualSection(
             "Startup and system tray",

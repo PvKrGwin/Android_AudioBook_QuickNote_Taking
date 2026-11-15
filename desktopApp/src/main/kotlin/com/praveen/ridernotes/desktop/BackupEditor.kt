@@ -17,6 +17,23 @@ data class CapturedMedia(
 )
 
 object BackupEditor {
+    fun deleteNotes(snapshot: BackupSnapshot, noteIds: Set<String>): BackupSnapshot {
+        val existingIds = snapshot.notes.mapTo(mutableSetOf()) { it.id }
+        val targets = noteIds.intersect(existingIds)
+        if (targets.isEmpty()) return snapshot
+        DesktopUndoStore.capture(snapshot)
+        val companionExtensions = setOf("m4a", "json", "txt", "vtt", "srt")
+        snapshot.extractedRoot.walkTopDown()
+            .filter { it.isFile }
+            .filter {
+                it.nameWithoutExtension in targets &&
+                    it.extension.lowercase() in companionExtensions
+            }
+            .toList()
+            .forEach(File::delete)
+        return BackupImporter.reload(snapshot)
+    }
+
     fun addTypedMediaNote(
         snapshot: BackupSnapshot,
         media: CapturedMedia,
