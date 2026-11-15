@@ -506,7 +506,7 @@ private fun RiderNotesDesktopApp(
                     Text(
                         when {
                             dirty -> "Sync now — recommended"
-                            syncSucceeded -> "✓ Local sync successful — upload ZIP to cloud"
+                            syncSucceeded -> "✓ ZIP rebuilt — verify Drive upload"
                             else -> "Sync now — no local changes"
                         }
                     )
@@ -1062,6 +1062,7 @@ private fun TopicsScreen(
     }
     var showBulkColorDialog by remember { mutableStateOf(false) }
     var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingGroupDeleteId by remember { mutableStateOf<String?>(null) }
     var linkPlacementId by remember { mutableStateOf<String?>(null) }
     var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     var filterColor by remember { mutableStateOf<String?>(null) }
@@ -1195,6 +1196,45 @@ private fun TopicsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingPointDeleteIds = emptySet() }) { Text("No") }
+            }
+        )
+    }
+
+    pendingGroupDeleteId?.let { groupId ->
+        val group = snapshot.groups.firstOrNull { it.id == groupId }
+        val descendantIds = remember(snapshot.groups, groupId) {
+            val ids = mutableSetOf(groupId)
+            do {
+                val sizeBefore = ids.size
+                snapshot.groups.filter { it.parentId in ids }.forEach { ids += it.id }
+            } while (ids.size != sizeBefore)
+            ids
+        }
+        AlertDialog(
+            onDismissRequest = { pendingGroupDeleteId = null },
+            title = { Text("Delete Topic folder?") },
+            text = {
+                Text(
+                    "Delete “${group?.name ?: "this folder"}”, its ${descendantIds.size - 1} subfolder(s), " +
+                        "and all Topic placements inside them? Original media recordings in Notes are preserved. " +
+                        "You can restore this with Undo before syncing."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    audioPlayer.stop()
+                    val parentId = group?.parentId
+                    onChanged(BackupEditor.deleteGroup(snapshot, groupId))
+                    selectedGroupId = parentId ?: snapshot.groups
+                        .firstOrNull { it.id !in descendantIds }
+                        ?.id
+                    selectedPlacementIds = emptySet()
+                    expandedGroupIds = expandedGroupIds - descendantIds
+                    pendingGroupDeleteId = null
+                }) { Text("Yes, delete folder") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingGroupDeleteId = null }) { Text("No") }
             }
         )
     }
@@ -1494,6 +1534,9 @@ private fun TopicsScreen(
                             runCatching { recorder.start() }
                                 .onSuccess { recording = true }
                         }) { Text("● Record") }
+                    }
+                    TextButton(onClick = { pendingGroupDeleteId = group.id }) {
+                        Text("Delete folder", color = Color(0xFFC62828))
                     }
                     }
                 }
@@ -2037,7 +2080,8 @@ private fun UserManualScreen() {
                 "Use ⋮ to add the recording to an existing Topic folder or create a new folder/subfolder. " +
                 "Topics can contain text, links, files, recordings, stars, colours, and ordered points. " +
                 "Every point has a serial number and checkbox. Selected points can be coloured, starred, unstarred, or deleted together. " +
-                "All deletion actions ask Yes/No first. Topic folders themselves are intentionally not deletable from the PC app. " +
+                "All deletion actions ask Yes/No first. Deleting a Topic folder also removes its subfolders and Topic placements, " +
+                    "but preserves original media recordings that still belong to Notes. " +
                 "Color opens the full palette; Edit legend defines each colour's meaning. Undo reverses the most recent PC edit before synchronization."
         )
         ManualSection(

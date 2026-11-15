@@ -287,6 +287,40 @@ class BackupEditingTest {
     }
 
     @Test
+    fun deletingTopicFolderRemovesItsTreeButKeepsItemsLinkedElsewhere() {
+        val temp = createTempDirectory("rider-notes-topic-folder-delete-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Biology", null)
+        val biology = snapshot.groups.single()
+        snapshot = BackupEditor.createGroup(snapshot, "Cells", biology.id)
+        val cells = snapshot.groups.first { it.name == "Cells" }
+        snapshot = BackupEditor.createGroup(snapshot, "Research", null)
+        val research = snapshot.groups.first { it.name == "Research" }
+        snapshot = BackupEditor.addTextPoint(snapshot, cells.id, "Mitochondria", "Shared point")
+        val originalPlacement = snapshot.placements.single()
+        snapshot = BackupEditor.linkPlacementToGroup(snapshot, originalPlacement.id, research.id)
+
+        snapshot = BackupEditor.deleteGroup(snapshot, biology.id)
+
+        assertEquals(listOf("Research"), snapshot.groups.map { it.name })
+        assertEquals(1, snapshot.items.size)
+        assertEquals(1, snapshot.placements.size)
+        assertEquals(research.id, snapshot.placements.single().groupId)
+        snapshot = DesktopUndoStore.restore(snapshot)
+        assertEquals(setOf("Biology", "Cells", "Research"), snapshot.groups.map { it.name }.toSet())
+        assertEquals(2, snapshot.placements.size)
+    }
+
+    @Test
     fun topicFiltersCombineColorAndStarAndKeepFolderAncestors() {
         val groups = listOf(
             DesktopTopicGroup("science", "Science", null, 0),
