@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -558,13 +559,49 @@ private fun NotesScreen(
     var expandedTitles by remember(notes) { mutableStateOf(emptySet<String>()) }
     var selectedNoteIds by remember(snapshot.extractedRoot.absolutePath) { mutableStateOf(emptySet<String>()) }
     var topicPickerNote by remember { mutableStateOf<DesktopNote?>(null) }
+    var pendingDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingDeleteLabel by remember { mutableStateOf("") }
     val grouped = notes.groupBy { it.sourceApp }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
 
-    fun deleteNotes(ids: Set<String>) {
+    fun requestDelete(ids: Set<String>, label: String) {
+        if (ids.isEmpty()) return
+        pendingDeleteIds = ids
+        pendingDeleteLabel = label
+    }
+
+    fun executeDelete() {
+        val ids = pendingDeleteIds
         if (ids.isEmpty()) return
         audioPlayer.stop()
         onChanged(BackupEditor.deleteNotes(snapshot, ids))
         selectedNoteIds = selectedNoteIds - ids
+        pendingDeleteIds = emptySet()
+        pendingDeleteLabel = ""
+    }
+
+    if (pendingDeleteIds.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = {
+                pendingDeleteIds = emptySet()
+                pendingDeleteLabel = ""
+            },
+            title = { Text("Delete $pendingDeleteLabel?") },
+            text = {
+                Text(
+                    "This will delete ${pendingDeleteIds.size} note(s), including their audio, metadata, " +
+                        "and transcript files. You can restore this deletion with Undo before syncing."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { executeDelete() }) { Text("Yes, delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingDeleteIds = emptySet()
+                    pendingDeleteLabel = ""
+                }) { Text("No") }
+            }
+        )
     }
 
     LazyColumn(
@@ -584,7 +621,7 @@ private fun NotesScreen(
                 ) { Text("Select all") }
                 Button(
                     enabled = selectedNoteIds.isNotEmpty(),
-                    onClick = { deleteNotes(selectedNoteIds) },
+                    onClick = { requestDelete(selectedNoteIds, "selected notes") },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
                 ) { Text("🗑 Delete selected") }
                 OutlinedButton(
@@ -606,7 +643,9 @@ private fun NotesScreen(
                     ) {
                         Text("${if (expanded) "▼" else "▶"} $source (${sourceNotes.size})")
                     }
-                    TextButton(onClick = { deleteNotes(sourceNotes.mapTo(mutableSetOf()) { it.id }) }) {
+                    TextButton(onClick = {
+                        requestDelete(sourceNotes.mapTo(mutableSetOf()) { it.id }, "all notes under $source")
+                    }) {
                         Text("🗑", fontSize = 18.sp)
                     }
                 }
@@ -631,7 +670,9 @@ private fun NotesScreen(
                             ) {
                                 Text("${if (expanded) "▼" else "▶"} $title (${titleNotes.size})")
                             }
-                            TextButton(onClick = { deleteNotes(titleNotes.mapTo(mutableSetOf()) { it.id }) }) {
+                            TextButton(onClick = {
+                                requestDelete(titleNotes.mapTo(mutableSetOf()) { it.id }, "all notes under $title")
+                            }) {
                                 Text("🗑", fontSize = 18.sp)
                             }
                         }
@@ -646,7 +687,7 @@ private fun NotesScreen(
                                     selectedNoteIds = if (selected) selectedNoteIds + note.id
                                     else selectedNoteIds - note.id
                                 },
-                                onDelete = { deleteNotes(setOf(note.id)) },
+                                onDelete = { requestDelete(setOf(note.id), note.title) },
                                 onAddToTopics = { topicPickerNote = note }
                             )
                         }
@@ -858,13 +899,13 @@ private fun TopicsScreen(
     audioPlayer: DesktopAudioPlayer
 ) {
     val orderedGroups = remember(snapshot) { flattenGroups(snapshot.groups) }
-    var expandedGroupIds by remember(snapshot.sourceZip.absolutePath) {
+    var expandedGroupIds by remember(snapshot.extractedRoot.absolutePath) {
         mutableStateOf(snapshot.groups.filter { it.parentId == null }.map { it.id }.toSet())
     }
     val visibleGroups = remember(snapshot.groups, expandedGroupIds) {
         visibleTopicGroups(snapshot.groups, expandedGroupIds)
     }
-    var selectedGroupId by remember(snapshot.sourceZip.absolutePath) {
+    var selectedGroupId by remember(snapshot.extractedRoot.absolutePath) {
         mutableStateOf(orderedGroups.firstOrNull()?.first?.id)
     }
     var groupDialogParent by remember { mutableStateOf<String?>(null) }
@@ -876,8 +917,74 @@ private fun TopicsScreen(
     var showLegendDialog by remember { mutableStateOf(false) }
     var legendColor by remember { mutableStateOf("RED") }
     var legendMeaning by remember { mutableStateOf("") }
+    var selectedPlacementIds by remember(snapshot.extractedRoot.absolutePath, selectedGroupId) {
+        mutableStateOf(emptySet<String>())
+    }
+    var showBulkColorDialog by remember { mutableStateOf(false) }
+    var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     val recorder = remember { DesktopAudioRecorder() }
     var recording by remember { mutableStateOf(false) }
+
+    if (pendingPointDeleteIds.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { pendingPointDeleteIds = emptySet() },
+            title = { Text("Delete selected Topic point(s)?") },
+            text = {
+                Text(
+                    "This removes ${pendingPointDeleteIds.size} point(s) from this Topic. " +
+                        "A directly attached file is deleted only if no other Topic placement uses it. " +
+                        "You can restore the operation with Undo before syncing."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    audioPlayer.stop()
+                    onChanged(BackupEditor.removePlacements(snapshot, pendingPointDeleteIds))
+                    selectedPlacementIds = selectedPlacementIds - pendingPointDeleteIds
+                    pendingPointDeleteIds = emptySet()
+                }) { Text("Yes, delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPointDeleteIds = emptySet() }) { Text("No") }
+            }
+        )
+    }
+
+    if (showBulkColorDialog) {
+        AlertDialog(
+            onDismissRequest = { showBulkColorDialog = false },
+            title = { Text("Colour selected points") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    topicColors.forEach { color ->
+                        OutlinedButton(
+                            onClick = {
+                                onChanged(
+                                    BackupEditor.updatePlacements(
+                                        snapshot,
+                                        selectedPlacementIds,
+                                        color = color
+                                    )
+                                )
+                                selectedPlacementIds = emptySet()
+                                showBulkColorDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = topicColor(color))
+                        ) {
+                            val meaning = if (color == "WHITE") "Nothing special"
+                            else snapshot.colorLegend[color] ?: "Not defined"
+                            Text("${color.lowercase().replaceFirstChar { it.uppercase() }} — $meaning")
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showBulkColorDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     if (showGroupDialog) {
         AlertDialog(
@@ -1072,10 +1179,6 @@ private fun TopicsScreen(
                                 .onSuccess { recording = true }
                         }) { Text("● Record") }
                     }
-                    TextButton(onClick = {
-                        onChanged(BackupEditor.deleteGroup(snapshot, group.id))
-                        selectedGroupId = snapshot.groups.firstOrNull { it.id != group.id }?.id
-                    }) { Text("Delete folder") }
                 }
             }
             Card(Modifier.fillMaxWidth()) {
@@ -1100,8 +1203,53 @@ private fun TopicsScreen(
                 }
             }
             Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text("Selected points: ${selectedPlacementIds.size}", modifier = Modifier.weight(1f), fontSize = 12.sp)
+                OutlinedButton(
+                    enabled = placements.isNotEmpty() && selectedPlacementIds.size != placements.size,
+                    onClick = { selectedPlacementIds = placements.mapTo(mutableSetOf()) { it.id } },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
+                ) { Text("Select all", fontSize = 12.sp) }
+                OutlinedButton(
+                    enabled = selectedPlacementIds.isNotEmpty(),
+                    onClick = { selectedPlacementIds = emptySet() },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
+                ) { Text("Clear", fontSize = 12.sp) }
+                OutlinedButton(
+                    enabled = selectedPlacementIds.isNotEmpty(),
+                    onClick = {
+                        onChanged(BackupEditor.updatePlacements(snapshot, selectedPlacementIds, important = true))
+                        selectedPlacementIds = emptySet()
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
+                ) { Text("★ Star", fontSize = 12.sp) }
+                OutlinedButton(
+                    enabled = selectedPlacementIds.isNotEmpty(),
+                    onClick = {
+                        onChanged(BackupEditor.updatePlacements(snapshot, selectedPlacementIds, important = false))
+                        selectedPlacementIds = emptySet()
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
+                ) { Text("Unstar", fontSize = 12.sp) }
+                OutlinedButton(
+                    enabled = selectedPlacementIds.isNotEmpty(),
+                    onClick = { showBulkColorDialog = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
+                ) { Text("Color", fontSize = 12.sp) }
+                Button(
+                    enabled = selectedPlacementIds.isNotEmpty(),
+                    onClick = { pendingPointDeleteIds = selectedPlacementIds },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828)),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
+                ) { Text("🗑 Delete", fontSize = 12.sp) }
+            }
+            Spacer(Modifier.height(6.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                items(placements, key = { it.id }) { placement ->
+                itemsIndexed(placements, key = { _, placement -> placement.id }) { index, placement ->
                     itemById[placement.itemId]?.let { item ->
                         val linkedNote = item.target?.let { target ->
                             snapshot.notes.firstOrNull {
@@ -1113,9 +1261,16 @@ private fun TopicsScreen(
                             snapshot = snapshot,
                             item = item,
                             placement = placement,
+                            serialNumber = index + 1,
+                            selected = placement.id in selectedPlacementIds,
+                            onSelectedChange = { selected ->
+                                selectedPlacementIds = if (selected) selectedPlacementIds + placement.id
+                                else selectedPlacementIds - placement.id
+                            },
                             linkedNote = linkedNote,
                             audioPlayer = audioPlayer,
-                            onChanged = onChanged
+                            onChanged = onChanged,
+                            onRequestDelete = { pendingPointDeleteIds = setOf(placement.id) }
                         )
                     }
                 }
@@ -1129,9 +1284,13 @@ private fun TopicPointCard(
     snapshot: BackupSnapshot,
     item: DesktopTopicItem,
     placement: DesktopTopicPlacement,
+    serialNumber: Int,
+    selected: Boolean,
+    onSelectedChange: (Boolean) -> Unit,
     linkedNote: DesktopNote?,
     audioPlayer: DesktopAudioPlayer,
-    onChanged: (BackupSnapshot) -> Unit
+    onChanged: (BackupSnapshot) -> Unit,
+    onRequestDelete: () -> Unit
 ) {
     var expanded by remember(placement.id) { mutableStateOf(false) }
     var showColorDialog by remember(placement.id) { mutableStateOf(false) }
@@ -1172,8 +1331,9 @@ private fun TopicPointCard(
     ) {
         Column(Modifier.fillMaxWidth().padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = selected, onCheckedChange = onSelectedChange)
                 Text(
-                    item.title,
+                    "$serialNumber. ${item.title}",
                     fontWeight = FontWeight.Bold,
                     color = if (linkedBrowseUrl != null) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurface,
@@ -1249,7 +1409,7 @@ private fun TopicPointCard(
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, -1)) }) { Text("↑") }
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, 1)) }) { Text("↓") }
                     TextButton(onClick = { showColorDialog = true }) { Text("Color") }
-                    TextButton(onClick = { onChanged(BackupEditor.removePlacement(snapshot, placement.id)) }) { Text("Remove") }
+                    TextButton(onClick = onRequestDelete) { Text("Remove") }
                 }
             } else {
                 Text("Click to expand", fontSize = 12.sp)
@@ -1376,6 +1536,8 @@ private fun UserManualScreen() {
                 "The most recent deletion can be restored with Undo before synchronization. " +
                 "Use ⋮ to add the recording to an existing Topic folder or create a new folder/subfolder. " +
                 "Topics can contain text, links, files, recordings, stars, colours, and ordered points. " +
+                "Every point has a serial number and checkbox. Selected points can be coloured, starred, unstarred, or deleted together. " +
+                "All deletion actions ask Yes/No first. Topic folders themselves are intentionally not deletable from the PC app. " +
                 "Color opens the full palette; Edit legend defines each colour's meaning. Undo reverses the most recent PC edit before synchronization."
         )
         ManualSection(

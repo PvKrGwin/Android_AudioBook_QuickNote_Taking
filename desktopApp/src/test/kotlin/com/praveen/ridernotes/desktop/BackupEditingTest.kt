@@ -199,6 +199,40 @@ class BackupEditingTest {
         assertTrue(snapshot.extractedRoot.walkTopDown().any { it.name == "delete-me.txt" })
     }
 
+    @Test
+    fun topicPointsDefaultWhiteAndSupportBulkColorStarAndRemoval() {
+        val temp = createTempDirectory("rider-notes-topic-bulk-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Biology", null)
+        val groupId = snapshot.groups.single().id
+        snapshot = BackupEditor.addTextPoint(snapshot, groupId, "Cells", "Cell note")
+        snapshot = BackupEditor.addTextPoint(snapshot, groupId, "Plants", "Plant note")
+        val ids = snapshot.placements.mapTo(mutableSetOf()) { it.id }
+        assertTrue(snapshot.placements.all { it.color == "WHITE" && !it.important })
+
+        snapshot = BackupEditor.updatePlacements(snapshot, ids, important = true, color = "GREEN")
+        assertTrue(snapshot.placements.all { it.color == "GREEN" && it.important })
+        snapshot = BackupEditor.updateLegend(snapshot, "GREEN", "Verified")
+        assertEquals("Verified", snapshot.colorLegend["GREEN"])
+
+        snapshot = BackupEditor.removePlacements(snapshot, ids)
+        assertTrue(snapshot.placements.isEmpty())
+        assertTrue(snapshot.items.isEmpty())
+        snapshot = DesktopUndoStore.restore(snapshot)
+        assertEquals(2, snapshot.placements.size)
+        assertTrue(snapshot.placements.all { it.color == "GREEN" && it.important })
+        assertEquals("Verified", snapshot.colorLegend["GREEN"])
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())

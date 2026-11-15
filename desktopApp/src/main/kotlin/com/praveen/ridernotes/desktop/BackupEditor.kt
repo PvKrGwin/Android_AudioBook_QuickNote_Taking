@@ -222,8 +222,15 @@ object BackupEditor {
     }
 
     fun removePlacement(snapshot: BackupSnapshot, placementId: String): BackupSnapshot {
+        return removePlacements(snapshot, setOf(placementId))
+    }
+
+    fun removePlacements(snapshot: BackupSnapshot, placementIds: Set<String>): BackupSnapshot {
+        val existingIds = snapshot.placements.mapTo(mutableSetOf()) { it.id }
+        val targets = placementIds.intersect(existingIds)
+        if (targets.isEmpty()) return snapshot
         DesktopUndoStore.capture(snapshot)
-        val placements = snapshot.placements.filterNot { it.id == placementId }
+        val placements = snapshot.placements.filterNot { it.id in targets }
         val usedIds = placements.mapTo(mutableSetOf()) { it.itemId }
         deleteOrphanFiles(snapshot, snapshot.items.filter { it.id !in usedIds })
         return saveLibrary(
@@ -254,11 +261,23 @@ object BackupEditor {
         important: Boolean? = null,
         color: String? = null
     ): BackupSnapshot {
+        return updatePlacements(snapshot, setOf(placementId), important, color)
+    }
+
+    fun updatePlacements(
+        snapshot: BackupSnapshot,
+        placementIds: Set<String>,
+        important: Boolean? = null,
+        color: String? = null
+    ): BackupSnapshot {
+        val existingIds = snapshot.placements.mapTo(mutableSetOf()) { it.id }
+        val targets = placementIds.intersect(existingIds)
+        if (targets.isEmpty()) return snapshot
         DesktopUndoStore.capture(snapshot)
         return saveLibrary(
             snapshot,
             placements = snapshot.placements.map { placement ->
-                if (placement.id == placementId) placement.copy(
+                if (placement.id in targets) placement.copy(
                     important = important ?: placement.important,
                     color = color ?: placement.color
                 ) else placement
