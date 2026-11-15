@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AlertDialog
@@ -103,6 +104,8 @@ private fun RiderNotesDesktopApp(
     var selectedTab by remember { mutableStateOf(0) }
     var showCloudSyncReminder by remember { mutableStateOf(true) }
     var dirty by remember { mutableStateOf(false) }
+    var syncSucceeded by remember { mutableStateOf(false) }
+    var undoReturnsDirty by remember { mutableStateOf(false) }
     var showSyncPrompt by remember { mutableStateOf(false) }
     var showMediaNoteDialog by remember { mutableStateOf(false) }
     var mediaDraft by remember { mutableStateOf<CapturedMedia?>(null) }
@@ -130,6 +133,9 @@ private fun RiderNotesDesktopApp(
                 snapshot = it
                 baseSnapshot = runCatching { BackupImporter.import(zip) }.getOrDefault(it)
                 dirty = false
+                syncSucceeded = false
+                undoReturnsDirty = false
+                DesktopUndoStore.clear()
                 offlineEditAcknowledged = false
                 syncObservation = DesktopSyncMonitor.inspect(it)
                 DesktopDeviceIdentity.rememberBackupPath(zip.absolutePath)
@@ -141,6 +147,8 @@ private fun RiderNotesDesktopApp(
     }
 
     fun markChanged(updated: BackupSnapshot) {
+        undoReturnsDirty = dirty
+        syncSucceeded = false
         // Re-check at the exact moment an edit is committed. The background watcher is useful
         // for passive viewing, but this closes the small gap between two polling cycles.
         val immediateObservation = snapshot?.let(DesktopSyncMonitor::inspect)
@@ -173,6 +181,9 @@ private fun RiderNotesDesktopApp(
                 snapshot = it
                 baseSnapshot = runCatching { BackupImporter.import(it.sourceZip) }.getOrDefault(it)
                 dirty = false
+                syncSucceeded = true
+                undoReturnsDirty = false
+                DesktopUndoStore.clear()
                 showSyncPrompt = false
                 status = "Cloud-folder ZIP updated by ${DesktopDeviceIdentity.name()} at ${formatTime(System.currentTimeMillis())}"
                 syncObservation = DesktopSyncMonitor.inspect(it)
@@ -414,8 +425,41 @@ private fun RiderNotesDesktopApp(
                     enabled = snapshot != null,
                     onClick = ::requestMediaNote
                 ) { Text("✎ Add media note") }
-                if (dirty) {
-                    Button(onClick = { publishNow() }) { Text("Sync now — recommended") }
+                OutlinedButton(
+                    enabled = DesktopUndoStore.canUndo(snapshot),
+                    onClick = {
+                        val current = snapshot ?: return@OutlinedButton
+                        runCatching { DesktopUndoStore.restore(current) }
+                            .onSuccess {
+                                snapshot = it
+                                dirty = undoReturnsDirty
+                                syncSucceeded = false
+                                status = if (dirty) {
+                                    "Previous edit undone — earlier local changes still need Sync now"
+                                } else {
+                                    "Previous edit undone — no local changes remain"
+                                }
+                            }
+                            .onFailure { status = "Undo failed safely: ${it.message}" }
+                    }
+                ) { Text("↶ Undo") }
+                Button(
+                    enabled = dirty,
+                    onClick = { publishNow() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFC62828),
+                        contentColor = Color.White,
+                        disabledContainerColor = if (syncSucceeded) Color(0xFF2E7D32) else Color(0xFF9E9E9E),
+                        disabledContentColor = Color.White
+                    )
+                ) {
+                    Text(
+                        when {
+                            dirty -> "Sync now — recommended"
+                            syncSucceeded -> "✓ Local sync successful — upload ZIP to cloud"
+                            else -> "Sync now — no local changes"
+                        }
+                    )
                 }
                 Button(onClick = { chooseBackup()?.let(::loadBackup) }) {
                     Text("Open backup ZIP")
@@ -736,6 +780,9 @@ private fun TopicsScreen(
     var pointDialogMode by remember { mutableStateOf<String?>(null) }
     var pointTitle by remember { mutableStateOf("") }
     var pointBody by remember { mutableStateOf("") }
+    var showLegendDialog by remember { mutableStateOf(false) }
+    var legendColor by remember { mutableStateOf("RED") }
+    var legendMeaning by remember { mutableStateOf("") }
     val recorder = remember { DesktopAudioRecorder() }
     var recording by remember { mutableStateOf(false) }
 
@@ -754,6 +801,55 @@ private fun TopicsScreen(
                 }) { Text("Create") }
             },
             dismissButton = { TextButton(onClick = { showGroupDialog = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (showLegendDialog) {
+        AlertDialog(
+            onDismissRequest = { showLegendDialog = false },
+            title = { Text("Topic colour legend") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Select a colour, then add or edit what it means.")
+                    topicColors.forEach { color ->
+                        val meaning = if (color == "WHITE") {
+                            "Nothing special"
+                        } else {
+                            snapshot.colorLegend[color] ?: "Not defined"
+                        }
+                        OutlinedButton(
+                            enabled = color != "WHITE",
+                            onClick = {
+                                legendColor = color
+                                legendMeaning = snapshot.colorLegend[color].orEmpty()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = topicColor(color)
+                            )
+                        ) { Text("${color.lowercase().replaceFirstChar { it.uppercase() }} — $meaning") }
+                    }
+                    OutlinedTextField(
+                        value = legendMeaning,
+                        onValueChange = { legendMeaning = it },
+                        enabled = legendColor != "WHITE",
+                        label = { Text("Meaning of ${legendColor.lowercase()}") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = legendColor != "WHITE",
+                    onClick = {
+                        onChanged(BackupEditor.updateLegend(snapshot, legendColor, legendMeaning))
+                        showLegendDialog = false
+                    }
+                ) { Text("Save meaning") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLegendDialog = false }) { Text("Close") }
+            }
         )
     }
 
@@ -862,8 +958,26 @@ private fun TopicsScreen(
                     }) { Text("Delete folder") }
                 }
             }
-            snapshot.colorLegend.takeIf { it.isNotEmpty() }?.let { legend ->
-                Text(legend.entries.joinToString(" · ") { "${it.key}: ${it.value}" }, fontSize = 12.sp)
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        topicColors.joinToString(" · ") { color ->
+                            val meaning = if (color == "WHITE") "Nothing special"
+                            else snapshot.colorLegend[color] ?: "Not defined"
+                            "${color.lowercase().replaceFirstChar { it.uppercase() }}: $meaning"
+                        },
+                        fontSize = 12.sp,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = {
+                        legendColor = "RED"
+                        legendMeaning = snapshot.colorLegend["RED"].orEmpty()
+                        showLegendDialog = true
+                    }) { Text("Edit legend") }
+                }
             }
             Spacer(Modifier.height(8.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -900,9 +1014,38 @@ private fun TopicPointCard(
     onChanged: (BackupSnapshot) -> Unit
 ) {
     var expanded by remember(placement.id) { mutableStateOf(false) }
+    var showColorDialog by remember(placement.id) { mutableStateOf(false) }
     val playback = audioPlayer.state
     val isCurrent = playback.file?.absolutePath == linkedNote?.audioFile?.absolutePath
     val linkedBrowseUrl = linkedNote?.let(::noteBrowseUrl)
+    if (showColorDialog) {
+        AlertDialog(
+            onDismissRequest = { showColorDialog = false },
+            title = { Text("Choose point colour") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    topicColors.forEach { color ->
+                        OutlinedButton(
+                            onClick = {
+                                onChanged(BackupEditor.updatePlacement(snapshot, placement.id, color = color))
+                                showColorDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = topicColor(color))
+                        ) {
+                            val meaning = if (color == "WHITE") "Nothing special"
+                            else snapshot.colorLegend[color] ?: "Not defined"
+                            Text("${color.lowercase().replaceFirstChar { it.uppercase() }} — $meaning")
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showColorDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
     Card(
         modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         colors = CardDefaults.cardColors(containerColor = topicColor(placement.color))
@@ -985,11 +1128,7 @@ private fun TopicPointCard(
                     }) { Text(if (placement.important) "Unstar" else "Star") }
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, -1)) }) { Text("↑") }
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, 1)) }) { Text("↓") }
-                    TextButton(onClick = {
-                        val colors = listOf("WHITE", "RED", "YELLOW", "GREEN", "BLUE", "PURPLE")
-                        val next = colors[(colors.indexOf(placement.color).coerceAtLeast(0) + 1) % colors.size]
-                        onChanged(BackupEditor.updatePlacement(snapshot, placement.id, color = next))
-                    }) { Text("Color") }
+                    TextButton(onClick = { showColorDialog = true }) { Text("Color") }
                     TextButton(onClick = { onChanged(BackupEditor.removePlacement(snapshot, placement.id)) }) { Text("Remove") }
                 }
             } else {
@@ -1085,8 +1224,9 @@ private fun UserManualScreen() {
             "1. Install Google Drive for Desktop and allow the Rider Notes cloud folder to synchronize.\n" +
                 "2. In this app, open RiderNotes_Full_Backup.zip directly from that synchronized folder.\n" +
                 "3. Before an edit, Rider Notes checks the ZIP and RiderNotes_Sync_State.json revision marker.\n" +
-                "4. After editing, press Sync now — recommended. The PC rebuilds the complete ZIP in the same folder.\n" +
-                "5. Wait for Google Drive to finish uploading before using Rider Notes on the phone."
+                "4. After an edit, Sync now turns red. Press it to rebuild the ZIP and revision marker.\n" +
+                "5. A green result means the local synchronized-folder files were updated. Drive for Desktop uploads them automatically.\n" +
+                "6. Wait for Google Drive to finish uploading before using Rider Notes on the phone."
         )
         ManualSection(
             "Manual Chrome download and upload",
@@ -1094,6 +1234,7 @@ private fun UserManualScreen() {
                 "RiderNotes_Full_Backup.zip and RiderNotes_Sync_State.json into the same PC folder. " +
                 "Open the ZIP, make changes, and press Sync now in the PC app. Then upload and replace " +
                 "both the rebuilt ZIP and RiderNotes_Sync_State.json in the original Drive folder. " +
+                "Do not delete the old files first: use Google Drive's replace option so the folder keeps one current file of each name. " +
                 "Do not use the phone during this transfer, and wait for the upload to finish before reopening it."
         )
         ManualSection(
@@ -1112,7 +1253,8 @@ private fun UserManualScreen() {
             "Notes and Topics",
             "Notes are grouped by source and title. Expand a note to view metadata, transcript, playback controls, and source link. " +
                 "Use ⋮ to add the recording to an existing Topic folder or create a new folder/subfolder. " +
-                "Topics can contain text, links, files, recordings, stars, colours, and ordered points."
+                "Topics can contain text, links, files, recordings, stars, colours, and ordered points. " +
+                "Color opens the full palette; Edit legend defines each colour's meaning. Undo reverses the most recent PC edit before synchronization."
         )
         ManualSection(
             "Startup and system tray",
@@ -1190,6 +1332,8 @@ private fun openFile(file: File) = runCatching {
 private fun openUrl(url: String) = runCatching {
     if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(java.net.URI(url))
 }
+
+private val topicColors = listOf("WHITE", "RED", "YELLOW", "GREEN", "BLUE", "PURPLE")
 
 private fun topicColor(name: String): Color = when (name.uppercase(Locale.ROOT)) {
     "RED" -> Color(0xFFFFE5E5)

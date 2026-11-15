@@ -120,6 +120,32 @@ class BackupEditingTest {
         )
     }
 
+    @Test
+    fun undoRestoresPreviousTopicEditAndLegend() {
+        val temp = createTempDirectory("rider-notes-undo-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Physics", null)
+        assertEquals("Physics", snapshot.groups.single().name)
+        snapshot = DesktopUndoStore.restore(snapshot)
+        assertTrue(snapshot.groups.isEmpty())
+
+        snapshot = BackupEditor.createGroup(snapshot, "Biology", null)
+        snapshot = BackupEditor.updateLegend(snapshot, "GREEN", "Verified")
+        assertEquals("Verified", snapshot.colorLegend["GREEN"])
+        snapshot = DesktopUndoStore.restore(snapshot)
+        assertTrue(snapshot.colorLegend.isEmpty())
+        assertEquals("Biology", snapshot.groups.single().name)
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())

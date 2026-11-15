@@ -23,6 +23,7 @@ object BackupEditor {
         noteText: String
     ): BackupSnapshot {
         require(noteText.isNotBlank()) { "The note is empty" }
+        DesktopUndoStore.capture(snapshot)
         val inheritedUrl = DesktopYouTubeLinks.canonicalUrl(media.sourceApp, media.sourceUrl)
             ?: snapshot.notes.asSequence()
                 .filter { DesktopYouTubeLinks.sameIdentity(it, media) }
@@ -108,6 +109,7 @@ object BackupEditor {
 
     fun createGroup(snapshot: BackupSnapshot, name: String, parentId: String?): BackupSnapshot {
         require(name.isNotBlank()) { "Folder name is empty" }
+        DesktopUndoStore.capture(snapshot)
         val siblings = snapshot.groups.filter { it.parentId == parentId }
         val updated = snapshot.groups + DesktopTopicGroup(
             id = id(),
@@ -119,6 +121,7 @@ object BackupEditor {
     }
 
     fun deleteGroup(snapshot: BackupSnapshot, groupId: String): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
         val ids = mutableSetOf(groupId)
         do {
             val before = ids.size
@@ -140,22 +143,28 @@ object BackupEditor {
         groupId: String,
         title: String,
         text: String
-    ): BackupSnapshot = addPoint(
-        snapshot,
-        groupId,
-        DesktopTopicItem(id(), "TEXT", title.ifBlank { "Text note" }, text, null, now())
-    )
+    ): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
+        return addPoint(
+            snapshot,
+            groupId,
+            DesktopTopicItem(id(), "TEXT", title.ifBlank { "Text note" }, text, null, now())
+        )
+    }
 
     fun addLinkPoint(
         snapshot: BackupSnapshot,
         groupId: String,
         title: String,
         url: String
-    ): BackupSnapshot = addPoint(
-        snapshot,
-        groupId,
-        DesktopTopicItem(id(), "LINK", title.ifBlank { url }, null, url, now())
-    )
+    ): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
+        return addPoint(
+            snapshot,
+            groupId,
+            DesktopTopicItem(id(), "LINK", title.ifBlank { url }, null, url, now())
+        )
+    }
 
     fun addAttachment(
         snapshot: BackupSnapshot,
@@ -163,6 +172,7 @@ object BackupEditor {
         source: File
     ): BackupSnapshot {
         require(source.isFile) { "Attachment was not found" }
+        DesktopUndoStore.capture(snapshot)
         val itemId = id()
         val safeName = source.name.replace(Regex("[^A-Za-z0-9._ -]"), "_")
         val relative = "assets/${itemId}_$safeName"
@@ -180,6 +190,7 @@ object BackupEditor {
         groupId: String,
         note: DesktopNote
     ): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
         val audioName = note.audioFile?.name ?: "${note.id}.m4a".also { name ->
             File(snapshot.extractedRoot, "recordings/$name").apply {
                 parentFile?.mkdirs()
@@ -194,6 +205,7 @@ object BackupEditor {
     }
 
     fun removePlacement(snapshot: BackupSnapshot, placementId: String): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
         val placements = snapshot.placements.filterNot { it.id == placementId }
         val usedIds = placements.mapTo(mutableSetOf()) { it.itemId }
         deleteOrphanFiles(snapshot, snapshot.items.filter { it.id !in usedIds })
@@ -205,6 +217,7 @@ object BackupEditor {
     }
 
     fun movePlacement(snapshot: BackupSnapshot, placementId: String, delta: Int): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
         val selected = snapshot.placements.firstOrNull { it.id == placementId } ?: return snapshot
         val siblings = snapshot.placements.filter { it.groupId == selected.groupId }
             .sortedBy { it.order }
@@ -223,17 +236,21 @@ object BackupEditor {
         placementId: String,
         important: Boolean? = null,
         color: String? = null
-    ): BackupSnapshot = saveLibrary(
-        snapshot,
-        placements = snapshot.placements.map { placement ->
-            if (placement.id == placementId) placement.copy(
-                important = important ?: placement.important,
-                color = color ?: placement.color
-            ) else placement
-        }
-    )
+    ): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
+        return saveLibrary(
+            snapshot,
+            placements = snapshot.placements.map { placement ->
+                if (placement.id == placementId) placement.copy(
+                    important = important ?: placement.important,
+                    color = color ?: placement.color
+                ) else placement
+            }
+        )
+    }
 
     fun updateLegend(snapshot: BackupSnapshot, color: String, meaning: String): BackupSnapshot {
+        DesktopUndoStore.capture(snapshot)
         val legend = snapshot.colorLegend.toMutableMap()
         if (meaning.isBlank()) legend.remove(color) else legend[color] = meaning.trim()
         return saveLibrary(snapshot, legend = legend)
