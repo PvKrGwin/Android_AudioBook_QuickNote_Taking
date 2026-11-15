@@ -2,6 +2,8 @@ package com.praveen.ridernotes.desktop
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ContextMenuArea
+import androidx.compose.foundation.ContextMenuItem
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -124,6 +127,8 @@ private fun RiderNotesDesktopApp(
     var baseSnapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
     var status by remember { mutableStateOf("Open RiderNotes_Full_Backup.zip to begin.") }
     var selectedTab by remember { mutableStateOf(0) }
+    var searchQuery by remember { mutableStateOf("") }
+    var showBackupStatus by remember { mutableStateOf(false) }
     var showCloudSyncReminder by remember { mutableStateOf(true) }
     var dirty by remember { mutableStateOf(false) }
     var syncSucceeded by remember { mutableStateOf(false) }
@@ -514,37 +519,49 @@ private fun RiderNotesDesktopApp(
                     }) { Text(if (startupEnabled) "Startup: On" else "Startup: Off") }
                 }
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Card(Modifier.fillMaxWidth()) {
                 Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+                    Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        "Current ZIP: ${snapshot?.sourceZip?.absolutePath ?: "No backup ZIP selected"}",
-                        modifier = Modifier.weight(1f),
-                        fontSize = 12.sp
+                    TextButton(onClick = { showBackupStatus = !showBackupStatus }) {
+                        Text(if (showBackupStatus) "▾ Backup & cloud" else "▸ Backup & cloud")
+                    }
+                    Text(snapshot?.sourceZip?.name ?: "No backup selected", modifier = Modifier.weight(1f), fontSize = 12.sp)
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        singleLine = true,
+                        label = { Text(if (selectedTab == 1) "Search Topics (* wildcard)" else "Search Notes (* wildcard)") },
+                        modifier = Modifier.width(300.dp)
                     )
                     Button(onClick = { chooseBackup()?.let(::loadBackup) }) {
                         Text(if (snapshot == null) "Open ZIP" else "Change ZIP")
                     }
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            Text(status, color = MaterialTheme.colorScheme.primary)
-            syncObservation?.let { observation ->
-                Text(
-                    "Cloud status: ${observation.message}",
-                    color = when (observation.health) {
-                        DesktopSyncHealth.CURRENT -> Color(0xFF2E7D32)
-                        DesktopSyncHealth.NEW_CLOUD_VERSION -> Color(0xFF1565C0)
-                        else -> Color(0xFFB26A00)
-                    },
-                    fontSize = 12.sp
-                )
+            if (showBackupStatus) {
+                SelectionContainer {
+                    Column(Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) {
+                        Text("Current ZIP: ${snapshot?.sourceZip?.absolutePath ?: "No backup ZIP selected"}", fontSize = 12.sp)
+                        Text(status, color = MaterialTheme.colorScheme.primary)
+                        syncObservation?.let { observation ->
+                            Text(
+                                "Cloud status: ${observation.message}",
+                                color = when (observation.health) {
+                                    DesktopSyncHealth.CURRENT -> Color(0xFF2E7D32)
+                                    DesktopSyncHealth.NEW_CLOUD_VERSION -> Color(0xFF1565C0)
+                                    else -> Color(0xFFB26A00)
+                                },
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(5.dp))
 
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
@@ -571,9 +588,9 @@ private fun RiderNotesDesktopApp(
                     Text("No Rider Notes backup loaded")
                 }
             } else if (selectedTab == 0) {
-                NotesScreen(loaded, ::markChanged, audioPlayer)
+                NotesScreen(loaded, ::markChanged, audioPlayer, searchQuery) { searchQuery = it }
             } else if (selectedTab == 1) {
-                TopicsScreen(loaded, ::markChanged, audioPlayer)
+                TopicsScreen(loaded, ::markChanged, audioPlayer, searchQuery) { searchQuery = it }
             } else {
                 UserManualScreen()
             }
@@ -585,16 +602,28 @@ private fun RiderNotesDesktopApp(
 private fun NotesScreen(
     snapshot: BackupSnapshot,
     onChanged: (BackupSnapshot) -> Unit,
-    audioPlayer: DesktopAudioPlayer
+    audioPlayer: DesktopAudioPlayer,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit
 ) {
     val notes = snapshot.notes.filterNot { it.topicOnly }
-    var expandedSources by remember(notes) { mutableStateOf(emptySet<String>()) }
-    var expandedTitles by remember(notes) { mutableStateOf(emptySet<String>()) }
+    val grouped = notes.groupBy { it.sourceApp }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+    val firstSource = grouped.keys.firstOrNull()
+    val firstTitle = firstSource?.let { grouped[it].orEmpty().map(DesktopNote::title).sorted().firstOrNull() }
+    var expandedSources by remember(snapshot.extractedRoot.absolutePath) {
+        mutableStateOf(firstSource?.let(::setOf).orEmpty())
+    }
+    var selectedSource by remember(snapshot.extractedRoot.absolutePath) { mutableStateOf(firstSource) }
+    var selectedTitle by remember(snapshot.extractedRoot.absolutePath) { mutableStateOf(firstTitle) }
+    var showNoteTools by remember { mutableStateOf(false) }
     var selectedNoteIds by remember(snapshot.extractedRoot.absolutePath) { mutableStateOf(emptySet<String>()) }
     var topicPickerNote by remember { mutableStateOf<DesktopNote?>(null) }
     var pendingDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDeleteLabel by remember { mutableStateOf("") }
-    val grouped = notes.groupBy { it.sourceApp }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
+    val searching = searchQuery.isNotBlank()
+    val searchMatches = if (searching) notes.filter { noteMatchesSearch(it, searchQuery) } else emptyList()
+    val folderNotes = grouped[selectedSource].orEmpty().filter { it.title == selectedTitle }
+    val visibleNotes = (if (searching) searchMatches else folderNotes).sortedByDescending { it.recordedAtEpochMs }
 
     fun requestDelete(ids: Set<String>, label: String) {
         if (ids.isEmpty()) return
@@ -637,92 +666,106 @@ private fun NotesScreen(
         )
     }
 
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        item(key = "note-selection-toolbar") {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("Selected: ${selectedNoteIds.size}", modifier = Modifier.weight(1f))
-                OutlinedButton(
-                    enabled = notes.isNotEmpty() && selectedNoteIds.size != notes.size,
-                    onClick = { selectedNoteIds = notes.mapTo(mutableSetOf()) { it.id } }
-                ) { Text("Select all") }
-                Button(
-                    enabled = selectedNoteIds.isNotEmpty(),
-                    onClick = { requestDelete(selectedNoteIds, "selected notes") },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
-                ) { Text("🗑 Delete selected") }
-                OutlinedButton(
-                    enabled = selectedNoteIds.isNotEmpty(),
-                    onClick = { selectedNoteIds = emptySet() }
-                ) { Text("↻ Clear selection") }
-            }
-        }
-        grouped.forEach { (source, sourceNotes) ->
-            item(key = "source:$source") {
-                val expanded = source in expandedSources
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(
-                        onClick = {
-                            expandedSources = if (expanded) expandedSources - source
-                            else expandedSources + source
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("${if (expanded) "▼" else "▶"} $source (${sourceNotes.size})")
-                    }
-                    TextButton(onClick = {
-                        requestDelete(sourceNotes.mapTo(mutableSetOf()) { it.id }, "all notes under $source")
-                    }) {
-                        Text("🗑", fontSize = 18.sp)
-                    }
-                }
-            }
-            if (source in expandedSources) {
-                val titleGroups = sourceNotes.groupBy { it.title }
-                    .toSortedMap(String.CASE_INSENSITIVE_ORDER)
-                titleGroups.forEach { (title, titleNotes) ->
-                    val titleKey = "$source::$title"
-                    item(key = "title:$titleKey") {
-                        val expanded = titleKey in expandedTitles
-                        Row(
-                            Modifier.fillMaxWidth().padding(start = 18.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedButton(
+    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Card(Modifier.width(300.dp).fillMaxHeight()) {
+            Column(Modifier.fillMaxSize().padding(7.dp)) {
+                Text("Media folders", fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(4.dp))
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    grouped.forEach { (source, sourceNotes) ->
+                        val expanded = source in expandedSources
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
                                 onClick = {
-                                    expandedTitles = if (expanded) expandedTitles - titleKey
-                                    else expandedTitles + titleKey
+                                    expandedSources = if (expanded) expandedSources - source else expandedSources + source
+                                    selectedSource = source
                                 },
                                 modifier = Modifier.weight(1f)
-                            ) {
-                                Text("${if (expanded) "▼" else "▶"} $title (${titleNotes.size})")
-                            }
+                            ) { Text("${if (expanded) "▾" else "▸"} 📁 $source (${sourceNotes.size})", fontSize = 12.sp) }
                             TextButton(onClick = {
-                                requestDelete(titleNotes.mapTo(mutableSetOf()) { it.id }, "all notes under $title")
-                            }) {
-                                Text("🗑", fontSize = 18.sp)
+                                requestDelete(sourceNotes.mapTo(mutableSetOf()) { it.id }, "all notes under $source")
+                            }) { Text("🗑", fontSize = 13.sp) }
+                        }
+                        if (expanded) {
+                            sourceNotes.groupBy { it.title }.toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach { (title, titleNotes) ->
+                                val active = selectedSource == source && selectedTitle == title
+                                val modifier = Modifier.fillMaxWidth().padding(start = 18.dp).heightIn(min = 30.dp)
+                                if (active) {
+                                    Button(
+                                        onClick = { selectedSource = source; selectedTitle = title },
+                                        modifier = modifier,
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                    ) { Text("📄 $title (${titleNotes.size})", fontSize = 11.sp) }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = { selectedSource = source; selectedTitle = title },
+                                        modifier = modifier,
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                                    ) { Text("📄 $title (${titleNotes.size})", fontSize = 11.sp) }
+                                }
                             }
                         }
                     }
-                    if (titleKey in expandedTitles) {
-                        items(titleNotes.sortedByDescending { it.recordedAtEpochMs }, key = { it.id }) {
-                            note -> NoteCard(
-                                note = note,
-                                audioPlayer = audioPlayer,
-                                selected = note.id in selectedNoteIds,
-                                onSelectedChange = { selected ->
-                                    selectedNoteIds = if (selected) selectedNoteIds + note.id
-                                    else selectedNoteIds - note.id
-                                },
-                                onDelete = { requestDelete(setOf(note.id), note.title) },
-                                onAddToTopics = { topicPickerNote = note }
-                            )
+                }
+            }
+        }
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (searching) "Search results (${visibleNotes.size})" else selectedTitle ?: "Select a media title",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = { showNoteTools = !showNoteTools }) {
+                    Text(if (showNoteTools) "Hide selection tools ▴" else "Selection tools ▾")
+                }
+            }
+            if (showNoteTools) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Selected: ${selectedNoteIds.size}", modifier = Modifier.weight(1f), fontSize = 12.sp)
+                    OutlinedButton(
+                        enabled = visibleNotes.isNotEmpty(),
+                        onClick = { selectedNoteIds = selectedNoteIds + visibleNotes.map { it.id } }
+                    ) { Text("Select visible") }
+                    OutlinedButton(enabled = selectedNoteIds.isNotEmpty(), onClick = { selectedNoteIds = emptySet() }) { Text("Clear") }
+                    Button(
+                        enabled = selectedNoteIds.isNotEmpty(),
+                        onClick = { requestDelete(selectedNoteIds, "selected notes") },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFC62828))
+                    ) { Text("🗑 Delete") }
+                }
+            }
+            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                items(visibleNotes, key = { it.id }) { note ->
+                    val goToSource = {
+                                selectedSource = note.sourceApp
+                                selectedTitle = note.title
+                                expandedSources = expandedSources + note.sourceApp
+                                onSearchQueryChange("")
+                            }
+                    ContextMenuArea(
+                        items = {
+                            if (searching) listOf(ContextMenuItem("Go to source", goToSource)) else emptyList()
+                        }
+                    ) {
+                        Column {
+                        if (searching) {
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                Text("${note.sourceApp} › ${note.title}", modifier = Modifier.weight(1f), fontSize = 12.sp)
+                                TextButton(onClick = goToSource) { Text("Go to source") }
+                            }
+                        }
+                        NoteCard(
+                        note = note,
+                        audioPlayer = audioPlayer,
+                        selected = note.id in selectedNoteIds,
+                        onSelectedChange = { selected ->
+                            selectedNoteIds = if (selected) selectedNoteIds + note.id else selectedNoteIds - note.id
+                        },
+                        onDelete = { requestDelete(setOf(note.id), note.title) },
+                        onAddToTopics = { topicPickerNote = note }
+                        )
                         }
                     }
                 }
@@ -805,24 +848,30 @@ private fun NoteCard(
                         }
                     }
                 }
-                note.module?.let { Text("Module: $it") }
-                note.chapter?.let { Text("Chapter / episode: $it") }
-                note.author?.let { Text("Author / channel: $it") }
-                note.playbackPositionMs?.let { Text("Media position: ${formatPosition(it)}") }
-                note.typedNote?.takeIf(String::isNotBlank)?.let {
-                    Text("Typed note", fontWeight = FontWeight.SemiBold)
-                    Text(it)
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        note.module?.let { Text("Module: $it") }
+                        note.chapter?.let { Text("Chapter / episode: $it") }
+                        note.author?.let { Text("Author / channel: $it") }
+                        note.playbackPositionMs?.let { Text("Media position: ${formatPosition(it)}") }
+                        note.typedNote?.takeIf(String::isNotBlank)?.let {
+                            Text("Typed note", fontWeight = FontWeight.SemiBold)
+                            Text(it)
+                        }
+                    }
                 }
                 Text("Transcription: ${note.transcriptionStatus}")
                 note.transcript?.takeIf(String::isNotBlank)?.let { transcript ->
                     Spacer(Modifier.height(4.dp))
                     Text("Transcript", fontWeight = FontWeight.SemiBold)
-                    PlaybackTranscript(
-                        transcript = transcript,
-                        segments = note.transcriptSegments,
-                        positionMs = if (isCurrent) playback.positionMs else 0L,
-                        followPlayback = isCurrent && playback.playing
-                    )
+                    SelectionContainer {
+                        PlaybackTranscript(
+                            transcript = transcript,
+                            segments = note.transcriptSegments,
+                            positionMs = if (isCurrent) playback.positionMs else 0L,
+                            followPlayback = isCurrent && playback.playing
+                        )
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     note.audioFile?.takeIf { it.exists() && it.length() > 0L }?.let { audio ->
@@ -945,7 +994,9 @@ private fun TopicFolderPickerDialog(
 private fun TopicsScreen(
     snapshot: BackupSnapshot,
     onChanged: (BackupSnapshot) -> Unit,
-    audioPlayer: DesktopAudioPlayer
+    audioPlayer: DesktopAudioPlayer,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit
 ) {
     val orderedGroups = remember(snapshot) { flattenGroups(snapshot.groups) }
     var expandedGroupIds by remember(snapshot.extractedRoot.absolutePath) {
@@ -976,17 +1027,30 @@ private fun TopicsScreen(
     var filterColor by remember { mutableStateOf<String?>(null) }
     var filterStarred by remember { mutableStateOf(false) }
     var showFilterColorDialog by remember { mutableStateOf(false) }
+    var showTopicTools by remember { mutableStateOf(false) }
     val recorder = remember { DesktopAudioRecorder() }
     var recording by remember { mutableStateOf(false) }
 
-    val matchingPlacements = snapshot.placements.filter { placement ->
+    val searchMode = searchQuery.isNotBlank()
+    val itemByIdForSearch = snapshot.items.associateBy { it.id }
+    val noteByTarget = snapshot.notes.flatMap { note ->
+        listOfNotNull(note.audioFile?.name, note.id).map { it to note }
+    }.toMap()
+    val searchedPlacements = if (searchMode) snapshot.placements.filter { placement ->
+        val item = itemByIdForSearch[placement.itemId] ?: return@filter false
+        val linked = item.target?.let { target ->
+            noteByTarget[File(target).name] ?: noteByTarget[File(target).nameWithoutExtension]
+        }
+        topicPointMatchesSearch(item, linked, searchQuery)
+    } else emptyList()
+    val matchingPlacements = (if (searchMode) searchedPlacements else snapshot.placements).filter { placement ->
         topicPlacementMatches(placement, filterColor, filterStarred)
     }
-    val filtering = filterColor != null || filterStarred
+    val filtering = searchMode || filterColor != null || filterStarred
     val relevantGroupIds = topicRelevantGroupIds(snapshot.groups, matchingPlacements)
     val filteredGroups = if (filtering) snapshot.groups.filter { it.id in relevantGroupIds } else snapshot.groups
     val filteredVisibleGroups = visibleTopicGroups(filteredGroups, expandedGroupIds)
-    LaunchedEffect(filterColor, filterStarred, relevantGroupIds) {
+    LaunchedEffect(searchQuery, filterColor, filterStarred, relevantGroupIds) {
         if (filtering) expandedGroupIds = expandedGroupIds + relevantGroupIds
     }
 
@@ -1338,19 +1402,28 @@ private fun TopicsScreen(
 
         val selected = snapshot.groups.firstOrNull { it.id == selectedGroupId }
         val itemById = snapshot.items.associateBy { it.id }
-        val placements = snapshot.placements
-            .filter { it.groupId == selectedGroupId }
+        val placements = (if (searchMode) searchedPlacements else snapshot.placements.filter { it.groupId == selectedGroupId })
             .filter { topicPlacementMatches(it, filterColor, filterStarred) }
             .sortedBy { it.order }
         Column(Modifier.weight(1f).fillMaxHeight()) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    selected?.name ?: "Select a topic",
+                    if (searchMode) "Search results (${placements.size})" else selected?.name ?: "Select a topic",
                     fontSize = 22.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f)
                 )
+                TextButton(onClick = { showTopicTools = !showTopicTools }) {
+                    Text(if (showTopicTools) "Hide tools ▴" else "Topic tools ▾")
+                }
                 selected?.let { group ->
+                    if (recording) {
+                        Button(onClick = {
+                            recorder.stop()?.let { audio -> onChanged(BackupEditor.addAttachment(snapshot, group.id, audio)) }
+                            recording = false
+                        }) { Text("■ Stop recording") }
+                    }
+                    if (showTopicTools && !searchMode) {
                     TextButton(onClick = {
                         groupDialogParent = group.id
                         showGroupDialog = true
@@ -1364,21 +1437,16 @@ private fun TopicsScreen(
                             showAttachmentNotesDialog = true
                         }
                     }) { Text("+ File") }
-                    if (recording) {
-                        Button(onClick = {
-                            recorder.stop()?.let { audio ->
-                                onChanged(BackupEditor.addAttachment(snapshot, group.id, audio))
-                            }
-                            recording = false
-                        }) { Text("■ Stop recording") }
-                    } else {
+                    if (!recording) {
                         TextButton(onClick = {
                             runCatching { recorder.start() }
                                 .onSuccess { recording = true }
                         }) { Text("● Record") }
                     }
+                    }
                 }
             }
+            if (showTopicTools) {
             Card(Modifier.fillMaxWidth()) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1409,7 +1477,11 @@ private fun TopicsScreen(
                     filterStarred = !filterStarred
                 }) { Text(if (filterStarred) "★ Starred only" else "☆ Filter by star") }
                 if (filtering) {
-                    TextButton(onClick = { filterColor = null; filterStarred = false }) { Text("Clear filters") }
+                    TextButton(onClick = {
+                        filterColor = null
+                        filterStarred = false
+                        if (searchMode) onSearchQueryChange("")
+                    }) { Text(if (searchMode) "Clear search / filters" else "Clear filters") }
                     Text("Edits update this filtered list immediately.", fontSize = 12.sp)
                 }
             }
@@ -1458,6 +1530,7 @@ private fun TopicsScreen(
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 3.dp)
                 ) { Text("🗑 Delete", fontSize = 12.sp) }
             }
+            }
             Spacer(Modifier.height(6.dp))
             LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 itemsIndexed(placements, key = { _, placement -> placement.id }) { index, placement ->
@@ -1468,25 +1541,49 @@ private fun TopicsScreen(
                                     it.id == File(target).nameWithoutExtension
                             }
                         }
-                        TopicPointCard(
-                            snapshot = snapshot,
-                            item = item,
-                            placement = placement,
-                            serialNumber = index + 1,
-                            selected = placement.id in selectedPlacementIds,
-                            onSelectedChange = { selected ->
-                                selectedPlacementIds = if (selected) selectedPlacementIds + placement.id
-                                else selectedPlacementIds - placement.id
-                            },
-                            linkedNote = linkedNote,
-                            audioPlayer = audioPlayer,
-                            onChanged = onChanged,
-                            onRequestLink = {
-                                linkPlacementId = placement.id
-                                linkPickerGroupId = null
-                            },
-                            onRequestDelete = { pendingPointDeleteIds = setOf(placement.id) }
-                        )
+                        val goToSource = {
+                            selectedGroupId = placement.groupId
+                            expandedGroupIds = expandedGroupIds + topicGroupAndAncestorIds(snapshot.groups, placement.groupId)
+                            onSearchQueryChange("")
+                        }
+                        ContextMenuArea(
+                            items = {
+                                if (searchMode) listOf(ContextMenuItem("Go to source", goToSource)) else emptyList()
+                            }
+                        ) {
+                            Column {
+                                if (searchMode) {
+                                    val group = snapshot.groups.firstOrNull { it.id == placement.groupId }
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            group?.let { topicGroupPath(snapshot.groups, it) }.orEmpty(),
+                                            modifier = Modifier.weight(1f),
+                                            fontSize = 12.sp
+                                        )
+                                        TextButton(onClick = goToSource) { Text("Go to source") }
+                                    }
+                                }
+                                TopicPointCard(
+                                    snapshot = snapshot,
+                                    item = item,
+                                    placement = placement,
+                                    serialNumber = index + 1,
+                                    selected = placement.id in selectedPlacementIds,
+                                    onSelectedChange = { selected ->
+                                        selectedPlacementIds = if (selected) selectedPlacementIds + placement.id
+                                        else selectedPlacementIds - placement.id
+                                    },
+                                    linkedNote = linkedNote,
+                                    audioPlayer = audioPlayer,
+                                    onChanged = onChanged,
+                                    onRequestLink = {
+                                        linkPlacementId = placement.id
+                                        linkPickerGroupId = null
+                                    },
+                                    onRequestDelete = { pendingPointDeleteIds = setOf(placement.id) }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1578,29 +1675,39 @@ private fun TopicPointCard(
                         OutlinedButton(onClick = { copyText(url) }) { Text("Copy link") }
                     }
                 }
-                Text("Type: ${item.type}", fontSize = 12.sp)
-                item.text?.let { Text(it) }
+                SelectionContainer {
+                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("Type: ${item.type}", fontSize = 12.sp)
+                        item.text?.let { Text(it) }
+                    }
+                }
                 linkedNote?.let { note ->
-                    Text("Source: ${note.sourceApp}", fontSize = 12.sp)
-                    Text("Title: ${note.title}", fontSize = 12.sp)
-                    note.module?.let { Text("Module: $it", fontSize = 12.sp) }
-                    note.chapter?.let { Text("Chapter / episode: $it", fontSize = 12.sp) }
-                    note.author?.let { Text("Author / channel: $it", fontSize = 12.sp) }
-                    note.playbackPositionMs?.let { Text("Media position: ${formatPosition(it)}", fontSize = 12.sp) }
-                    Text("Recorded: ${formatTime(note.recordedAtEpochMs)}", fontSize = 12.sp)
-                    Text("Origin: ${note.originDeviceName ?: "Legacy / unknown device"}", fontSize = 11.sp)
-                    note.typedNote?.takeIf(String::isNotBlank)?.let {
-                        Text("Typed note", fontWeight = FontWeight.SemiBold)
-                        Text(it)
+                    SelectionContainer {
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text("Source: ${note.sourceApp}", fontSize = 12.sp)
+                            Text("Title: ${note.title}", fontSize = 12.sp)
+                            note.module?.let { Text("Module: $it", fontSize = 12.sp) }
+                            note.chapter?.let { Text("Chapter / episode: $it", fontSize = 12.sp) }
+                            note.author?.let { Text("Author / channel: $it", fontSize = 12.sp) }
+                            note.playbackPositionMs?.let { Text("Media position: ${formatPosition(it)}", fontSize = 12.sp) }
+                            Text("Recorded: ${formatTime(note.recordedAtEpochMs)}", fontSize = 12.sp)
+                            Text("Origin: ${note.originDeviceName ?: "Legacy / unknown device"}", fontSize = 11.sp)
+                            note.typedNote?.takeIf(String::isNotBlank)?.let {
+                                Text("Typed note", fontWeight = FontWeight.SemiBold)
+                                Text(it)
+                            }
+                        }
                     }
                     Text("Transcription: ${note.transcriptionStatus}", fontSize = 12.sp)
                     note.transcript?.takeIf(String::isNotBlank)?.let { transcript ->
-                        PlaybackTranscript(
-                            transcript = transcript,
-                            segments = note.transcriptSegments,
-                            positionMs = if (isCurrent) playback.positionMs else 0L,
-                            followPlayback = isCurrent && playback.playing
-                        )
+                        SelectionContainer {
+                            PlaybackTranscript(
+                                transcript = transcript,
+                                segments = note.transcriptSegments,
+                                positionMs = if (isCurrent) playback.positionMs else 0L,
+                                followPlayback = isCurrent && playback.playing
+                            )
+                        }
                     }
                     note.sourceUrl?.let {
                         linkedBrowseUrl?.let { url ->
@@ -1670,6 +1777,56 @@ private fun topicGroupPath(groups: List<DesktopTopicGroup>, group: DesktopTopicG
     }
     return names.asReversed().joinToString(" › ")
 }
+
+private fun topicGroupAndAncestorIds(groups: List<DesktopTopicGroup>, groupId: String): Set<String> {
+    val ids = mutableSetOf<String>()
+    var current: String? = groupId
+    while (current != null && ids.add(current)) {
+        current = groups.firstOrNull { it.id == current }?.parentId
+    }
+    return ids
+}
+
+internal fun wildcardMatches(query: String, text: String): Boolean {
+    val trimmed = query.trim()
+    if (trimmed.isEmpty()) return true
+    val expression = trimmed.split('*').joinToString(".*") { Regex.escape(it) }
+    return Regex(expression, RegexOption.IGNORE_CASE).containsMatchIn(text)
+}
+
+private fun noteMatchesSearch(note: DesktopNote, query: String): Boolean = wildcardMatches(
+    query,
+    listOfNotNull(
+        note.sourceApp,
+        note.title,
+        note.module,
+        note.chapter,
+        note.author,
+        note.typedNote,
+        note.transcript,
+        note.sourceUrl
+    ).joinToString("\n")
+)
+
+private fun topicPointMatchesSearch(
+    item: DesktopTopicItem,
+    linkedNote: DesktopNote?,
+    query: String
+): Boolean = wildcardMatches(
+    query,
+    listOfNotNull(
+        item.title,
+        item.text,
+        item.target?.let { File(it).name },
+        linkedNote?.sourceApp,
+        linkedNote?.title,
+        linkedNote?.module,
+        linkedNote?.chapter,
+        linkedNote?.author,
+        linkedNote?.typedNote,
+        linkedNote?.transcript
+    ).joinToString("\n")
+)
 
 internal fun topicPlacementMatches(
     placement: DesktopTopicPlacement,
