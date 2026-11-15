@@ -57,8 +57,12 @@ import androidx.compose.ui.window.application
 import kotlinx.coroutines.delay
 import java.awt.Desktop
 import java.awt.Image
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.awt.image.BufferedImage
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -787,6 +791,20 @@ private fun NoteCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             if (expanded) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { copyText(note.title) }) { Text("Copy title") }
+                    note.typedNote?.takeIf(String::isNotBlank)?.let { typed ->
+                        OutlinedButton(onClick = { copyText(typed) }) { Text("Copy note") }
+                    }
+                    note.transcript?.takeIf(String::isNotBlank)?.let { transcript ->
+                        OutlinedButton(onClick = { copyText(transcript) }) { Text("Copy transcript") }
+                    }
+                    note.sourceUrl?.let {
+                        noteBrowseUrl(note)?.let { url ->
+                            OutlinedButton(onClick = { copyText(url) }) { Text("Copy link") }
+                        }
+                    }
+                }
                 note.module?.let { Text("Module: $it") }
                 note.chapter?.let { Text("Chapter / episode: $it") }
                 note.author?.let { Text("Author / channel: $it") }
@@ -821,8 +839,10 @@ private fun NoteCard(
                             OutlinedButton(onClick = audioPlayer::stop) { Text("Stop") }
                         }
                     }
-                    note.sourceUrl?.let { url ->
-                        OutlinedButton(onClick = { openUrl(url) }) { Text("Open source") }
+                    note.sourceUrl?.let {
+                        noteBrowseUrl(note)?.let { url ->
+                            OutlinedButton(onClick = { openUrl(url) }) { Text("Open source at this time") }
+                        }
                     }
                     onDelete?.let {
                         Button(
@@ -1541,6 +1561,23 @@ private fun TopicPointCard(
                 if (placement.important) Text("★", color = Color(0xFFFFA000), fontSize = 20.sp)
             }
             if (expanded) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedButton(onClick = { copyText(item.title) }) { Text("Copy title") }
+                    item.text?.takeIf(String::isNotBlank)?.let { pointText ->
+                        OutlinedButton(onClick = { copyText(pointText) }) { Text("Copy text") }
+                    }
+                    linkedNote?.transcript?.takeIf(String::isNotBlank)?.let { transcript ->
+                        OutlinedButton(onClick = { copyText(transcript) }) { Text("Copy transcript") }
+                    }
+                    linkedNote?.sourceUrl?.let {
+                        linkedBrowseUrl?.let { url ->
+                            OutlinedButton(onClick = { copyText(url) }) { Text("Copy link") }
+                        }
+                    }
+                    item.target?.takeIf { item.type == "LINK" }?.let { url ->
+                        OutlinedButton(onClick = { copyText(url) }) { Text("Copy link") }
+                    }
+                }
                 Text("Type: ${item.type}", fontSize = 12.sp)
                 item.text?.let { Text(it) }
                 linkedNote?.let { note ->
@@ -1565,20 +1602,27 @@ private fun TopicPointCard(
                             followPlayback = isCurrent && playback.playing
                         )
                     }
-                    note.sourceUrl?.let { url ->
-                        OutlinedButton(onClick = { openUrl(url) }) { Text("Open media source") }
+                    note.sourceUrl?.let {
+                        linkedBrowseUrl?.let { url ->
+                            OutlinedButton(onClick = { openUrl(url) }) { Text("Open media at this time") }
+                        }
                     }
                 }
                 resolveTarget(snapshot, item)?.let { target ->
                     if (item.type == "RECORDING" && linkedNote != null && target.length() > 0L) {
-                        Button(onClick = { audioPlayer.playOrPause(target) }) {
-                            Text(
-                                when {
-                                    !isCurrent || !playback.playing -> "Play recording"
-                                    playback.paused -> "Resume"
-                                    else -> "Pause"
-                                }
-                            )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Button(onClick = { audioPlayer.playOrPause(target) }) {
+                                Text(
+                                    when {
+                                        !isCurrent || !playback.playing -> "Play recording"
+                                        playback.paused -> "Resume"
+                                        else -> "Pause"
+                                    }
+                                )
+                            }
+                            OutlinedButton(onClick = { saveFileCopy(target) }) {
+                                Text("Download recording")
+                            }
                         }
                         if (isCurrent && playback.playing) {
                             OutlinedButton(onClick = audioPlayer::stop) { Text("Stop") }
@@ -1863,6 +1907,20 @@ private fun openFile(file: File) = runCatching {
 
 private fun openUrl(url: String) = runCatching {
     if (Desktop.isDesktopSupported()) Desktop.getDesktop().browse(java.net.URI(url))
+}
+
+private fun copyText(value: String) = runCatching {
+    Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(value), null)
+}
+
+private fun saveFileCopy(source: File) = runCatching {
+    val chooser = JFileChooser().apply {
+        dialogTitle = "Download recording"
+        selectedFile = File(source.name)
+    }
+    if (chooser.showSaveDialog(null) == JFileChooser.APPROVE_OPTION) {
+        Files.copy(source.toPath(), chooser.selectedFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
 }
 
 private val topicColors = listOf("WHITE", "RED", "YELLOW", "GREEN", "BLUE", "PURPLE")

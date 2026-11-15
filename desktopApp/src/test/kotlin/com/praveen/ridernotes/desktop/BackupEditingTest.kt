@@ -121,6 +121,20 @@ class BackupEditingTest {
     }
 
     @Test
+    fun `youtube live link discards old timestamp and uses each note position`() {
+        val canonical = DesktopYouTubeLinks.canonicalUrl(
+            "YouTube",
+            "https://www.youtube.com/live/AbCdEf12345?si=shared&t=125s"
+        )
+
+        assertEquals("https://www.youtube.com/watch?v=AbCdEf12345", canonical)
+        assertEquals(
+            "https://www.youtube.com/watch?v=AbCdEf12345&t=310s",
+            DesktopYouTubeLinks.atPosition("YouTube", canonical, 310_000L)
+        )
+    }
+
+    @Test
     fun undoRestoresPreviousTopicEditAndLegend() {
         val temp = createTempDirectory("rider-notes-undo-").toFile()
         val zip = File(temp, "RiderNotes_Full_Backup.zip")
