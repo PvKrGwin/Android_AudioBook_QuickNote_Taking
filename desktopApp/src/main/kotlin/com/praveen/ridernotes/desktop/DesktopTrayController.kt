@@ -8,6 +8,7 @@ import java.awt.RenderingHints
 import java.awt.SystemTray
 import java.awt.TrayIcon
 import java.awt.image.BufferedImage
+import javax.imageio.ImageIO
 
 class DesktopTrayController(
     private val onOpen: () -> Unit,
@@ -24,7 +25,7 @@ class DesktopTrayController(
             addSeparator()
             add(MenuItem("Exit").apply { addActionListener { onExit() } })
         }
-        val trayIcon = TrayIcon(createImage(), "Rider Notes", menu).apply {
+        val trayIcon = TrayIcon(loadImage(), "Rider Notes", menu).apply {
             isImageAutoSize = true
             addActionListener { onAddMediaNote() }
         }
@@ -42,7 +43,13 @@ class DesktopTrayController(
         icon = null
     }
 
-    private fun createImage(): BufferedImage = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB).also { image ->
+    private fun loadImage(): BufferedImage = runCatching {
+        requireNotNull(javaClass.getResourceAsStream("/rider_notes_logo.png")).use {
+            ImageIO.read(it)
+        }
+    }.getOrElse { createFallbackImage() }
+
+    private fun createFallbackImage(): BufferedImage = BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB).also { image ->
         val graphics = image.createGraphics()
         graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
         graphics.color = Color(0x1F, 0x6D, 0x86)

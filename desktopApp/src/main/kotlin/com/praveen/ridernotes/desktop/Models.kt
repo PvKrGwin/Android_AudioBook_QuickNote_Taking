@@ -2,6 +2,12 @@ package com.praveen.ridernotes.desktop
 
 import java.io.File
 
+data class DesktopTranscriptSegment(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)
+
 data class DesktopNote(
     val id: String,
     val title: String,
@@ -14,6 +20,7 @@ data class DesktopNote(
     val sourceUrl: String?,
     val transcriptionStatus: String,
     val transcript: String?,
+    val transcriptSegments: List<DesktopTranscriptSegment>,
     val audioFile: File?,
     val topicOnly: Boolean,
     val textOnly: Boolean = false,

@@ -54,6 +54,7 @@ class BackupEditingTest {
         ZipFile(zip).use { archive ->
             assertNotNull(archive.getEntry(SyncManifestCodec.FILE_NAME))
             assertNotNull(archive.getEntry("recordings/${published.notes.single().id}.json"))
+            assertNotNull(archive.getEntry("recordings/${published.notes.single().id}.m4a"))
         }
     }
 

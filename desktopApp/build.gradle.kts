@@ -17,6 +17,10 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(libs.json)
+    val javafxVersion = "17.0.14"
+    implementation("org.openjfx:javafx-base:$javafxVersion:win")
+    implementation("org.openjfx:javafx-graphics:$javafxVersion:win")
+    implementation("org.openjfx:javafx-media:$javafxVersion:win")
     testImplementation(kotlin("test"))
 }
 
@@ -34,6 +38,7 @@ compose.desktop {
                 menuGroup = "Rider Notes"
                 shortcut = true
                 perUserInstall = true
+                iconFile.set(project.file("src/main/resources/rider_notes.ico"))
             }
         }
     }

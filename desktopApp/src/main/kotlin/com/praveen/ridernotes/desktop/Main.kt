@@ -1,6 +1,7 @@
 package com.praveen.ridernotes.desktop
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,10 +11,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -24,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -38,6 +42,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -70,11 +77,13 @@ fun main() = application {
         trayAvailable = runCatching { tray.install() }.getOrDefault(false)
         onDispose { tray.close() }
     }
+    val appIcon = painterResource("rider_notes_logo.png")
     Window(
         onCloseRequest = {
             if (trayAvailable) windowVisible = false else exitApplication()
         },
         visible = windowVisible,
+        icon = appIcon,
         title = "Rider Notes PC"
     ) {
         MaterialTheme {
@@ -111,6 +120,8 @@ private fun RiderNotesDesktopApp(
     var pendingOfflineSnapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
     var offlineEditAcknowledged by remember { mutableStateOf(false) }
     var startupEnabled by remember { mutableStateOf(WindowsStartupManager.isEnabled()) }
+    val audioPlayer = remember { DesktopAudioPlayer() }
+    DisposableEffect(audioPlayer) { onDispose { audioPlayer.close() } }
 
     fun loadBackup(zip: File) {
         runCatching { BackupImporter.import(zip) }
@@ -436,6 +447,11 @@ private fun RiderNotesDesktopApp(
                     onClick = { selectedTab = 1 },
                     text = { Text("Topics (${snapshot?.groups?.size ?: 0})") }
                 )
+                Tab(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    text = { Text("Help / User Manual") }
+                )
             }
             Spacer(Modifier.height(10.dp))
 
@@ -445,18 +461,26 @@ private fun RiderNotesDesktopApp(
                     Text("No Rider Notes backup loaded")
                 }
             } else if (selectedTab == 0) {
-                NotesScreen(loaded.notes.filterNot { it.topicOnly })
+                NotesScreen(loaded, ::markChanged, audioPlayer)
+            } else if (selectedTab == 1) {
+                TopicsScreen(loaded, ::markChanged, audioPlayer)
             } else {
-                TopicsScreen(loaded, ::markChanged)
+                UserManualScreen()
             }
         }
     }
 }
 
 @Composable
-private fun NotesScreen(notes: List<DesktopNote>) {
+private fun NotesScreen(
+    snapshot: BackupSnapshot,
+    onChanged: (BackupSnapshot) -> Unit,
+    audioPlayer: DesktopAudioPlayer
+) {
+    val notes = snapshot.notes.filterNot { it.topicOnly }
     var expandedSources by remember(notes) { mutableStateOf(emptySet<String>()) }
     var expandedTitles by remember(notes) { mutableStateOf(emptySet<String>()) }
+    var topicPickerNote by remember { mutableStateOf<DesktopNote?>(null) }
     val grouped = notes.groupBy { it.sourceApp }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -497,24 +521,49 @@ private fun NotesScreen(notes: List<DesktopNote>) {
                     }
                     if (titleKey in expandedTitles) {
                         items(titleNotes.sortedByDescending { it.recordedAtEpochMs }, key = { it.id }) {
-                            note -> NoteCard(note)
+                            note -> NoteCard(note, audioPlayer) { topicPickerNote = note }
                         }
                     }
                 }
             }
         }
     }
+    topicPickerNote?.let { note ->
+        TopicFolderPickerDialog(
+            snapshot = snapshot,
+            note = note,
+            onDismiss = { topicPickerNote = null },
+            onSnapshotChanged = onChanged,
+            onAdded = {
+                onChanged(it)
+                topicPickerNote = null
+            }
+        )
+    }
 }
 
 @Composable
-private fun NoteCard(note: DesktopNote) {
+private fun NoteCard(
+    note: DesktopNote,
+    audioPlayer: DesktopAudioPlayer,
+    onAddToTopics: (() -> Unit)? = null
+) {
     var expanded by remember(note.id) { mutableStateOf(false) }
+    val playback = audioPlayer.state
+    val isCurrent = playback.file?.absolutePath == note.audioFile?.absolutePath
     Card(
         modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(note.title, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(note.title, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                onAddToTopics?.let {
+                    TextButton(onClick = it) {
+                        Text("⋮", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
             Text("${note.sourceApp} · ${formatTime(note.recordedAtEpochMs)}")
             Text(
                 "Origin: ${note.originDeviceName ?: "Legacy / unknown device"}",
@@ -531,18 +580,45 @@ private fun NoteCard(note: DesktopNote) {
                     Text(it)
                 }
                 Text("Transcription: ${note.transcriptionStatus}")
-                note.transcript?.takeIf(String::isNotBlank)?.let {
+                note.transcript?.takeIf(String::isNotBlank)?.let { transcript ->
                     Spacer(Modifier.height(4.dp))
                     Text("Transcript", fontWeight = FontWeight.SemiBold)
-                    Text(it)
+                    PlaybackTranscript(
+                        transcript = transcript,
+                        segments = note.transcriptSegments,
+                        positionMs = if (isCurrent) playback.positionMs else 0L,
+                        followPlayback = isCurrent && playback.playing
+                    )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    note.audioFile?.takeIf(File::exists)?.let { audio ->
-                        Button(onClick = { openFile(audio) }) { Text("Play audio") }
+                    note.audioFile?.takeIf { it.exists() && it.length() > 0L }?.let { audio ->
+                        Button(onClick = { audioPlayer.playOrPause(audio) }) {
+                            Text(
+                                when {
+                                    !isCurrent || !playback.playing -> "Play recording"
+                                    playback.paused -> "Resume"
+                                    else -> "Pause"
+                                }
+                            )
+                        }
+                        if (isCurrent && playback.playing) {
+                            OutlinedButton(onClick = audioPlayer::stop) { Text("Stop") }
+                        }
                     }
                     note.sourceUrl?.let { url ->
                         OutlinedButton(onClick = { openUrl(url) }) { Text("Open source") }
                     }
+                }
+                if (isCurrent && playback.durationMs > 0L) {
+                    Slider(
+                        value = playback.positionMs.coerceAtMost(playback.durationMs).toFloat(),
+                        onValueChange = { audioPlayer.seek(it.toLong()) },
+                        valueRange = 0f..playback.durationMs.toFloat()
+                    )
+                    Text("${formatPosition(playback.positionMs)} / ${formatPosition(playback.durationMs)}")
+                }
+                if (isCurrent) playback.error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
                 }
             } else {
                 Text("Click to expand", fontSize = 12.sp)
@@ -552,9 +628,82 @@ private fun NoteCard(note: DesktopNote) {
 }
 
 @Composable
+private fun TopicFolderPickerDialog(
+    snapshot: BackupSnapshot,
+    note: DesktopNote,
+    onDismiss: () -> Unit,
+    onSnapshotChanged: (BackupSnapshot) -> Unit,
+    onAdded: (BackupSnapshot) -> Unit
+) {
+    var currentGroupId by remember(note.id) { mutableStateOf<String?>(null) }
+    var creatingFolder by remember { mutableStateOf(false) }
+    var newFolderName by remember { mutableStateOf("") }
+    var workingSnapshot by remember(snapshot) { mutableStateOf(snapshot) }
+    val current = workingSnapshot.groups.firstOrNull { it.id == currentGroupId }
+    val children = workingSnapshot.groups.filter { it.parentId == currentGroupId }.sortedBy { it.order }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(current?.let { desktopTopicPath(workingSnapshot, it) } ?: "Add note to Topics") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                current?.let { group ->
+                    Button(
+                        onClick = {
+                            onAdded(BackupEditor.addRecordingPoint(workingSnapshot, group.id, note))
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("Add as the last point in this folder") }
+                }
+                if (creatingFolder) {
+                    OutlinedTextField(
+                        newFolderName,
+                        { newFolderName = it },
+                        label = { Text(if (current == null) "New main folder" else "New subfolder") }
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(enabled = newFolderName.isNotBlank(), onClick = {
+                            val updated = BackupEditor.createGroup(
+                                workingSnapshot,
+                                newFolderName,
+                                current?.id
+                            )
+                            workingSnapshot = updated
+                            currentGroupId = updated.groups.lastOrNull()?.id
+                            onSnapshotChanged(updated)
+                            newFolderName = ""
+                            creatingFolder = false
+                        }) { Text("Create") }
+                        TextButton(onClick = { creatingFolder = false }) { Text("Cancel") }
+                    }
+                } else {
+                    TextButton(onClick = { creatingFolder = true }) {
+                        Text(if (current == null) "+ New main folder" else "+ New subfolder")
+                    }
+                }
+                LazyColumn(Modifier.heightIn(max = 300.dp)) {
+                    items(children, key = { it.id }) { group ->
+                        TextButton(
+                            onClick = { currentGroupId = group.id },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("📁 ${group.name}") }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        dismissButton = {
+            if (current != null) {
+                TextButton(onClick = { currentGroupId = current.parentId }) { Text("← Back") }
+            }
+        }
+    )
+}
+
+@Composable
 private fun TopicsScreen(
     snapshot: BackupSnapshot,
-    onChanged: (BackupSnapshot) -> Unit
+    onChanged: (BackupSnapshot) -> Unit,
+    audioPlayer: DesktopAudioPlayer
 ) {
     val orderedGroups = remember(snapshot) { flattenGroups(snapshot.groups) }
     var selectedGroupId by remember(snapshot.sourceZip.absolutePath) {
@@ -699,10 +848,18 @@ private fun TopicsScreen(
             LazyColumn(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 items(placements, key = { it.id }) { placement ->
                     itemById[placement.itemId]?.let { item ->
+                        val linkedNote = item.target?.let { target ->
+                            snapshot.notes.firstOrNull {
+                                it.audioFile?.name == File(target).name ||
+                                    it.id == File(target).nameWithoutExtension
+                            }
+                        }
                         TopicPointCard(
                             snapshot = snapshot,
                             item = item,
                             placement = placement,
+                            linkedNote = linkedNote,
+                            audioPlayer = audioPlayer,
                             onChanged = onChanged
                         )
                     }
@@ -717,9 +874,13 @@ private fun TopicPointCard(
     snapshot: BackupSnapshot,
     item: DesktopTopicItem,
     placement: DesktopTopicPlacement,
+    linkedNote: DesktopNote?,
+    audioPlayer: DesktopAudioPlayer,
     onChanged: (BackupSnapshot) -> Unit
 ) {
     var expanded by remember(placement.id) { mutableStateOf(false) }
+    val playback = audioPlayer.state
+    val isCurrent = playback.file?.absolutePath == linkedNote?.audioFile?.absolutePath
     Card(
         modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         colors = CardDefaults.cardColors(containerColor = topicColor(placement.color))
@@ -732,10 +893,57 @@ private fun TopicPointCard(
             if (expanded) {
                 Text("Type: ${item.type}", fontSize = 12.sp)
                 item.text?.let { Text(it) }
-                resolveTarget(snapshot, item)?.let { target ->
-                    Button(onClick = { openFile(target) }) {
-                        Text(if (item.type == "RECORDING") "Play recording" else "Open attachment")
+                linkedNote?.let { note ->
+                    Text("Source: ${note.sourceApp}", fontSize = 12.sp)
+                    Text("Title: ${note.title}", fontSize = 12.sp)
+                    note.module?.let { Text("Module: $it", fontSize = 12.sp) }
+                    note.chapter?.let { Text("Chapter / episode: $it", fontSize = 12.sp) }
+                    note.author?.let { Text("Author / channel: $it", fontSize = 12.sp) }
+                    note.playbackPositionMs?.let { Text("Media position: ${formatPosition(it)}", fontSize = 12.sp) }
+                    Text("Recorded: ${formatTime(note.recordedAtEpochMs)}", fontSize = 12.sp)
+                    Text("Origin: ${note.originDeviceName ?: "Legacy / unknown device"}", fontSize = 11.sp)
+                    note.typedNote?.takeIf(String::isNotBlank)?.let {
+                        Text("Typed note", fontWeight = FontWeight.SemiBold)
+                        Text(it)
                     }
+                    Text("Transcription: ${note.transcriptionStatus}", fontSize = 12.sp)
+                    note.transcript?.takeIf(String::isNotBlank)?.let { transcript ->
+                        PlaybackTranscript(
+                            transcript = transcript,
+                            segments = note.transcriptSegments,
+                            positionMs = if (isCurrent) playback.positionMs else 0L,
+                            followPlayback = isCurrent && playback.playing
+                        )
+                    }
+                    note.sourceUrl?.let { url ->
+                        OutlinedButton(onClick = { openUrl(url) }) { Text("Open media source") }
+                    }
+                }
+                resolveTarget(snapshot, item)?.let { target ->
+                    if (item.type == "RECORDING" && linkedNote != null && target.length() > 0L) {
+                        Button(onClick = { audioPlayer.playOrPause(target) }) {
+                            Text(
+                                when {
+                                    !isCurrent || !playback.playing -> "Play recording"
+                                    playback.paused -> "Resume"
+                                    else -> "Pause"
+                                }
+                            )
+                        }
+                        if (isCurrent && playback.playing) {
+                            OutlinedButton(onClick = audioPlayer::stop) { Text("Stop") }
+                        }
+                    } else {
+                        Button(onClick = { openFile(target) }) { Text("Open attachment") }
+                    }
+                }
+                if (isCurrent && playback.durationMs > 0L) {
+                    Slider(
+                        value = playback.positionMs.coerceAtMost(playback.durationMs).toFloat(),
+                        onValueChange = { audioPlayer.seek(it.toLong()) },
+                        valueRange = 0f..playback.durationMs.toFloat()
+                    )
+                    Text("${formatPosition(playback.positionMs)} / ${formatPosition(playback.durationMs)}")
                 }
                 item.target?.takeIf { item.type == "LINK" }?.let { url ->
                     Button(onClick = { openUrl(url) }) { Text("Open link") }
@@ -758,6 +966,157 @@ private fun TopicPointCard(
             }
         }
     }
+}
+
+@Composable
+private fun PlaybackTranscript(
+    transcript: String,
+    segments: List<DesktopTranscriptSegment>,
+    positionMs: Long,
+    followPlayback: Boolean
+) {
+    if (segments.isEmpty()) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = 220.dp)
+                .verticalScroll(rememberScrollState())
+                .background(MaterialTheme.colorScheme.surface)
+                .padding(8.dp)
+        ) {
+            Text(transcript)
+        }
+        return
+    }
+    val activeIndex = segments.indexOfLast { positionMs >= it.startMs }
+        .coerceAtLeast(0)
+        .coerceAtMost(segments.lastIndex)
+    val listState = rememberLazyListState()
+    LaunchedEffect(activeIndex, followPlayback) {
+        if (followPlayback) listState.animateScrollToItem(activeIndex)
+    }
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp)
+            .background(MaterialTheme.colorScheme.surface)
+            .padding(6.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        items(segments.size) { index ->
+            val segment = segments[index]
+            val active = index == activeIndex
+            Text(
+                text = if (active) highlightedSegment(segment, positionMs) else buildAnnotatedString {
+                    append(segment.text)
+                },
+                modifier = Modifier.fillMaxWidth()
+                    .background(if (active) Color(0xFFFFF3C4) else Color.Transparent)
+                    .padding(4.dp)
+            )
+        }
+    }
+}
+
+private fun highlightedSegment(
+    segment: DesktopTranscriptSegment,
+    positionMs: Long
+) = buildAnnotatedString {
+    append(segment.text)
+    val words = Regex("""\S+""").findAll(segment.text).toList()
+    if (words.isEmpty()) return@buildAnnotatedString
+    val duration = (segment.endMs - segment.startMs).coerceAtLeast(1L)
+    val progress = ((positionMs - segment.startMs).toDouble() / duration.toDouble())
+        .coerceIn(0.0, 0.999999)
+    val word = words[(progress * words.size).toInt()]
+    addStyle(
+        SpanStyle(
+            background = Color(0xFFFFD54F),
+            color = Color(0xFF1F1F1F),
+            fontWeight = FontWeight.Bold
+        ),
+        word.range.first,
+        word.range.last + 1
+    )
+}
+
+@Composable
+private fun UserManualScreen() {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        ManualSection(
+            "What Rider Notes PC does",
+            "The Windows companion reads the same full backup used by the Android app. " +
+                "It displays Notes and Topics, plays recordings with synchronized transcripts, " +
+                "adds typed notes at the current Windows media position, and edits Topic folders and points."
+        )
+        ManualSection(
+            "Recommended synchronization — Google Drive for Desktop",
+            "1. Install Google Drive for Desktop and allow the Rider Notes cloud folder to synchronize.\n" +
+                "2. In this app, open RiderNotes_Full_Backup.zip directly from that synchronized folder.\n" +
+                "3. Before an edit, Rider Notes checks the ZIP and RiderNotes_Sync_State.json revision marker.\n" +
+                "4. After editing, press Sync now — recommended. The PC rebuilds the complete ZIP in the same folder.\n" +
+                "5. Wait for Google Drive to finish uploading before using Rider Notes on the phone."
+        )
+        ManualSection(
+            "Manual Chrome download and upload",
+            "This method works, but it is manual. First press Sync now on the phone. Download both " +
+                "RiderNotes_Full_Backup.zip and RiderNotes_Sync_State.json into the same PC folder. " +
+                "Open the ZIP, make changes, and press Sync now in the PC app. Then upload and replace " +
+                "both the rebuilt ZIP and RiderNotes_Sync_State.json in the original Drive folder. " +
+                "Do not use the phone during this transfer, and wait for the upload to finish before reopening it."
+        )
+        ManualSection(
+            "Cloud conflict choices",
+            "Merge both keeps independently created notes, recordings, attachments, groups, and points from both devices. " +
+                "Use cloud discards the unsynchronized PC working copy. Keep PC as base deliberately replaces the cloud base. " +
+                "Merge both is normally the safest option."
+        )
+        ManualSection(
+            "Adding a media note",
+            "Play a supported source on Windows and click Add media note, or use the Rider Notes tray icon. " +
+                "The PC pauses the active media and fills the available title, creator, album/course, chapter, and position. " +
+                "Review the fields, type the note, and save it."
+        )
+        ManualSection(
+            "Notes and Topics",
+            "Notes are grouped by source and title. Expand a note to view metadata, transcript, playback controls, and source link. " +
+                "Use ⋮ to add the recording to an existing Topic folder or create a new folder/subfolder. " +
+                "Topics can contain text, links, files, recordings, stars, colours, and ordered points."
+        )
+        ManualSection(
+            "Startup and system tray",
+            "Startup: On creates a Windows Startup shortcut, so Rider Notes launches automatically after Windows sign-in. " +
+                "Closing the window keeps it available in the notification-area tray. Use the tray menu to open the app, " +
+                "add a media note, or exit completely. Startup does not start Android synchronization by itself; Drive for Desktop must also be running."
+        )
+        ManualSection(
+            "Safe device switching",
+            "Finish and synchronize changes on one device before editing on another. The PC checks every few seconds, " +
+                "checks again when an edit is committed, and checks once more before publishing. " +
+                "These checks can see cloud changes only after Google Drive for Desktop has downloaded them."
+        )
+    }
+}
+
+@Composable
+private fun ManualSection(title: String, body: String) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Text(body)
+        }
+    }
+}
+
+private fun desktopTopicPath(snapshot: BackupSnapshot, group: DesktopTopicGroup): String {
+    val names = mutableListOf(group.name)
+    var parentId = group.parentId
+    while (parentId != null) {
+        val parent = snapshot.groups.firstOrNull { it.id == parentId } ?: break
+        names.add(0, parent.name)
+        parentId = parent.parentId
+    }
+    return names.joinToString(" › ")
 }
 
 private fun flattenGroups(groups: List<DesktopTopicGroup>): List<Pair<DesktopTopicGroup, Int>> {

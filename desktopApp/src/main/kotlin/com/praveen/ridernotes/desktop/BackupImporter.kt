@@ -113,6 +113,19 @@ object BackupImporter {
             transcriptionStatus = json.nullable("transcriptionStatus") ?: "NOT_STARTED",
             transcript = json.nullable("transcript")
                 ?: transcriptText?.substringAfter("\nTRANSCRIPT\n", transcriptText),
+            transcriptSegments = json.optJSONArray("transcriptSegments")?.let { array ->
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val segment = array.optJSONObject(index) ?: continue
+                        val text = segment.optString("text").trim()
+                        val start = segment.optLong("startMs", -1L)
+                        val end = segment.optLong("endMs", -1L)
+                        if (text.isNotBlank() && start >= 0L && end > start) {
+                            add(DesktopTranscriptSegment(start, end, text))
+                        }
+                    }
+                }
+            }.orEmpty(),
             audioFile = filesByName["$base.m4a"]?.firstOrNull(),
             topicOnly = json.optBoolean("topicOnly", false),
             textOnly = json.optBoolean("textOnly", false) ||

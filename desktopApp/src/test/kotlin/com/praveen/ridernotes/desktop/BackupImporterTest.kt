@@ -20,7 +20,7 @@ class BackupImporterTest {
             )
             output.entry(
                 "recordings/note1.json",
-                """{"recordedAtEpochMs":1234,"title":"Cell structure","sourceApp":"Coursera","transcriptionStatus":"COMPLETED","transcript":"A cell has..."}"""
+                """{"recordedAtEpochMs":1234,"title":"Cell structure","sourceApp":"Coursera","transcriptionStatus":"COMPLETED","transcript":"A cell has a membrane","transcriptSegments":[{"startMs":0,"endMs":900,"text":"A cell"},{"startMs":900,"endMs":2100,"text":"has a membrane"}]}"""
             )
             output.entry("recordings/note1.m4a", "audio")
         }
@@ -31,6 +31,8 @@ class BackupImporterTest {
         assertEquals("Biology", result.groups.single().name)
         assertEquals(1, result.notes.size)
         assertEquals("Cell structure", result.notes.single().title)
+        assertEquals(2, result.notes.single().transcriptSegments.size)
+        assertEquals("has a membrane", result.notes.single().transcriptSegments.last().text)
         assertNotNull(result.notes.single().audioFile)
     }
 

@@ -1,41 +1,50 @@
-# Rider Notes PC
+# Rider Notes PC — User Manual
 
-The Windows companion opens `RiderNotes_Full_Backup.zip` from a Google Drive for
-Desktop folder. It provides Notes and editable Topics views, typed notes for the
-currently playing Windows media, Topic-only microphone recordings, and safe full-ZIP
-publishing with a revision, device ID, and timestamp.
+Rider Notes PC is the Windows companion for the Rider Notes Android application. It opens the same full backup, displays media notes and Topic folders, plays recordings with synchronized transcripts, creates typed notes at the active Windows media position, and publishes changes back to the shared backup.
 
-## Run during development
+## Recommended setup: Google Drive for Desktop
 
-Open the root project in Android Studio or IntelliJ IDEA, select the `desktopApp`
-run configuration, and run `com.praveen.ridernotes.desktop.MainKt`.
+1. Configure Rider Notes automatic cloud sync on the phone and press **Sync now**.
+2. Install Google Drive for Desktop on Windows and wait until the Rider Notes cloud folder is synchronized.
+3. Open `RiderNotes_Full_Backup.zip` directly from the synchronized Drive folder in Rider Notes PC.
+4. Make changes in **Notes** or **Topics**.
+5. Press **Sync now — recommended** in Rider Notes PC.
+6. Wait for Google Drive to upload the changed ZIP and `RiderNotes_Sync_State.json` before editing on the phone.
 
-## Build for Windows 10+
+The PC checks the local Drive-synchronized revision periodically, immediately before accepting an edit, and again before publishing. A cloud change can be detected only after Google Drive for Desktop downloads it.
 
-Run the following on a Windows computer with JDK 17:
+## Manual Chrome download/upload
 
-```powershell
-.\gradlew.bat :desktopApp:packageMsi
-```
+Manual transfer works if Google Drive for Desktop is not installed:
 
-The installer is created below `desktopApp\build\compose\binaries\main\msi`.
+1. Stop editing on the PC and phone.
+2. Press **Sync now** on the phone and wait for completion.
+3. Download both `RiderNotes_Full_Backup.zip` and `RiderNotes_Sync_State.json` from the same Drive folder into one PC folder.
+4. Open the downloaded ZIP in Rider Notes PC.
+5. Edit and press **Sync now — recommended**.
+6. Upload and replace both rebuilt files in the original Drive folder.
+7. Wait for the upload to finish before reopening Rider Notes on the phone.
 
-## Connect the cloud backup
+## Conflict choices
 
-1. Install and sign in to Google Drive for Desktop.
-2. In the Android app, tap **Create fresh full backup**, then **Sync now**.
-3. Wait for `RiderNotes_Full_Backup.zip` to appear in the chosen Drive folder on Windows.
-4. In Rider Notes PC, choose that file once with **Open backup ZIP**.
-5. After editing, choose **Sync now — recommended**. Rider Notes safely replaces the
-   complete ZIP in the same folder; Google Drive uploads it.
+- **Merge both (recommended):** keeps independently created notes, files, Topic groups, and points from both copies.
+- **Use cloud:** reloads the cloud-synchronized ZIP and discards unsynchronized PC working changes.
+- **Keep PC as base:** deliberately publishes the PC copy as the new cloud base.
 
-The app refuses to publish if the sibling revision file shows that another device
-changed the backup after it was opened. Reopen the ZIP first in that case.
+## Notes
 
-## Media notes
+Notes are grouped first by media source and then by title. Expand a note to view the source, creator, chapter/module, media timestamp, recording time, origin device, typed note, transcript, audio controls, and source link. Timed transcripts follow playback and pause when playback pauses.
 
-Choose **✎ Add media note** while Windows media is playing. Rider Notes attempts to
-pause the current Windows media session and prefill its title, source, creator, and
-position. All fields remain editable when an app or browser does not publish metadata.
+Use the **⋮** action on a note to browse Topic folders, create a folder or subfolder, and add the note as the last point in the selected folder.
 
-Typed notes have no recording and do not enter the transcription queue.
+## Topics
+
+Topics supports nested folders, ordered text, web links, attachments, and recording-linked points. Expanded linked recordings show the same metadata and transcript available in Notes. Points can be reordered, starred, colour-coded, linked, or removed.
+
+## Media-note shortcut
+
+Play media on Windows and choose **Add media note** in the app or notification-area tray. Rider Notes pauses the current Windows media session, fills available metadata and playback position, and asks for a typed note.
+
+## Startup and tray
+
+**Startup: On** creates a Windows Startup shortcut. Rider Notes then launches after Windows sign-in and remains available in the system tray when the main window is closed. Drive for Desktop must also be running for automatic cloud-folder synchronization.

@@ -47,6 +47,9 @@ object BackupEditor {
             .put("originDeviceName", DesktopDeviceIdentity.name())
             .put("originDeviceType", "WINDOWS_PC")
         File(recordings, "$base.json").writeText(metadata.toString(2))
+        // Text notes have no real audio, but the marker lets Android and PC reuse the
+        // existing recording-linked Topic format without presenting a playback action.
+        File(recordings, "$base.m4a").writeBytes(byteArrayOf())
         File(recordings, "$base.txt").writeText(
             buildString {
                 appendLine("TITLE: ${media.title}")
@@ -129,6 +132,24 @@ object BackupEditor {
             snapshot,
             groupId,
             DesktopTopicItem(itemId, "ATTACHMENT", source.name, null, relative, now())
+        )
+    }
+
+    fun addRecordingPoint(
+        snapshot: BackupSnapshot,
+        groupId: String,
+        note: DesktopNote
+    ): BackupSnapshot {
+        val audioName = note.audioFile?.name ?: "${note.id}.m4a".also { name ->
+            File(snapshot.extractedRoot, "recordings/$name").apply {
+                parentFile?.mkdirs()
+                if (!exists()) writeBytes(byteArrayOf())
+            }
+        }
+        return addPoint(
+            snapshot,
+            groupId,
+            DesktopTopicItem(id(), "RECORDING", note.title, null, audioName, now())
         )
     }
 
