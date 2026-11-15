@@ -1,23 +1,29 @@
 package com.praveen.ridernotes.desktop
 
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 object WindowsStartupManager {
-    private val shortcut: File?
+    private val startupFolder: File?
         get() = System.getenv("APPDATA")?.let {
-            File(it, "Microsoft/Windows/Start Menu/Programs/Startup/RiderNotesPC.lnk")
+            File(it, "Microsoft/Windows/Start Menu/Programs/Startup")
         }
+
+    private val launcher: File?
+        get() = startupFolder?.let { File(it, "RiderNotesPC.cmd") }
+
+    private val legacyShortcut: File?
+        get() = startupFolder?.let { File(it, "RiderNotesPC.lnk") }
 
     fun isSupported(): Boolean = System.getProperty("os.name").contains("Windows", true)
 
-    fun isEnabled(): Boolean = shortcut?.isFile == true
+    fun isEnabled(): Boolean = launcher?.isFile == true || legacyShortcut?.isFile == true
 
     fun setEnabled(enabled: Boolean): Result<Unit> = runCatching {
         require(isSupported()) { "Windows startup is available only on Windows" }
-        val target = shortcut ?: error("Windows Startup folder is unavailable")
+        val target = launcher ?: error("Windows Startup folder is unavailable")
         if (!enabled) {
             target.delete()
+            legacyShortcut?.delete()
             return@runCatching
         }
         val command = ProcessHandle.current().info().command().orElse(null)
@@ -28,18 +34,17 @@ object WindowsStartupManager {
         require(!File(command).nameWithoutExtension.equals("java", true) &&
             !File(command).nameWithoutExtension.equals("javaw", true)
         ) { "Install the Rider Notes MSI before enabling Windows startup" }
-        target.parentFile?.mkdirs()
-        val escapedCommand = command.replace("'", "''")
-        val escapedShortcut = target.absolutePath.replace("'", "''")
-        val workingDirectory = (File(command).parent ?: error("Executable folder is unavailable"))
-            .replace("'", "''")
-        val script = "${'$'}s=(New-Object -COM WScript.Shell).CreateShortcut('$escapedShortcut');" +
-            "${'$'}s.TargetPath='$escapedCommand';${'$'}s.WorkingDirectory='$workingDirectory';${'$'}s.Save()"
-        val process = ProcessBuilder(
-            "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script
-        ).redirectErrorStream(true).start()
-        require(process.waitFor(10, TimeUnit.SECONDS) && process.exitValue() == 0) {
-            "Windows could not create the startup shortcut"
-        }
+        val parent = target.parentFile ?: error("Windows Startup folder is unavailable")
+        require(parent.isDirectory || parent.mkdirs()) { "Windows Startup folder could not be created" }
+        target.writeText(createBatchLauncher(command), Charsets.UTF_8)
+        legacyShortcut?.delete()
+        require(target.isFile && target.length() > 0L) { "Windows could not create the startup launcher" }
+    }
+
+    internal fun createBatchLauncher(command: String): String {
+        // Percent signs have special meaning in batch files. Doubling them preserves
+        // an executable path containing a literal percent sign.
+        val escaped = command.replace("%", "%%")
+        return "@echo off\r\nstart \"\" \"$escaped\"\r\n"
     }
 }
