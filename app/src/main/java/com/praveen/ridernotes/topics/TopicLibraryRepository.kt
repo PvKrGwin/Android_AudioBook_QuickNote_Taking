@@ -73,8 +73,19 @@ object TopicLibraryRepository {
     @Synchronized fun addText(context: Context, groupId: String, title: String, text: String, index: Int? = null) =
         addNewItem(context, groupId, TopicItem(id(), TYPE_TEXT, title.ifBlank { "Text note" }, text, null, now()), index)
 
-    @Synchronized fun addLink(context: Context, groupId: String, title: String, url: String, index: Int? = null) =
-        addNewItem(context, groupId, TopicItem(id(), TYPE_LINK, title.ifBlank { url }, null, url, now()), index)
+    @Synchronized fun addLink(
+        context: Context,
+        groupId: String,
+        title: String,
+        url: String,
+        index: Int? = null,
+        notes: String? = null
+    ) = addNewItem(
+        context,
+        groupId,
+        TopicItem(id(), TYPE_LINK, title.ifBlank { url }, notes?.trim()?.takeIf { it.isNotBlank() }, url, now()),
+        index
+    )
 
     @Synchronized fun addRecording(context: Context, groupId: String, fileName: String, title: String, index: Int? = null) {
         val current = load(context)
@@ -83,7 +94,13 @@ object TopicLibraryRepository {
         else addNewItem(context, groupId, TopicItem(id(), TYPE_RECORDING, title, null, fileName, now()), index)
     }
 
-    @Synchronized fun addAttachment(context: Context, groupId: String, uri: Uri, index: Int? = null): Boolean {
+    @Synchronized fun addAttachment(
+        context: Context,
+        groupId: String,
+        uri: Uri,
+        index: Int? = null,
+        notes: String? = null
+    ): Boolean {
         val resolver = context.contentResolver
         val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
@@ -97,7 +114,12 @@ object TopicLibraryRepository {
                 requireNotNull(input)
                 output.outputStream().use(input::copyTo)
             }
-            addNewItem(context, groupId, TopicItem(itemId, TYPE_ATTACHMENT, displayName, null, relative, now()), index)
+            addNewItem(
+                context,
+                groupId,
+                TopicItem(itemId, TYPE_ATTACHMENT, displayName, notes?.trim()?.takeIf { it.isNotBlank() }, relative, now()),
+                index
+            )
             true
         }.getOrDefault(false)
     }

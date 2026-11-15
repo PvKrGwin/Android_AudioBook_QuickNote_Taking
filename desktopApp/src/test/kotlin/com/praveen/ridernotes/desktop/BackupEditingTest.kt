@@ -296,6 +296,33 @@ class BackupEditingTest {
         assertTrue(!topicPlacementMatches(placements[1], "GREEN", true))
     }
 
+    @Test
+    fun linkAndAttachmentPointsKeepTheirOptionalNotes() {
+        val temp = createTempDirectory("rider-notes-point-notes-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+        val attachment = File(temp, "diagram.png").apply { writeText("image") }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Research", null)
+        val groupId = snapshot.groups.single().id
+        snapshot = BackupEditor.addLinkPoint(
+            snapshot, groupId, "Reference", "https://example.com", "Read section four"
+        )
+        snapshot = BackupEditor.addAttachment(
+            snapshot, groupId, attachment, "Diagram from the experiment"
+        )
+
+        assertEquals("Read section four", snapshot.items.first { it.type == "LINK" }.text)
+        assertEquals("Diagram from the experiment", snapshot.items.first { it.type == "ATTACHMENT" }.text)
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())

@@ -911,6 +911,9 @@ private fun TopicsScreen(
     var pointDialogMode by remember { mutableStateOf<String?>(null) }
     var pointTitle by remember { mutableStateOf("") }
     var pointBody by remember { mutableStateOf("") }
+    var pointNotes by remember { mutableStateOf("") }
+    var pendingAttachment by remember { mutableStateOf<File?>(null) }
+    var showAttachmentNotesDialog by remember { mutableStateOf(false) }
     var showLegendDialog by remember { mutableStateOf(false) }
     var legendColor by remember { mutableStateOf("RED") }
     var legendMeaning by remember { mutableStateOf("") }
@@ -1097,6 +1100,47 @@ private fun TopicsScreen(
         )
     }
 
+    if (showAttachmentNotesDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showAttachmentNotesDialog = false
+                pendingAttachment = null
+                pointNotes = ""
+            },
+            title = { Text("Attachment notes") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(pendingAttachment?.name ?: "Selected attachment", fontWeight = FontWeight.SemiBold)
+                    OutlinedTextField(
+                        pointNotes,
+                        { pointNotes = it },
+                        label = { Text("Notes about this file or image (optional)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val source = pendingAttachment
+                    val groupId = selectedGroupId
+                    if (source != null && groupId != null) {
+                        onChanged(BackupEditor.addAttachment(snapshot, groupId, source, pointNotes))
+                    }
+                    showAttachmentNotesDialog = false
+                    pendingAttachment = null
+                    pointNotes = ""
+                }) { Text("Add attachment") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showAttachmentNotesDialog = false
+                    pendingAttachment = null
+                    pointNotes = ""
+                }) { Text("Cancel") }
+            }
+        )
+    }
+
     if (showLegendDialog) {
         AlertDialog(
             onDismissRequest = { showLegendDialog = false },
@@ -1148,7 +1192,7 @@ private fun TopicsScreen(
 
     pointDialogMode?.let { mode ->
         AlertDialog(
-            onDismissRequest = { pointDialogMode = null },
+            onDismissRequest = { pointDialogMode = null; pointNotes = "" },
             title = { Text(if (mode == "TEXT") "New text point" else "New link point") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1158,6 +1202,13 @@ private fun TopicsScreen(
                         { pointBody = it },
                         label = { Text(if (mode == "TEXT") "Text" else "Web link") }
                     )
+                    if (mode == "LINK") {
+                        OutlinedTextField(
+                            pointNotes,
+                            { pointNotes = it },
+                            label = { Text("Notes about this link (optional)") }
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -1166,15 +1217,16 @@ private fun TopicsScreen(
                     val updated = if (mode == "TEXT") {
                         BackupEditor.addTextPoint(snapshot, groupId, pointTitle, pointBody)
                     } else {
-                        BackupEditor.addLinkPoint(snapshot, groupId, pointTitle, pointBody)
+                        BackupEditor.addLinkPoint(snapshot, groupId, pointTitle, pointBody, pointNotes)
                     }
                     onChanged(updated)
                     pointTitle = ""
                     pointBody = ""
+                    pointNotes = ""
                     pointDialogMode = null
                 }) { Text("Add") }
             },
-            dismissButton = { TextButton(onClick = { pointDialogMode = null }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { pointDialogMode = null; pointNotes = "" }) { Text("Cancel") } }
         )
     }
 
@@ -1254,10 +1306,14 @@ private fun TopicsScreen(
                         groupDialogParent = group.id
                         showGroupDialog = true
                     }) { Text("+ Subfolder") }
-                    TextButton(onClick = { pointDialogMode = "TEXT" }) { Text("+ Text") }
-                    TextButton(onClick = { pointDialogMode = "LINK" }) { Text("+ Link") }
+                    TextButton(onClick = { pointNotes = ""; pointDialogMode = "TEXT" }) { Text("+ Text") }
+                    TextButton(onClick = { pointNotes = ""; pointDialogMode = "LINK" }) { Text("+ Link") }
                     TextButton(onClick = {
-                        chooseAttachment()?.let { onChanged(BackupEditor.addAttachment(snapshot, group.id, it)) }
+                        chooseAttachment()?.let {
+                            pendingAttachment = it
+                            pointNotes = ""
+                            showAttachmentNotesDialog = true
+                        }
                     }) { Text("+ File") }
                     if (recording) {
                         Button(onClick = {

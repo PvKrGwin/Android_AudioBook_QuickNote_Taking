@@ -1192,17 +1192,23 @@ private fun DetectorScreen(
             else setupPreferences.getInt("step", 0).coerceIn(0, 5)
         )
     }
+    val setupGuideIsDemo = remember { mutableStateOf(false) }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
     }
 
     fun advanceSetupGuide() {
-        if (setupGuideStep.intValue >= 5) {
-            setupPreferences.edit().putBoolean("completed", true).remove("step").apply()
+        var next = setupGuideStep.intValue + 1
+        if (setupGuideIsDemo.value && next == 1 && detectorEnabled.value) next = 2
+        if (next > 5) {
+            if (!setupGuideIsDemo.value) {
+                setupPreferences.edit().putBoolean("completed", true).remove("step").apply()
+            }
             setupGuideStep.intValue = -1
+            setupGuideIsDemo.value = false
         } else {
-            setupGuideStep.intValue += 1
-            setupPreferences.edit().putInt("step", setupGuideStep.intValue).apply()
+            setupGuideStep.intValue = next
+            if (!setupGuideIsDemo.value) setupPreferences.edit().putInt("step", next).apply()
         }
     }
 
@@ -1266,7 +1272,11 @@ private fun DetectorScreen(
                         }
                     }
                     Text(
-                        "This guide is shown only after a new installation. Skipping affects only this step; every option remains available on Home.",
+                        if (setupGuideIsDemo.value) {
+                            "Demo mode: configured Accessibility is skipped automatically. No existing setting is reset."
+                        } else {
+                            "This guide is shown only after a new installation. Skipping affects only this step; every option remains available on Home."
+                        },
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
@@ -1552,11 +1562,18 @@ private fun DetectorScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 18.dp, vertical = 14.dp)
         ) {
-            Text(
-                text = "Rider Notes",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Rider Notes",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(onClick = {
+                    setupGuideIsDemo.value = true
+                    setupGuideStep.intValue = 0
+                }) { Text("Show demo") }
+            }
             Text(
                 text = "Bluetooth media controls and voice notes",
                 style = MaterialTheme.typography.titleMedium,
@@ -1582,15 +1599,15 @@ private fun DetectorScreen(
                         Text("Notes (${savedNotes.value.size})")
                     }
                 }
-                if (selectedTab.value == 2) {
-                    Button(onClick = { selectedTab.value = 2 }) { Text("Log") }
-                } else {
-                    OutlinedButton(onClick = { selectedTab.value = 2 }) { Text("Log") }
-                }
                 if (selectedTab.value == 3) {
                     Button(onClick = { selectedTab.value = 3 }) { Text("Topics") }
                 } else {
                     OutlinedButton(onClick = { selectedTab.value = 3 }) { Text("Topics") }
+                }
+                if (selectedTab.value == 2) {
+                    Button(onClick = { selectedTab.value = 2 }) { Text("Log") }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 2 }) { Text("Log") }
                 }
             }
             Spacer(Modifier.height(12.dp))

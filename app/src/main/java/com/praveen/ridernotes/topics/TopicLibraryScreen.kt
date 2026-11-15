@@ -72,6 +72,8 @@ fun TopicLibraryScreen(
     var dialog by remember { mutableStateOf<String?>(null) }
     var inputTitle by remember { mutableStateOf("") }
     var inputBody by remember { mutableStateOf("") }
+    var inputNotes by remember { mutableStateOf("") }
+    var pendingAttachmentNotes by remember { mutableStateOf<String?>(null) }
     var insertionIndex by remember { mutableIntStateOf(-1) }
     var actionPlacement by remember { mutableStateOf<TopicPlacement?>(null) }
     var linkItemId by remember { mutableStateOf<String?>(null) }
@@ -102,13 +104,20 @@ fun TopicLibraryScreen(
     }
 
     fun refresh() { library = TopicLibraryRepository.load(context) }
-    fun resetInput() { inputTitle = ""; inputBody = ""; insertionIndex = -1; dialog = null }
+    fun resetInput() { inputTitle = ""; inputBody = ""; inputNotes = ""; insertionIndex = -1; dialog = null }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val groupId = currentGroupId
         if (uri != null && groupId != null) {
-            TopicLibraryRepository.addAttachment(context, groupId, uri, insertionIndex.takeIf { it >= 0 })
+            TopicLibraryRepository.addAttachment(
+                context,
+                groupId,
+                uri,
+                insertionIndex.takeIf { it >= 0 },
+                pendingAttachmentNotes
+            )
             refresh()
         }
+        pendingAttachmentNotes = null
         insertionIndex = -1
     }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -166,9 +175,26 @@ fun TopicLibraryScreen(
         currentGroupId?.let { TopicLibraryRepository.addText(context, it, inputTitle, inputBody, insertionIndex.takeIf { value -> value >= 0 }) }
         resetInput(); refresh()
     }
-    if (dialog == "link") TwoInputDialog("New web link", "Title", "https://…", inputTitle, inputBody, { inputTitle = it }, { inputBody = it }, ::resetInput) {
-        currentGroupId?.let { TopicLibraryRepository.addLink(context, it, inputTitle, inputBody, insertionIndex.takeIf { value -> value >= 0 }) }
+    if (dialog == "link") ThreeInputDialog(
+        "New web link", "Title", "https://…", "Notes about this link (optional)",
+        inputTitle, inputBody, inputNotes,
+        { inputTitle = it }, { inputBody = it }, { inputNotes = it }, ::resetInput
+    ) {
+        currentGroupId?.let {
+            TopicLibraryRepository.addLink(
+                context, it, inputTitle, inputBody,
+                insertionIndex.takeIf { value -> value >= 0 }, inputNotes
+            )
+        }
         resetInput(); refresh()
+    }
+    if (dialog == "attachmentNote") InputDialog(
+        "Attachment notes", "Notes about this file or image (optional)", inputNotes,
+        { inputNotes = it }, ::resetInput
+    ) {
+        pendingAttachmentNotes = inputNotes
+        dialog = null
+        filePicker.launch(arrayOf("*/*"))
     }
     if (dialog == "recordings") {
         AlertDialog(onDismissRequest = { dialog = null }, title = { Text("Add recording") }, text = {
@@ -251,7 +277,12 @@ fun TopicLibraryScreen(
                 TextButton(onClick = { TopicLibraryRepository.move(context, placement.id, 1); actionPlacement = null; refresh() }) { Text("Move down") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "text"; actionPlacement = null }) { Text("Insert text after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "link"; actionPlacement = null }) { Text("Insert web link after this point") }
-                TextButton(onClick = { insertionIndex = pointIndex + 1; actionPlacement = null; filePicker.launch(arrayOf("*/*")) }) { Text("Insert file after this point") }
+                TextButton(onClick = {
+                    insertionIndex = pointIndex + 1
+                    inputNotes = ""
+                    dialog = "attachmentNote"
+                    actionPlacement = null
+                }) { Text("Insert file after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "recordings"; actionPlacement = null }) { Text("Insert existing recording after this point") }
                 TextButton(onClick = { onStartRecording(placement.groupId, pointIndex + 1); actionPlacement = null }) { Text("Record after this point") }
                 TextButton(onClick = {
@@ -508,7 +539,11 @@ fun TopicLibraryScreen(
                 Column {
                     TextButton(onClick = { addMenuExpanded = false; dialog = "text" }) { Text("Text") }
                     TextButton(onClick = { addMenuExpanded = false; dialog = "link" }) { Text("Web link") }
-                    TextButton(onClick = { addMenuExpanded = false; filePicker.launch(arrayOf("*/*")) }) { Text("File or image") }
+                    TextButton(onClick = {
+                        addMenuExpanded = false
+                        inputNotes = ""
+                        dialog = "attachmentNote"
+                    }) { Text("File or image") }
                     TextButton(onClick = { addMenuExpanded = false; dialog = "recordings" }) { Text("Existing recording") }
                     TextButton(onClick = { addMenuExpanded = false; onStartRecording(currentGroup.id, null) }) { Text("New recording") }
                 }
@@ -556,6 +591,35 @@ private fun topicCardColor(color: String): Color = when (color) {
 
 @Composable private fun TwoInputDialog(title: String, firstLabel: String, secondLabel: String, first: String, second: String, onFirst: (String) -> Unit, onSecond: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =
     AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { Column { OutlinedTextField(first, onFirst, label = { Text(firstLabel) }); Spacer(Modifier.height(8.dp)); OutlinedTextField(second, onSecond, label = { Text(secondLabel) }) } }, confirmButton = { TextButton(onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
+
+@Composable private fun ThreeInputDialog(
+    title: String,
+    firstLabel: String,
+    secondLabel: String,
+    thirdLabel: String,
+    first: String,
+    second: String,
+    third: String,
+    onFirst: (String) -> Unit,
+    onSecond: (String) -> Unit,
+    onThird: (String) -> Unit,
+    onCancel: () -> Unit,
+    onSave: () -> Unit
+) = AlertDialog(
+    onDismissRequest = onCancel,
+    title = { Text(title) },
+    text = {
+        Column {
+            OutlinedTextField(first, onFirst, label = { Text(firstLabel) })
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(second, onSecond, label = { Text(secondLabel) })
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(third, onThird, label = { Text(thirdLabel) })
+        }
+    },
+    confirmButton = { TextButton(onClick = onSave) { Text("Save") } },
+    dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } }
+)
 
 private fun groupPath(library: TopicLibrary, group: TopicGroup): String {
     val names = mutableListOf(group.name)

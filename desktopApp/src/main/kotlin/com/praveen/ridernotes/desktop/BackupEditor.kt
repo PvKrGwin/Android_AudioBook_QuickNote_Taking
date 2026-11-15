@@ -173,20 +173,25 @@ object BackupEditor {
         snapshot: BackupSnapshot,
         groupId: String,
         title: String,
-        url: String
+        url: String,
+        notes: String? = null
     ): BackupSnapshot {
         DesktopUndoStore.capture(snapshot)
         return addPoint(
             snapshot,
             groupId,
-            DesktopTopicItem(id(), "LINK", title.ifBlank { url }, null, url, now())
+            DesktopTopicItem(
+                id(), "LINK", title.ifBlank { url },
+                notes?.trim()?.takeIf { it.isNotBlank() }, url, now()
+            )
         )
     }
 
     fun addAttachment(
         snapshot: BackupSnapshot,
         groupId: String,
-        source: File
+        source: File,
+        notes: String? = null
     ): BackupSnapshot {
         require(source.isFile) { "Attachment was not found" }
         DesktopUndoStore.capture(snapshot)
@@ -198,7 +203,10 @@ object BackupEditor {
         return addPoint(
             snapshot,
             groupId,
-            DesktopTopicItem(itemId, "ATTACHMENT", source.name, null, relative, now())
+            DesktopTopicItem(
+                itemId, "ATTACHMENT", source.name,
+                notes?.trim()?.takeIf { it.isNotBlank() }, relative, now()
+            )
         )
     }
 
