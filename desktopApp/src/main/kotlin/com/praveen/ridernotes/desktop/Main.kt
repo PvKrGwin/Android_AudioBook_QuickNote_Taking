@@ -218,7 +218,9 @@ private fun RiderNotesDesktopApp(
     }
 
     fun requestMediaNote() {
-        val captured = WindowsMediaBridge.captureAndPause()
+        val captured = WindowsMediaBridge.captureAndPause()?.let {
+            DesktopMediaClassifier.resolve(it, snapshot?.notes.orEmpty())
+        }
         mediaDraft = captured
         mediaTitle = captured?.title.orEmpty()
         mediaSource = captured?.sourceApp.orEmpty()
