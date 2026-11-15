@@ -1219,7 +1219,7 @@ private fun parsePositionInput(value: String): Long? {
     if (trimmed.isBlank()) return null
     val parts = trimmed.split(':')
     val totalSeconds = when (parts.size) {
-        1 -> parts.single().toDoubleOrNull()
+        1 -> parts.single().toDoubleOrNull() ?: return null
         2 -> {
             val minutes = parts[0].toLongOrNull() ?: return null
             val seconds = parts[1].toDoubleOrNull() ?: return null
