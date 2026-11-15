@@ -84,6 +84,9 @@ fun TopicLibraryScreen(
     var restoreStatus by remember { mutableStateOf<String?>(null) }
     var addMenuExpanded by remember { mutableStateOf(false) }
     var recordingElapsedSeconds by remember { mutableStateOf(0L) }
+    var filterColor by remember { mutableStateOf<String?>(null) }
+    var filterStarred by remember { mutableStateOf(false) }
+    var showFilterColorDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(isRecording, recordingStartedAtElapsedMs) {
         if (!isRecording || recordingStartedAtElapsedMs == null) {
@@ -117,8 +120,29 @@ fun TopicLibraryScreen(
     }
 
     val currentGroup = library.groups.firstOrNull { it.id == currentGroupId }
-    val childGroups = library.groups.filter { it.parentId == currentGroupId }.sortedBy { it.order }
-    val placements = currentGroupId?.let { id -> library.placements.filter { it.groupId == id }.sortedBy { it.order } }.orEmpty()
+    val matchingPlacements = library.placements.filter { placement ->
+        (filterColor == null || placement.color == filterColor) &&
+            (!filterStarred || placement.important)
+    }
+    val relevantGroupIds = matchingPlacements.mapTo(mutableSetOf()) { it.groupId }.apply {
+        var changed: Boolean
+        do {
+            changed = false
+            library.groups.filter { it.id in this }.mapNotNull { it.parentId }.forEach { parent ->
+                if (add(parent)) changed = true
+            }
+        } while (changed)
+    }
+    val filtering = filterColor != null || filterStarred
+    val childGroups = library.groups
+        .filter { it.parentId == currentGroupId && (!filtering || it.id in relevantGroupIds) }
+        .sortedBy { it.order }
+    val allCurrentPlacements = currentGroupId?.let { id ->
+        library.placements.filter { it.groupId == id }.sortedBy { it.order }
+    }.orEmpty()
+    val placements = currentGroupId?.let { id ->
+        matchingPlacements.filter { it.groupId == id }.sortedBy { it.order }
+    }.orEmpty()
     val itemById = library.items.associateBy { it.id }
 
     legendColor?.let { color ->
@@ -216,7 +240,7 @@ fun TopicLibraryScreen(
         )
     }
     actionPlacement?.let { placement ->
-        val pointIndex = placements.indexOfFirst { it.id == placement.id }
+        val pointIndex = allCurrentPlacements.indexOfFirst { it.id == placement.id }
         AlertDialog(onDismissRequest = { actionPlacement = null }, title = { Text("Point options") }, text = {
             Column {
                 TextButton(onClick = { TopicLibraryRepository.setImportant(context, placement.id, !placement.important); actionPlacement = null; refresh() }) {
@@ -283,6 +307,31 @@ fun TopicLibraryScreen(
         )
     }
 
+    if (showFilterColorDialog) {
+        AlertDialog(
+            onDismissRequest = { showFilterColorDialog = false },
+            title = { Text("Filter Topics by colour") },
+            text = {
+                LazyColumn {
+                    items(topicColors) { color ->
+                        val meaning = if (color == "WHITE") "Nothing special"
+                        else library.colorLegend[color] ?: "Not defined"
+                        TextButton(onClick = {
+                            filterColor = color
+                            currentGroupId = null
+                            showFilterColorDialog = false
+                        }) {
+                            Text("${color.lowercase().replaceFirstChar { it.uppercase() }} — $meaning")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showFilterColorDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (currentGroup != null) OutlinedButton(onClick = { currentGroupId = currentGroup.parentId }) { Text("← Back", fontSize = 11.sp) }
@@ -301,6 +350,29 @@ fun TopicLibraryScreen(
             if (currentGroup != null) {
                 OutlinedButton(onClick = { addMenuExpanded = true }) { Text("＋ Add point", fontSize = 11.sp) }
             }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { showFilterColorDialog = true }) {
+                Text(filterColor?.let { "🎨 ${it.lowercase().replaceFirstChar { value -> value.uppercase() }}" } ?: "🎨 Filter colour", fontSize = 11.sp)
+            }
+            OutlinedButton(onClick = {
+                filterStarred = !filterStarred
+                currentGroupId = null
+            }) { Text(if (filterStarred) "★ Starred only" else "☆ Filter starred", fontSize = 11.sp) }
+            if (filtering) {
+                TextButton(onClick = {
+                    filterColor = null
+                    filterStarred = false
+                    currentGroupId = null
+                }) { Text("Clear filters", fontSize = 11.sp) }
+            }
+        }
+        if (filtering) {
+            Text(
+                "Filtered view: folders show only matching points. Open folders normally; edits apply immediately and non-matching points disappear.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
         }
         if (currentGroup != null && isRecording) {
             Card(
@@ -422,7 +494,9 @@ fun TopicLibraryScreen(
                     }
                 }
             }
-            if (currentGroup == null && childGroups.isEmpty()) item { Text("Create your first topic group, for example Biology.") }
+            if (currentGroup == null && childGroups.isEmpty()) item {
+                Text(if (filtering) "No Topic points match this filter." else "Create your first topic group, for example Biology.")
+            }
         }
     }
 

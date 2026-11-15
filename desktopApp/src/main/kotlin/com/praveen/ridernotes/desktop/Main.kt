@@ -902,9 +902,6 @@ private fun TopicsScreen(
     var expandedGroupIds by remember(snapshot.extractedRoot.absolutePath) {
         mutableStateOf(snapshot.groups.filter { it.parentId == null }.map { it.id }.toSet())
     }
-    val visibleGroups = remember(snapshot.groups, expandedGroupIds) {
-        visibleTopicGroups(snapshot.groups, expandedGroupIds)
-    }
     var selectedGroupId by remember(snapshot.extractedRoot.absolutePath) {
         mutableStateOf(orderedGroups.firstOrNull()?.first?.id)
     }
@@ -924,8 +921,47 @@ private fun TopicsScreen(
     var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var linkPlacementId by remember { mutableStateOf<String?>(null) }
     var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
+    var filterColor by remember { mutableStateOf<String?>(null) }
+    var filterStarred by remember { mutableStateOf(false) }
+    var showFilterColorDialog by remember { mutableStateOf(false) }
     val recorder = remember { DesktopAudioRecorder() }
     var recording by remember { mutableStateOf(false) }
+
+    val matchingPlacements = snapshot.placements.filter { placement ->
+        topicPlacementMatches(placement, filterColor, filterStarred)
+    }
+    val filtering = filterColor != null || filterStarred
+    val relevantGroupIds = topicRelevantGroupIds(snapshot.groups, matchingPlacements)
+    val filteredGroups = if (filtering) snapshot.groups.filter { it.id in relevantGroupIds } else snapshot.groups
+    val filteredVisibleGroups = visibleTopicGroups(filteredGroups, expandedGroupIds)
+    LaunchedEffect(filterColor, filterStarred, relevantGroupIds) {
+        if (filtering) expandedGroupIds = expandedGroupIds + relevantGroupIds
+    }
+
+    if (showFilterColorDialog) {
+        AlertDialog(
+            onDismissRequest = { showFilterColorDialog = false },
+            title = { Text("Filter Topics by colour") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    topicColors.forEach { color ->
+                        val meaning = if (color == "WHITE") "Nothing special"
+                        else snapshot.colorLegend[color] ?: "Not defined"
+                        OutlinedButton(
+                            onClick = {
+                                filterColor = color
+                                showFilterColorDialog = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(containerColor = topicColor(color))
+                        ) { Text("${color.lowercase().replaceFirstChar { it.uppercase() }} — $meaning") }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showFilterColorDialog = false }) { Text("Cancel") } }
+        )
+    }
 
     if (linkPlacementId != null) {
         val sourcePlacement = snapshot.placements.firstOrNull { it.id == linkPlacementId }
@@ -1154,8 +1190,8 @@ private fun TopicsScreen(
                 }
                 Spacer(Modifier.height(4.dp))
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    visibleGroups.forEach { (group, depth) ->
-                        val hasChildren = snapshot.groups.any { it.parentId == group.id }
+                    filteredVisibleGroups.forEach { (group, depth) ->
+                        val hasChildren = filteredGroups.any { it.parentId == group.id }
                         Row(
                             Modifier.fillMaxWidth()
                                 .padding(start = (depth * 12).dp, top = 1.dp, bottom = 1.dp),
@@ -1203,6 +1239,7 @@ private fun TopicsScreen(
         val itemById = snapshot.items.associateBy { it.id }
         val placements = snapshot.placements
             .filter { it.groupId == selectedGroupId }
+            .filter { topicPlacementMatches(it, filterColor, filterStarred) }
             .sortedBy { it.order }
         Column(Modifier.weight(1f).fillMaxHeight()) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1256,6 +1293,19 @@ private fun TopicsScreen(
                         legendMeaning = snapshot.colorLegend["RED"].orEmpty()
                         showLegendDialog = true
                     }) { Text("Edit legend") }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(onClick = { showFilterColorDialog = true }) {
+                    Text(filterColor?.let { "🎨 ${it.lowercase().replaceFirstChar { value -> value.uppercase() }}" } ?: "🎨 Filter by colour")
+                }
+                OutlinedButton(onClick = {
+                    filterStarred = !filterStarred
+                }) { Text(if (filterStarred) "★ Starred only" else "☆ Filter by star") }
+                if (filtering) {
+                    TextButton(onClick = { filterColor = null; filterStarred = false }) { Text("Clear filters") }
+                    Text("Edits update this filtered list immediately.", fontSize = 12.sp)
                 }
             }
             Spacer(Modifier.height(8.dp))
@@ -1490,6 +1540,25 @@ private fun topicGroupPath(groups: List<DesktopTopicGroup>, group: DesktopTopicG
         parentId = parent.parentId
     }
     return names.asReversed().joinToString(" › ")
+}
+
+internal fun topicPlacementMatches(
+    placement: DesktopTopicPlacement,
+    color: String?,
+    starredOnly: Boolean
+): Boolean = (color == null || placement.color == color) && (!starredOnly || placement.important)
+
+internal fun topicRelevantGroupIds(
+    groups: List<DesktopTopicGroup>,
+    placements: List<DesktopTopicPlacement>
+): Set<String> = placements.mapTo(mutableSetOf()) { it.groupId }.apply {
+    var changed: Boolean
+    do {
+        changed = false
+        groups.filter { it.id in this }.mapNotNull { it.parentId }.forEach { parent ->
+            if (add(parent)) changed = true
+        }
+    } while (changed)
 }
 
 @Composable

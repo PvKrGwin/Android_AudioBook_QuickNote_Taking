@@ -272,6 +272,30 @@ class BackupEditingTest {
         assertEquals(1, snapshot.items.size)
     }
 
+    @Test
+    fun topicFiltersCombineColorAndStarAndKeepFolderAncestors() {
+        val groups = listOf(
+            DesktopTopicGroup("science", "Science", null, 0),
+            DesktopTopicGroup("biology", "Biology", "science", 0),
+            DesktopTopicGroup("cells", "Cells", "biology", 0),
+            DesktopTopicGroup("history", "History", null, 1)
+        )
+        val placements = listOf(
+            DesktopTopicPlacement("p1", "cells", "i1", 0, true, "GREEN"),
+            DesktopTopicPlacement("p2", "history", "i2", 0, false, "GREEN"),
+            DesktopTopicPlacement("p3", "history", "i3", 1, true, "RED")
+        )
+
+        val greenStarred = placements.filter { topicPlacementMatches(it, "GREEN", true) }
+        assertEquals(listOf("p1"), greenStarred.map { it.id })
+        assertEquals(
+            setOf("science", "biology", "cells"),
+            topicRelevantGroupIds(groups, greenStarred)
+        )
+        assertTrue(topicPlacementMatches(placements[2], null, true))
+        assertTrue(!topicPlacementMatches(placements[1], "GREEN", true))
+    }
+
     private fun ZipOutputStream.entry(path: String, content: String) {
         putNextEntry(ZipEntry(path))
         write(content.toByteArray())

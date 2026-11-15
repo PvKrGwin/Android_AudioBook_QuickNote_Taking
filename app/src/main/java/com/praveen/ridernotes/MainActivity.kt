@@ -62,6 +62,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.rememberScrollState
@@ -1182,8 +1183,103 @@ private fun DetectorScreen(
     val topicPickerGroupId = remember { mutableStateOf<String?>(null) }
     val topicPickerCreatingFolder = remember { mutableStateOf(false) }
     val topicPickerNewFolderName = remember { mutableStateOf("") }
+    val setupPreferences = remember {
+        context.getSharedPreferences("rider_notes_first_run_guide", Context.MODE_PRIVATE)
+    }
+    val setupGuideStep = remember {
+        mutableIntStateOf(
+            if (setupPreferences.getBoolean("completed", false)) -1
+            else setupPreferences.getInt("step", 0).coerceIn(0, 5)
+        )
+    }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
+    }
+
+    fun advanceSetupGuide() {
+        if (setupGuideStep.intValue >= 5) {
+            setupPreferences.edit().putBoolean("completed", true).remove("step").apply()
+            setupGuideStep.intValue = -1
+        } else {
+            setupGuideStep.intValue += 1
+            setupPreferences.edit().putInt("step", setupGuideStep.intValue).apply()
+        }
+    }
+
+    if (setupGuideStep.intValue >= 0) {
+        val step = setupGuideStep.intValue
+        val titles = listOf(
+            "Add Rider Record to Quick Settings",
+            "Enable the Rider Notes button service",
+            "Choose your cloud-sync folder",
+            "Review gesture actions",
+            "Choose transcription language",
+            "Train your Bluetooth button"
+        )
+        val descriptions = listOf(
+            "Adds the Rider Record tile so you can start or stop a note without Beauty-R1. Confirm the Android dialog, then place the tile in Quick Settings.",
+            "Android Accessibility must allow Rider Notes to receive the configured remote-button events while another media app is open.",
+            "Choose a Google Drive, OneDrive, or other Android document-provider folder, then select Off, Wi-Fi only, or any network on the Home page.",
+            "The defaults are single: play/pause, double: record, triple: rewind, and four presses: forward. You can change every mapping later on Home.",
+            "Choose Auto, English, or Kannada. This controls the language request sent to Scrib for future transcripts.",
+            "Optional: train another Bluetooth remote by pressing its button four times within 15 seconds. Beauty-R1 remains the default until training succeeds."
+        )
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("First-time setup ${step + 1} of 6\n${titles[step]}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(descriptions[step])
+                    when (step) {
+                        0 -> Button(onClick = onAddQuickTile, modifier = Modifier.fillMaxWidth()) {
+                            Text("Add Rider Record tile")
+                        }
+                        1 -> Button(onClick = onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
+                            Text("Open Accessibility settings")
+                        }
+                        2 -> Button(onClick = onChooseCloudFolder, modifier = Modifier.fillMaxWidth()) {
+                            Text("Choose cloud folder")
+                        }
+                        3 -> Text(
+                            "Current mappings are shown in Gesture action settings on Home after this guide.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        4 -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(
+                                ScribTranscriber.LANGUAGE_AUTO to "Auto",
+                                ScribTranscriber.LANGUAGE_ENGLISH to "English",
+                                ScribTranscriber.LANGUAGE_KANNADA to "Kannada"
+                            ).forEach { (mode, label) ->
+                                val selected = transcriptionLanguage.value == mode
+                                if (selected) Button(
+                                    onClick = { onSelectTranscriptionLanguage(mode) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("✓ $label") }
+                                else OutlinedButton(
+                                    onClick = { onSelectTranscriptionLanguage(mode) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text(label) }
+                            }
+                        }
+                        5 -> Button(onClick = onStartRemoteSetup, modifier = Modifier.fillMaxWidth()) {
+                            Text("Start 15-second remote training")
+                        }
+                    }
+                    Text(
+                        "This guide is shown only after a new installation. Skipping affects only this step; every option remains available on Home.",
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = ::advanceSetupGuide) {
+                    Text(if (step == 5) "Finish setup" else "Next")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ::advanceSetupGuide) { Text("Skip this step") }
+            }
+        )
     }
 
     if (showCloudWebLinkDialog.value) {
