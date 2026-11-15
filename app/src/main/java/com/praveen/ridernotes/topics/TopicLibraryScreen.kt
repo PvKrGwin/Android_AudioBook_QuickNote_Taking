@@ -64,7 +64,8 @@ fun TopicLibraryScreen(
     playbackPaused: Boolean,
     onSeekRecording: (Long) -> Unit,
     onStopPlayback: () -> Unit,
-    onRefreshNotes: () -> Unit
+    onRefreshNotes: () -> Unit,
+    onGoToOriginalNote: (SavedVoiceNote) -> Unit
 ) {
     val context = LocalContext.current
     var library by remember { mutableStateOf(TopicLibraryRepository.load(context)) }
@@ -89,6 +90,7 @@ fun TopicLibraryScreen(
     var filterColor by remember { mutableStateOf<String?>(null) }
     var filterStarred by remember { mutableStateOf(false) }
     var showFilterColorDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
 
     LaunchedEffect(isRecording, recordingStartedAtElapsedMs) {
         if (!isRecording || recordingStartedAtElapsedMs == null) {
@@ -129,9 +131,15 @@ fun TopicLibraryScreen(
     }
 
     val currentGroup = library.groups.firstOrNull { it.id == currentGroupId }
+    val itemById = library.items.associateBy { it.id }
     val matchingPlacements = library.placements.filter { placement ->
+        val item = itemById[placement.itemId]
+        val linkedNote = item?.target?.let { target ->
+            savedNotes.firstOrNull { it.audioFile.name == target }
+        }
         (filterColor == null || placement.color == filterColor) &&
-            (!filterStarred || placement.important)
+            (!filterStarred || placement.important) &&
+            (searchQuery.isBlank() || topicSearchMatches(item, linkedNote, searchQuery))
     }
     val relevantGroupIds = matchingPlacements.mapTo(mutableSetOf()) { it.groupId }.apply {
         var changed: Boolean
@@ -142,17 +150,20 @@ fun TopicLibraryScreen(
             }
         } while (changed)
     }
-    val filtering = filterColor != null || filterStarred
+    val filtering = filterColor != null || filterStarred || searchQuery.isNotBlank()
     val childGroups = library.groups
         .filter { it.parentId == currentGroupId && (!filtering || it.id in relevantGroupIds) }
         .sortedBy { it.order }
     val allCurrentPlacements = currentGroupId?.let { id ->
         library.placements.filter { it.groupId == id }.sortedBy { it.order }
     }.orEmpty()
-    val placements = currentGroupId?.let { id ->
+    val placements = if (searchQuery.isNotBlank()) {
+        matchingPlacements.sortedByDescending { placement ->
+            itemById[placement.itemId]?.createdAt ?: 0L
+        }
+    } else currentGroupId?.let { id ->
         matchingPlacements.filter { it.groupId == id }.sortedBy { it.order }
     }.orEmpty()
-    val itemById = library.items.associateBy { it.id }
 
     legendColor?.let { color ->
         InputDialog(
@@ -267,6 +278,10 @@ fun TopicLibraryScreen(
     }
     actionPlacement?.let { placement ->
         val pointIndex = allCurrentPlacements.indexOfFirst { it.id == placement.id }
+        val actionItem = itemById[placement.itemId]
+        val originalNote = actionItem?.target?.let { target ->
+            savedNotes.firstOrNull { it.audioFile.name == target && !it.topicOnly }
+        }
         AlertDialog(onDismissRequest = { actionPlacement = null }, title = { Text("Point options") }, text = {
             Column {
                 TextButton(onClick = { TopicLibraryRepository.setImportant(context, placement.id, !placement.important); actionPlacement = null; refresh() }) {
@@ -290,6 +305,13 @@ fun TopicLibraryScreen(
                     linkItemId = placement.itemId
                     actionPlacement = null
                 }) { Text("Link this point to another group") }
+                TextButton(
+                    enabled = originalNote != null,
+                    onClick = {
+                        originalNote?.let(onGoToOriginalNote)
+                        actionPlacement = null
+                    }
+                ) { Text("Go to original note") }
                 val deletesTopicRecording = TopicLibraryRepository.willDeleteTopicRecording(
                     context,
                     placement.id
@@ -364,6 +386,13 @@ fun TopicLibraryScreen(
     }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            label = { Text("Search Topics (* wildcard)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (currentGroup != null) OutlinedButton(onClick = { currentGroupId = currentGroup.parentId }) { Text("← Back", fontSize = 11.sp) }
             Text(
@@ -448,6 +477,15 @@ fun TopicLibraryScreen(
                     else -> false
                 }
                 val expanded = placement.id in expandedPlacements
+                if (searchQuery.isNotBlank()) {
+                    val group = library.groups.firstOrNull { it.id == placement.groupId }
+                    TextButton(onClick = {
+                        currentGroupId = placement.groupId
+                        searchQuery = ""
+                    }) {
+                        Text("Go to folder: ${group?.let { groupPath(library, it) }.orEmpty()}", fontSize = 11.sp)
+                    }
+                }
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = topicCardColor(placement.color),
@@ -650,4 +688,31 @@ private fun formatTopicTime(valueMs: Long): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "%d:%02d".format(minutes, seconds)
+}
+
+private fun topicSearchMatches(item: TopicItem?, note: SavedVoiceNote?, query: String): Boolean {
+    val searchable = listOfNotNull(
+        item?.title,
+        item?.text,
+        item?.target,
+        note?.sourceApp,
+        note?.title,
+        note?.module,
+        note?.chapter,
+        note?.author,
+        note?.transcript
+    ).joinToString("\n")
+    return wildcardSearchMatches(query, searchable)
+}
+
+private fun wildcardSearchMatches(query: String, text: String): Boolean {
+    val parts = query.trim().split('*').filter(String::isNotBlank)
+    if (parts.isEmpty()) return true
+    var from = 0
+    parts.forEach { part ->
+        val found = text.indexOf(part, startIndex = from, ignoreCase = true)
+        if (found < 0) return false
+        from = found + part.length
+    }
+    return true
 }

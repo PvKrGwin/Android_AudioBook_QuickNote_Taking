@@ -128,6 +128,7 @@ private fun RiderNotesDesktopApp(
     var status by remember { mutableStateOf("Open RiderNotes_Full_Backup.zip to begin.") }
     var selectedTab by remember { mutableStateOf(0) }
     var searchQuery by remember { mutableStateOf("") }
+    var requestedNoteId by remember { mutableStateOf<String?>(null) }
     var showBackupStatus by remember { mutableStateOf(false) }
     var showCloudSyncReminder by remember { mutableStateOf(true) }
     var dirty by remember { mutableStateOf(false) }
@@ -588,9 +589,22 @@ private fun RiderNotesDesktopApp(
                     Text("No Rider Notes backup loaded")
                 }
             } else if (selectedTab == 0) {
-                NotesScreen(loaded, ::markChanged, audioPlayer, searchQuery) { searchQuery = it }
+                NotesScreen(
+                    loaded, ::markChanged, audioPlayer, searchQuery,
+                    onSearchQueryChange = { searchQuery = it },
+                    requestedNoteId = requestedNoteId,
+                    onRequestedNoteShown = { requestedNoteId = null }
+                )
             } else if (selectedTab == 1) {
-                TopicsScreen(loaded, ::markChanged, audioPlayer, searchQuery) { searchQuery = it }
+                TopicsScreen(
+                    loaded, ::markChanged, audioPlayer, searchQuery,
+                    onSearchQueryChange = { searchQuery = it },
+                    onGoToOriginalNote = { note ->
+                        searchQuery = ""
+                        requestedNoteId = note.id
+                        selectedTab = 0
+                    }
+                )
             } else {
                 UserManualScreen()
             }
@@ -604,7 +618,9 @@ private fun NotesScreen(
     onChanged: (BackupSnapshot) -> Unit,
     audioPlayer: DesktopAudioPlayer,
     searchQuery: String,
-    onSearchQueryChange: (String) -> Unit
+    onSearchQueryChange: (String) -> Unit,
+    requestedNoteId: String?,
+    onRequestedNoteShown: () -> Unit
 ) {
     val notes = snapshot.notes.filterNot { it.topicOnly }
     val grouped = notes.groupBy { it.sourceApp }.toSortedMap(String.CASE_INSENSITIVE_ORDER)
@@ -624,6 +640,15 @@ private fun NotesScreen(
     val searchMatches = if (searching) notes.filter { noteMatchesSearch(it, searchQuery) } else emptyList()
     val folderNotes = grouped[selectedSource].orEmpty().filter { it.title == selectedTitle }
     val visibleNotes = (if (searching) searchMatches else folderNotes).sortedByDescending { it.recordedAtEpochMs }
+
+    LaunchedEffect(requestedNoteId, notes) {
+        val target = notes.firstOrNull { it.id == requestedNoteId } ?: return@LaunchedEffect
+        selectedSource = target.sourceApp
+        selectedTitle = target.title
+        expandedSources = expandedSources + target.sourceApp
+        onSearchQueryChange("")
+        onRequestedNoteShown()
+    }
 
     fun requestDelete(ids: Set<String>, label: String) {
         if (ids.isEmpty()) return
@@ -996,7 +1021,8 @@ private fun TopicsScreen(
     onChanged: (BackupSnapshot) -> Unit,
     audioPlayer: DesktopAudioPlayer,
     searchQuery: String,
-    onSearchQueryChange: (String) -> Unit
+    onSearchQueryChange: (String) -> Unit,
+    onGoToOriginalNote: (DesktopNote) -> Unit
 ) {
     val orderedGroups = remember(snapshot) { flattenGroups(snapshot.groups) }
     var expandedGroupIds by remember(snapshot.extractedRoot.absolutePath) {
@@ -1580,6 +1606,9 @@ private fun TopicsScreen(
                                         linkPlacementId = placement.id
                                         linkPickerGroupId = null
                                     },
+                                    onGoToOriginalNote = linkedNote?.let { note ->
+                                        { onGoToOriginalNote(note) }
+                                    },
                                     onRequestDelete = { pendingPointDeleteIds = setOf(placement.id) }
                                 )
                             }
@@ -1603,6 +1632,7 @@ private fun TopicPointCard(
     audioPlayer: DesktopAudioPlayer,
     onChanged: (BackupSnapshot) -> Unit,
     onRequestLink: () -> Unit,
+    onGoToOriginalNote: (() -> Unit)?,
     onRequestDelete: () -> Unit
 ) {
     var expanded by remember(placement.id) { mutableStateOf(false) }
@@ -1757,6 +1787,10 @@ private fun TopicPointCard(
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, 1)) }) { Text("↓") }
                     TextButton(onClick = { showColorDialog = true }) { Text("Color") }
                     TextButton(onClick = onRequestLink) { Text("Link to another folder") }
+                    TextButton(
+                        enabled = onGoToOriginalNote != null,
+                        onClick = { onGoToOriginalNote?.invoke() }
+                    ) { Text("Go to original note") }
                     TextButton(onClick = onRequestDelete) { Text("Remove") }
                 }
             } else {

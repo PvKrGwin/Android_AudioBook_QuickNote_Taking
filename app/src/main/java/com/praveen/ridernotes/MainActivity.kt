@@ -1178,6 +1178,7 @@ private fun DetectorScreen(
     val cloudWebLinkText = remember { mutableStateOf("") }
     val cloudWebLinkError = remember { mutableStateOf(false) }
     val addToTopicNote = remember { mutableStateOf<SavedVoiceNote?>(null) }
+    val notesSearchQuery = remember { mutableStateOf("") }
     val context = LocalContext.current
     val topicPickerLibrary = remember { mutableStateOf(TopicLibraryRepository.load(context)) }
     val topicPickerGroupId = remember { mutableStateOf<String?>(null) }
@@ -1941,9 +1942,27 @@ private fun DetectorScreen(
                 }
 
                 1 -> {
+                    val notesSearchActive = notesSearchQuery.value.isNotBlank()
                     val notesBySource = savedNotes.value
+                        .filter { !notesSearchActive || savedNoteSearchMatches(it, notesSearchQuery.value) }
                         .groupBy { it.sourceApp }
                         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+
+                    OutlinedTextField(
+                        value = notesSearchQuery.value,
+                        onValueChange = { notesSearchQuery.value = it },
+                        label = { Text("Search Notes (* wildcard)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (notesSearchActive) {
+                        Text(
+                            "${notesBySource.values.sumOf { it.size }} matching note(s). Search is not case-sensitive.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
 
                     if (sharedLinkStatus.value.isNotBlank()) {
                         Card(
@@ -2062,7 +2081,7 @@ private fun DetectorScreen(
                                     }
                                 }
 
-                                if (source in expandedSources.value) {
+                                if (source in expandedSources.value || notesSearchActive) {
                                     item(key = "select-source-$source") {
                                         val paths = sourceNotes.mapTo(mutableSetOf()) { it.audioFile.absolutePath }
                                         val allSelected = paths.all { it in selectedNotePaths.value }
@@ -2129,7 +2148,7 @@ private fun DetectorScreen(
                                                     }) { Text(if (allTitleSelected) "Clear this title selection" else "Select all in this title") }
                                                 }
                                             }
-                                            if (titleKey in expandedTitles.value) {
+                                            if (titleKey in expandedTitles.value || notesSearchActive) {
                                                 items(
                                                     items = titleNotes.sortedByDescending {
                                                         it.recordedAtEpochMs
@@ -2166,7 +2185,16 @@ private fun DetectorScreen(
                         playbackPaused = playbackPaused.value,
                         onSeekRecording = onSeekNote,
                         onStopPlayback = onStopNote,
-                        onRefreshNotes = onRefreshNotes
+                        onRefreshNotes = onRefreshNotes,
+                        onGoToOriginalNote = { note ->
+                            notesSearchQuery.value = ""
+                            expandedSources.value = expandedSources.value + note.sourceApp
+                            if (supportsTitleGrouping(note.sourceApp)) {
+                                val groupKey = titleGroupKey(note.sourceApp, note)
+                                expandedTitles.value = expandedTitles.value + "${note.sourceApp}::$groupKey"
+                            }
+                            selectedTab.value = 1
+                        }
                     )
                 }
 
@@ -2585,6 +2613,29 @@ private fun EmptyInstructions() {
             Text("4. Clear, repeat for each physical button, then copy the results.")
         }
     }
+}
+
+private fun savedNoteSearchMatches(note: SavedVoiceNote, query: String): Boolean {
+    val searchable = listOfNotNull(
+        note.sourceApp,
+        note.title,
+        note.module,
+        note.chapter,
+        note.author,
+        note.transcript,
+        note.typedNote,
+        note.sourceUrl,
+        note.audioFile.name
+    ).joinToString("\n")
+    val parts = query.trim().split('*').filter(String::isNotBlank)
+    if (parts.isEmpty()) return true
+    var from = 0
+    parts.forEach { part ->
+        val found = searchable.indexOf(part, startIndex = from, ignoreCase = true)
+        if (found < 0) return false
+        from = found + part.length
+    }
+    return true
 }
 
 @Composable
