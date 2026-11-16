@@ -54,6 +54,9 @@ import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -533,7 +536,15 @@ private fun RiderNotesDesktopApp(
                     TextButton(onClick = { showBackupStatus = !showBackupStatus }) {
                         Text(if (showBackupStatus) "▾ Backup & cloud" else "▸ Backup & cloud")
                     }
-                    Text(snapshot?.sourceZip?.name ?: "No backup selected", modifier = Modifier.weight(1f), fontSize = 12.sp)
+                    Text(
+                        snapshot?.let { loaded ->
+                            loaded.syncManifest?.let { revision ->
+                                "${loaded.sourceZip.name} · ${revision.deviceName} · ${formatTime(revision.modifiedAtEpochMs)}"
+                            } ?: loaded.sourceZip.name
+                        } ?: "No backup selected",
+                        modifier = Modifier.weight(1f),
+                        fontSize = 12.sp
+                    )
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
@@ -1706,6 +1717,22 @@ private fun TopicPointCard(
 ) {
     var expanded by remember(placement.id) { mutableStateOf(false) }
     var showColorDialog by remember(placement.id) { mutableStateOf(false) }
+    var showEditDialog by remember(placement.id) { mutableStateOf(false) }
+    var editTitle by remember(placement.id, item.title) { mutableStateOf(item.title) }
+    var editUrl by remember(placement.id, item.target) {
+        mutableStateOf(item.target.takeIf { item.type == "LINK" }.orEmpty())
+    }
+    val initialBody = if (item.type == "TEXT") item.text.orEmpty()
+        else item.additionalNotes ?: item.text.orEmpty()
+    var editBody by remember(placement.id, item.richText, initialBody) {
+        mutableStateOf(TopicRichText.decode(initialBody, item.richText))
+    }
+    var editBold by remember(placement.id) { mutableStateOf(false) }
+    var editItalic by remember(placement.id) { mutableStateOf(false) }
+    var editUnderline by remember(placement.id) { mutableStateOf(false) }
+    var editBullets by remember(placement.id) { mutableStateOf(false) }
+    var editFont by remember(placement.id) { mutableStateOf<FontFamily?>(null) }
+    var editTextColor by remember(placement.id) { mutableStateOf(Color.Unspecified) }
     val playback = audioPlayer.state
     val isCurrent = playback.file?.absolutePath == linkedNote?.audioFile?.absolutePath
     val linkedBrowseUrl = linkedNote?.let(::noteBrowseUrl)
@@ -1739,6 +1766,116 @@ private fun TopicPointCard(
             }
         )
     }
+    if (showEditDialog) {
+        AlertDialog(
+            onDismissRequest = { showEditDialog = false },
+            title = { Text("Edit Topic point") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = editTitle,
+                        onValueChange = { editTitle = it },
+                        label = { Text("Heading") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (item.type == "LINK") {
+                        OutlinedTextField(editUrl, { editUrl = it }, label = { Text("Link URL") }, modifier = Modifier.fillMaxWidth())
+                    }
+                    Text("Select text, then apply formatting:", fontSize = 12.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = {
+                            editBold = !editBold
+                            if (editBold) editBody = TopicRichText.apply(editBody, SpanStyle(fontWeight = FontWeight.Bold))
+                        }) { Text(if (editBold) "✓ B" else "B", fontWeight = FontWeight.Bold) }
+                        TextButton(onClick = {
+                            editItalic = !editItalic
+                            if (editItalic) editBody = TopicRichText.apply(editBody, SpanStyle(fontStyle = FontStyle.Italic))
+                        }) { Text(if (editItalic) "✓ I" else "I", fontStyle = FontStyle.Italic) }
+                        TextButton(onClick = {
+                            editUnderline = !editUnderline
+                            if (editUnderline) editBody = TopicRichText.apply(editBody, SpanStyle(textDecoration = TextDecoration.Underline))
+                        }) { Text(if (editUnderline) "✓ U" else "U", textDecoration = TextDecoration.Underline) }
+                        TextButton(onClick = {
+                            editBullets = !editBullets
+                            if (editBullets) editBody = TopicRichText.bullets(editBody)
+                        }) { Text(if (editBullets) "✓ • List" else "• List") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { editFont = FontFamily.Serif; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Serif) "✓ Serif" else "Serif") }
+                        TextButton(onClick = { editFont = FontFamily.Monospace; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Monospace) "✓ Mono" else "Mono") }
+                        TextButton(onClick = { editFont = FontFamily.Cursive; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Cursive) "✓ Script" else "Script") }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        listOf(
+                            "Black" to Color.Black,
+                            "Red" to Color(0xFFC62828),
+                            "Blue" to Color(0xFF1565C0),
+                            "Green" to Color(0xFF2E7D32),
+                            "Purple" to Color(0xFF6A1B9A)
+                        ).forEach { (name, color) ->
+                            TextButton(onClick = {
+                                editTextColor = color
+                                editBody = TopicRichText.apply(editBody, SpanStyle(color = color))
+                            }) {
+                                Text(if (editTextColor == color) "✓ $name" else name, color = color, fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = editBody,
+                        onValueChange = { proposed ->
+                            var next = TopicRichText.continueBullets(editBody, proposed, editBullets)
+                            if (editBold || editItalic || editUnderline || editFont != null || editTextColor != Color.Unspecified) {
+                                next = TopicRichText.styleInserted(
+                                    editBody,
+                                    next,
+                                    SpanStyle(
+                                        fontWeight = FontWeight.Bold.takeIf { editBold },
+                                        fontStyle = FontStyle.Italic.takeIf { editItalic },
+                                        textDecoration = TextDecoration.Underline.takeIf { editUnderline },
+                                        fontFamily = editFont,
+                                        color = editTextColor
+                                    )
+                                )
+                            }
+                            editBody = next
+                        },
+                        label = { Text(if (item.type == "TEXT") "Text" else "Additional text") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("The original media transcript remains unchanged.", fontSize = 11.sp)
+                    if (item.type == "ATTACHMENT") {
+                        OutlinedButton(onClick = {
+                            chooseAttachment()?.let { replacement ->
+                                onChanged(BackupEditor.replaceAttachment(snapshot, item.id, replacement))
+                            }
+                        }) { Text("Replace attachment") }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onChanged(
+                        BackupEditor.updateEditablePoint(
+                            snapshot = snapshot,
+                            itemId = item.id,
+                            title = editTitle,
+                            body = editBody.text,
+                            linkUrl = editUrl,
+                            richText = TopicRichText.encode(editBody)
+                        )
+                    )
+                    showEditDialog = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
     Card(
         modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
         colors = CardDefaults.cardColors(containerColor = topicColor(placement.color))
@@ -1768,9 +1905,10 @@ private fun TopicPointCard(
                 )
             }
             if (expanded) {
+                val pointBody = if (item.type == "TEXT") item.text else item.additionalNotes ?: item.text
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     OutlinedButton(onClick = { copyText(item.title) }) { Text("Copy title") }
-                    item.text?.takeIf(String::isNotBlank)?.let { pointText ->
+                    pointBody?.takeIf(String::isNotBlank)?.let { pointText ->
                         OutlinedButton(onClick = { copyText(pointText) }) { Text("Copy text") }
                     }
                     linkedNote?.transcript?.takeIf(String::isNotBlank)?.let { transcript ->
@@ -1788,7 +1926,10 @@ private fun TopicPointCard(
                 SelectionContainer {
                     Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text("Type: ${item.type}", fontSize = 12.sp)
-                        item.text?.let { Text(it) }
+                        pointBody?.takeIf(String::isNotBlank)?.let { body ->
+                            if (item.type != "TEXT") Text("Additional notes", fontWeight = FontWeight.SemiBold)
+                            Text(TopicRichText.decode(body, item.richText).annotatedString)
+                        }
                     }
                 }
                 linkedNote?.let { note ->
@@ -1866,6 +2007,18 @@ private fun TopicPointCard(
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, -1)) }) { Text("↑") }
                     TextButton(onClick = { onChanged(BackupEditor.movePlacement(snapshot, placement.id, 1)) }) { Text("↓") }
                     TextButton(onClick = { showColorDialog = true }) { Text("Color") }
+                    TextButton(onClick = {
+                        editTitle = item.title
+                        editUrl = item.target.takeIf { item.type == "LINK" }.orEmpty()
+                        val body = if (item.type == "TEXT") item.text.orEmpty()
+                        else item.additionalNotes ?: item.text.orEmpty()
+                        editBody = TopicRichText.decode(body, item.richText)
+                        editBold = false; editItalic = false; editUnderline = false
+                        editBullets = false; editFont = null; editTextColor = Color.Unspecified
+                        showEditDialog = true
+                    }) {
+                        Text("Edit point")
+                    }
                     TextButton(onClick = onRequestLink) { Text("Link to another folder") }
                     TextButton(
                         enabled = onGoToOriginalNote != null,
@@ -1931,6 +2084,7 @@ private fun topicPointMatchesSearch(
     listOfNotNull(
         item.title,
         item.text,
+        item.additionalNotes,
         item.target?.let { File(it).name },
         linkedNote?.sourceApp,
         linkedNote?.title,
