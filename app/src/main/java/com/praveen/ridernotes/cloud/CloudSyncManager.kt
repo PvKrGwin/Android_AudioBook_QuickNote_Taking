@@ -238,7 +238,7 @@ object CloudSyncManager {
             if (isNetworkReady(context, selectedMode)) SyncState.RECOMMENDED
             else SyncState.OFFLINE_PENDING,
             if (isNetworkReady(context, selectedMode)) {
-                "Local changes are ready — Sync now is recommended"
+                "Local changes are ready — upload is recommended"
             } else {
                 "Local changes are waiting for internet — sync will resume when online"
             }
