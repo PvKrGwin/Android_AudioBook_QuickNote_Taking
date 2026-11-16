@@ -56,6 +56,83 @@ internal object TopicRichText {
         return value.copy(annotatedString = builder.toAnnotatedString())
     }
 
+    fun selectionIsBold(value: TextFieldValue): Boolean = selectionHas(value) {
+        it.fontWeight == FontWeight.Bold
+    }
+
+    fun selectionIsItalic(value: TextFieldValue): Boolean = selectionHas(value) {
+        it.fontStyle == FontStyle.Italic
+    }
+
+    fun selectionIsUnderlined(value: TextFieldValue): Boolean = selectionHas(value) {
+        it.textDecoration?.contains(TextDecoration.Underline) == true
+    }
+
+    fun setBold(value: TextFieldValue, enabled: Boolean): TextFieldValue =
+        rewriteSelection(value) { it.copy(fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal) }
+
+    fun setItalic(value: TextFieldValue, enabled: Boolean): TextFieldValue =
+        rewriteSelection(value) { it.copy(fontStyle = if (enabled) FontStyle.Italic else FontStyle.Normal) }
+
+    fun setUnderline(value: TextFieldValue, enabled: Boolean): TextFieldValue =
+        rewriteSelection(value) {
+            it.copy(textDecoration = if (enabled) TextDecoration.Underline else TextDecoration.None)
+        }
+
+    /**
+     * Compose may return a new TextFieldValue containing only plain text after an edit.
+     * Rebuild it from the previous annotated value so existing formatting survives, then
+     * apply the currently selected typing style only to the newly inserted characters.
+     */
+    fun reconcileEdit(
+        previous: TextFieldValue,
+        proposed: TextFieldValue,
+        typingStyle: SpanStyle?
+    ): TextFieldValue {
+        if (previous.text == proposed.text) {
+            return previous.copy(selection = proposed.selection, composition = proposed.composition)
+        }
+
+        val selectionStart = previous.selection.min
+        val selectionEnd = previous.selection.max
+        val insertedLength = proposed.text.length - (previous.text.length - (selectionEnd - selectionStart))
+        val selectionBased = insertedLength >= 0 &&
+            proposed.text.take(selectionStart) == previous.text.take(selectionStart) &&
+            proposed.text.drop(selectionStart + insertedLength) == previous.text.drop(selectionEnd)
+
+        val start: Int
+        val oldEnd: Int
+        val newEnd: Int
+        if (selectionBased) {
+            start = selectionStart
+            oldEnd = selectionEnd
+            newEnd = selectionStart + insertedLength
+        } else {
+            var prefix = 0
+            val shared = minOf(previous.text.length, proposed.text.length)
+            while (prefix < shared && previous.text[prefix] == proposed.text[prefix]) prefix++
+            var suffix = 0
+            while (
+                suffix < previous.text.length - prefix &&
+                suffix < proposed.text.length - prefix &&
+                previous.text[previous.text.lastIndex - suffix] == proposed.text[proposed.text.lastIndex - suffix]
+            ) suffix++
+            start = prefix
+            oldEnd = previous.text.length - suffix
+            newEnd = proposed.text.length - suffix
+        }
+
+        val builder = AnnotatedString.Builder()
+        builder.append(previous.annotatedString.subSequence(0, start))
+        val insertedStart = builder.length
+        builder.append(proposed.text.substring(start, newEnd))
+        if (typingStyle != null && builder.length > insertedStart) {
+            builder.addStyle(typingStyle, insertedStart, builder.length)
+        }
+        builder.append(previous.annotatedString.subSequence(oldEnd, previous.text.length))
+        return proposed.copy(annotatedString = builder.toAnnotatedString())
+    }
+
     fun bullets(value: TextFieldValue): TextFieldValue {
         val start = value.selection.min
         val end = value.selection.max
@@ -83,15 +160,43 @@ internal object TopicRichText {
         return replaceRich(next, cursor, cursor, "• ", cursor + 2, cursor + 2)
     }
 
-    fun styleInserted(previous: TextFieldValue, next: TextFieldValue, style: SpanStyle): TextFieldValue {
-        val replacedLength = previous.selection.max - previous.selection.min
-        val insertedLength = next.text.length - (previous.text.length - replacedLength)
-        if (insertedLength <= 0) return next
-        val start = previous.selection.min.coerceIn(0, next.text.length)
-        val end = (start + insertedLength).coerceIn(start, next.text.length)
-        val builder = AnnotatedString.Builder().apply { append(next.annotatedString) }
-        builder.addStyle(style, start, end)
-        return next.copy(annotatedString = builder.toAnnotatedString())
+    private fun selectionHas(value: TextFieldValue, predicate: (SpanStyle) -> Boolean): Boolean {
+        val start = value.selection.min
+        val end = value.selection.max
+        if (start == end) return false
+        return (start until end).all { index -> predicate(effectiveStyleAt(value, index)) }
+    }
+
+    private fun rewriteSelection(
+        value: TextFieldValue,
+        transform: (SpanStyle) -> SpanStyle
+    ): TextFieldValue {
+        val start = value.selection.min
+        val end = value.selection.max
+        if (start == end) return value
+        val boundaries = buildSet {
+            add(0); add(value.text.length); add(start); add(end)
+            value.annotatedString.spanStyles.forEach { range ->
+                add(range.start.coerceIn(0, value.text.length))
+                add(range.end.coerceIn(0, value.text.length))
+            }
+        }.sorted()
+        val builder = AnnotatedString.Builder(value.text)
+        boundaries.zipWithNext().forEach { (segmentStart, segmentEnd) ->
+            if (segmentStart == segmentEnd) return@forEach
+            var style = effectiveStyleAt(value, segmentStart)
+            if (segmentStart >= start && segmentEnd <= end) style = transform(style)
+            builder.addStyle(style, segmentStart, segmentEnd)
+        }
+        return value.copy(annotatedString = builder.toAnnotatedString())
+    }
+
+    private fun effectiveStyleAt(value: TextFieldValue, index: Int): SpanStyle {
+        var style = SpanStyle()
+        value.annotatedString.spanStyles.forEach { range ->
+            if (index >= range.start && index < range.end) style = style.merge(range.item)
+        }
+        return style
     }
 
     private fun replaceRich(
