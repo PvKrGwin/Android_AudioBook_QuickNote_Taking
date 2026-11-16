@@ -41,6 +41,7 @@ internal object TopicRichText {
                 .put("bold", style.fontWeight == FontWeight.Bold)
                 .put("italic", style.fontStyle == FontStyle.Italic)
                 .put("underline", style.textDecoration?.contains(TextDecoration.Underline) == true)
+                .put("strike", style.textDecoration?.contains(TextDecoration.LineThrough) == true)
                 .put("color", style.color.takeUnless { it == Color.Unspecified }?.value?.toString() ?: JSONObject.NULL)
                 .put("font", fontName(style.fontFamily)))
         }
@@ -68,6 +69,10 @@ internal object TopicRichText {
         it.textDecoration?.contains(TextDecoration.Underline) == true
     }
 
+    fun selectionIsStruck(value: TextFieldValue): Boolean = selectionHas(value) {
+        it.textDecoration?.contains(TextDecoration.LineThrough) == true
+    }
+
     fun setBold(value: TextFieldValue, enabled: Boolean): TextFieldValue =
         rewriteSelection(value) { it.copy(fontWeight = if (enabled) FontWeight.Bold else FontWeight.Normal) }
 
@@ -75,9 +80,10 @@ internal object TopicRichText {
         rewriteSelection(value) { it.copy(fontStyle = if (enabled) FontStyle.Italic else FontStyle.Normal) }
 
     fun setUnderline(value: TextFieldValue, enabled: Boolean): TextFieldValue =
-        rewriteSelection(value) {
-            it.copy(textDecoration = if (enabled) TextDecoration.Underline else TextDecoration.None)
-        }
+        rewriteSelection(value) { it.copy(textDecoration = toggleDecoration(it.textDecoration, TextDecoration.Underline, enabled)) }
+
+    fun setStrike(value: TextFieldValue, enabled: Boolean): TextFieldValue =
+        rewriteSelection(value) { it.copy(textDecoration = toggleDecoration(it.textDecoration, TextDecoration.LineThrough, enabled)) }
 
     /**
      * Compose may return a new TextFieldValue containing only plain text after an edit.
@@ -221,7 +227,10 @@ internal object TopicRichText {
     private fun styleFrom(json: JSONObject) = SpanStyle(
         fontWeight = FontWeight.Bold.takeIf { json.optBoolean("bold") },
         fontStyle = FontStyle.Italic.takeIf { json.optBoolean("italic") },
-        textDecoration = TextDecoration.Underline.takeIf { json.optBoolean("underline") },
+        textDecoration = decoration(
+            underline = json.optBoolean("underline"),
+            strike = json.optBoolean("strike")
+        ),
         color = json.optString("color").takeIf(String::isNotBlank)?.let {
             runCatching { Color(it.toULong()) }.getOrDefault(Color.Unspecified)
         } ?: Color.Unspecified,
@@ -232,6 +241,25 @@ internal object TopicRichText {
             else -> null
         }
     )
+
+    private fun decoration(underline: Boolean, strike: Boolean): TextDecoration? {
+        val values = mutableListOf<TextDecoration>()
+        if (underline) values += TextDecoration.Underline
+        if (strike) values += TextDecoration.LineThrough
+        return when (values.size) {
+            0 -> null
+            1 -> values.first()
+            else -> TextDecoration.combine(values)
+        }
+    }
+
+    private fun toggleDecoration(current: TextDecoration?, target: TextDecoration, enabled: Boolean): TextDecoration {
+        val underline = if (target == TextDecoration.Underline) enabled
+            else current?.contains(TextDecoration.Underline) == true
+        val strike = if (target == TextDecoration.LineThrough) enabled
+            else current?.contains(TextDecoration.LineThrough) == true
+        return decoration(underline, strike) ?: TextDecoration.None
+    }
 
     private fun fontName(font: FontFamily?): String? = when (font) {
         FontFamily.Serif -> "SERIF"

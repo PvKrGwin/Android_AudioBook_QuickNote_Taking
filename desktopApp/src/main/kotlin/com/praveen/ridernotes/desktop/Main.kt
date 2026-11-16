@@ -55,6 +55,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -884,6 +885,9 @@ private fun NoteCard(
     onAddToTopics: (() -> Unit)? = null
 ) {
     var expanded by remember(note.id) { mutableStateOf(false) }
+    fun formattingValue(): TextFieldValue = if (!editBody.selection.collapsed) editBody
+        else lastEditSelection?.let { editBody.copy(selection = it) } ?: editBody
+
     val playback = audioPlayer.state
     val isCurrent = playback.file?.absolutePath == note.audioFile?.absolutePath
     Card(
@@ -1768,6 +1772,8 @@ private fun TopicPointCard(
     var editBold by remember(placement.id) { mutableStateOf(false) }
     var editItalic by remember(placement.id) { mutableStateOf(false) }
     var editUnderline by remember(placement.id) { mutableStateOf(false) }
+    var editStrike by remember(placement.id) { mutableStateOf(false) }
+    var lastEditSelection by remember(placement.id) { mutableStateOf<TextRange?>(null) }
     var editBullets by remember(placement.id) { mutableStateOf(false) }
     var editFont by remember(placement.id) { mutableStateOf<FontFamily?>(null) }
     var editTextColor by remember(placement.id) { mutableStateOf(Color.Unspecified) }
@@ -1825,32 +1831,42 @@ private fun TopicPointCard(
                     Text("Select text, then apply formatting:", fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(onClick = {
-                            val enabled = if (editBody.selection.collapsed) !editBold
-                                else !TopicRichText.selectionIsBold(editBody)
-                            if (!editBody.selection.collapsed) editBody = TopicRichText.setBold(editBody, enabled)
+                            val target = formattingValue()
+                            val enabled = if (target.selection.collapsed) !editBold
+                                else !TopicRichText.selectionIsBold(target)
+                            if (!target.selection.collapsed) editBody = TopicRichText.setBold(target, enabled)
                             editBold = enabled
                         }) { Text(if (editBold) "✓ B" else "B", fontWeight = FontWeight.Bold) }
                         TextButton(onClick = {
-                            val enabled = if (editBody.selection.collapsed) !editItalic
-                                else !TopicRichText.selectionIsItalic(editBody)
-                            if (!editBody.selection.collapsed) editBody = TopicRichText.setItalic(editBody, enabled)
+                            val target = formattingValue()
+                            val enabled = if (target.selection.collapsed) !editItalic
+                                else !TopicRichText.selectionIsItalic(target)
+                            if (!target.selection.collapsed) editBody = TopicRichText.setItalic(target, enabled)
                             editItalic = enabled
                         }) { Text(if (editItalic) "✓ I" else "I", fontStyle = FontStyle.Italic) }
                         TextButton(onClick = {
-                            val enabled = if (editBody.selection.collapsed) !editUnderline
-                                else !TopicRichText.selectionIsUnderlined(editBody)
-                            if (!editBody.selection.collapsed) editBody = TopicRichText.setUnderline(editBody, enabled)
+                            val target = formattingValue()
+                            val enabled = if (target.selection.collapsed) !editUnderline
+                                else !TopicRichText.selectionIsUnderlined(target)
+                            if (!target.selection.collapsed) editBody = TopicRichText.setUnderline(target, enabled)
                             editUnderline = enabled
                         }) { Text(if (editUnderline) "✓ U" else "U", textDecoration = TextDecoration.Underline) }
+                        TextButton(onClick = {
+                            val target = formattingValue()
+                            val enabled = if (target.selection.collapsed) !editStrike
+                                else !TopicRichText.selectionIsStruck(target)
+                            if (!target.selection.collapsed) editBody = TopicRichText.setStrike(target, enabled)
+                            editStrike = enabled
+                        }) { Text(if (editStrike) "✓ S" else "S", textDecoration = TextDecoration.LineThrough) }
                         TextButton(onClick = {
                             editBullets = !editBullets
                             if (editBullets) editBody = TopicRichText.bullets(editBody)
                         }) { Text(if (editBullets) "✓ • List" else "• List") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = { editFont = FontFamily.Serif; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Serif) "✓ Serif" else "Serif") }
-                        TextButton(onClick = { editFont = FontFamily.Monospace; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Monospace) "✓ Mono" else "Mono") }
-                        TextButton(onClick = { editFont = FontFamily.Cursive; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Cursive) "✓ Script" else "Script") }
+                        TextButton(onClick = { editFont = FontFamily.Serif; editBody = TopicRichText.apply(formattingValue(), SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Serif) "✓ Serif" else "Serif") }
+                        TextButton(onClick = { editFont = FontFamily.Monospace; editBody = TopicRichText.apply(formattingValue(), SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Monospace) "✓ Mono" else "Mono") }
+                        TextButton(onClick = { editFont = FontFamily.Cursive; editBody = TopicRichText.apply(formattingValue(), SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Cursive) "✓ Script" else "Script") }
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         listOf(
@@ -1862,7 +1878,7 @@ private fun TopicPointCard(
                         ).forEach { (name, color) ->
                             TextButton(onClick = {
                                 editTextColor = color
-                                editBody = TopicRichText.apply(editBody, SpanStyle(color = color))
+                                editBody = TopicRichText.apply(formattingValue(), SpanStyle(color = color))
                             }) {
                                 Text(if (editTextColor == color) "✓ $name" else name, color = color, fontSize = 11.sp)
                             }
@@ -1871,13 +1887,18 @@ private fun TopicPointCard(
                     OutlinedTextField(
                         value = editBody,
                         onValueChange = { proposed ->
-                            val hasTypingStyle = editBold || editItalic || editUnderline ||
+                            val hasTypingStyle = editBold || editItalic || editUnderline || editStrike ||
                                 editFont != null || editTextColor != Color.Unspecified
                             val typingStyle = if (hasTypingStyle) {
                                 SpanStyle(
                                         fontWeight = FontWeight.Bold.takeIf { editBold },
                                         fontStyle = FontStyle.Italic.takeIf { editItalic },
-                                        textDecoration = TextDecoration.Underline.takeIf { editUnderline },
+                                        textDecoration = when {
+                                            editUnderline && editStrike -> TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
+                                            editUnderline -> TextDecoration.Underline
+                                            editStrike -> TextDecoration.LineThrough
+                                            else -> null
+                                        },
                                         fontFamily = editFont,
                                         color = editTextColor
                                     )
@@ -1885,6 +1906,7 @@ private fun TopicPointCard(
                             var next = TopicRichText.reconcileEdit(editBody, proposed, typingStyle)
                             next = TopicRichText.continueBullets(editBody, next, editBullets)
                             editBody = next
+                            if (!next.selection.collapsed) lastEditSelection = next.selection
                         },
                         label = { Text(if (item.type == "TEXT") "Text" else "Additional text") },
                         modifier = Modifier.fillMaxWidth()

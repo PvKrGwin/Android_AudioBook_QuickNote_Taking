@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -32,6 +34,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -110,6 +114,7 @@ fun TopicLibraryScreen(
     var editBold by remember { mutableStateOf(false) }
     var editItalic by remember { mutableStateOf(false) }
     var editUnderline by remember { mutableStateOf(false) }
+    var editStrike by remember { mutableStateOf(false) }
     var editBullets by remember { mutableStateOf(false) }
     var editFont by remember { mutableStateOf<FontFamily?>(null) }
     var editTextColor by remember { mutableStateOf(Color.Unspecified) }
@@ -236,62 +241,94 @@ fun TopicLibraryScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
-                        Text("Select text, then apply formatting:", style = MaterialTheme.typography.labelSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("Select text, then format:", style = MaterialTheme.typography.labelSmall)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             TextButton(onClick = {
                                 val enabled = if (editBody.selection.collapsed) !editBold
                                     else !TopicRichText.selectionIsBold(editBody)
                                 if (!editBody.selection.collapsed) editBody = TopicRichText.setBold(editBody, enabled)
                                 editBold = enabled
-                            }) { Text(if (editBold) "✓ B" else "B", fontWeight = FontWeight.Bold) }
+                            }) { Text(if (editBold) "✓B" else "B", fontWeight = FontWeight.Bold) }
                             TextButton(onClick = {
                                 val enabled = if (editBody.selection.collapsed) !editItalic
                                     else !TopicRichText.selectionIsItalic(editBody)
                                 if (!editBody.selection.collapsed) editBody = TopicRichText.setItalic(editBody, enabled)
                                 editItalic = enabled
-                            }) { Text(if (editItalic) "✓ I" else "I", fontStyle = FontStyle.Italic) }
+                            }) { Text(if (editItalic) "✓I" else "I", fontStyle = FontStyle.Italic) }
                             TextButton(onClick = {
                                 val enabled = if (editBody.selection.collapsed) !editUnderline
                                     else !TopicRichText.selectionIsUnderlined(editBody)
                                 if (!editBody.selection.collapsed) editBody = TopicRichText.setUnderline(editBody, enabled)
                                 editUnderline = enabled
-                            }) { Text(if (editUnderline) "✓ U" else "U", textDecoration = TextDecoration.Underline) }
+                            }) { Text(if (editUnderline) "✓U" else "U", textDecoration = TextDecoration.Underline) }
+                            TextButton(onClick = {
+                                val enabled = if (editBody.selection.collapsed) !editStrike
+                                    else !TopicRichText.selectionIsStruck(editBody)
+                                if (!editBody.selection.collapsed) editBody = TopicRichText.setStrike(editBody, enabled)
+                                editStrike = enabled
+                            }) { Text(if (editStrike) "✓S" else "S", textDecoration = TextDecoration.LineThrough) }
                             TextButton(onClick = {
                                 editBullets = !editBullets
                                 if (editBullets) editBody = TopicRichText.bullets(editBody)
-                            }) { Text(if (editBullets) "✓ • List" else "• List") }
+                            }) { Text(if (editBullets) "✓•" else "•") }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                            TextButton(onClick = { editFont = FontFamily.Serif; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Serif) "✓ Serif" else "Serif") }
-                            TextButton(onClick = { editFont = FontFamily.Monospace; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Monospace) "✓ Mono" else "Mono") }
-                            TextButton(onClick = { editFont = FontFamily.Cursive; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Cursive) "✓ Script" else "Script") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            TextButton(onClick = { editFont = FontFamily.Serif; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Serif) "✓S" else "S", fontFamily = FontFamily.Serif) }
+                            TextButton(onClick = { editFont = FontFamily.Monospace; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Monospace) "✓M" else "M", fontFamily = FontFamily.Monospace) }
+                            TextButton(onClick = { editFont = FontFamily.Cursive; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Cursive) "✓𝒮" else "𝒮", fontFamily = FontFamily.Cursive) }
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
                             listOf(
-                                "Black" to Color.Black,
-                                "Red" to Color(0xFFC62828),
-                                "Blue" to Color(0xFF1565C0),
-                                "Green" to Color(0xFF2E7D32),
-                                "Purple" to Color(0xFF6A1B9A)
-                            ).forEach { (name, color) ->
-                                TextButton(onClick = {
-                                    editTextColor = color
-                                    editBody = TopicRichText.apply(editBody, SpanStyle(color = color))
-                                }) {
-                                    Text(if (editTextColor == color) "✓ $name" else name, color = color, fontSize = 11.sp)
+                                Color.Black,
+                                Color(0xFFC62828),
+                                Color(0xFF1565C0),
+                                Color(0xFF2E7D32),
+                                Color(0xFF6A1B9A)
+                            ).forEach { color ->
+                                Surface(
+                                    onClick = {
+                                        editTextColor = color
+                                        editBody = TopicRichText.apply(editBody, SpanStyle(color = color))
+                                    },
+                                    modifier = Modifier.size(32.dp),
+                                    shape = CircleShape,
+                                    color = color,
+                                    border = BorderStroke(2.dp, Color.White)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        if (editTextColor == color) {
+                                            Text("✓", color = if (color == Color.Black) Color.White else Color.White)
+                                        }
+                                    }
                                 }
                             }
                         }
                         OutlinedTextField(
                             value = editBody,
                             onValueChange = { proposed ->
-                                val hasTypingStyle = editBold || editItalic || editUnderline ||
+                                val hasTypingStyle = editBold || editItalic || editUnderline || editStrike ||
                                     editFont != null || editTextColor != Color.Unspecified
                                 val typingStyle = if (hasTypingStyle) {
                                     SpanStyle(
                                             fontWeight = FontWeight.Bold.takeIf { editBold },
                                             fontStyle = FontStyle.Italic.takeIf { editItalic },
-                                            textDecoration = TextDecoration.Underline.takeIf { editUnderline },
+                                            textDecoration = when {
+                                                editUnderline && editStrike -> TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
+                                                editUnderline -> TextDecoration.Underline
+                                                editStrike -> TextDecoration.LineThrough
+                                                else -> null
+                                            },
                                             fontFamily = editFont,
                                             color = editTextColor
                                         )
