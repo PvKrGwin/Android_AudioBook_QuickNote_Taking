@@ -11,6 +11,7 @@ class CloudSyncWorker(
     params: WorkerParameters
 ) : Worker(appContext, params) {
     override fun doWork(): Result {
+        val checkOnly = inputData.getBoolean(KEY_CHECK_ONLY, false)
         if (CloudSyncManager.mode(applicationContext) == CloudSyncManager.Mode.OFF) {
             return Result.success()
         }
@@ -28,11 +29,6 @@ class CloudSyncWorker(
         }
 
         return try {
-            CloudSyncManager.updateSyncState(
-                applicationContext,
-                CloudSyncManager.SyncState.SYNCING,
-                "Uploading complete Rider Notes backup…"
-            )
             val remoteRevision = CloudSyncManager.remoteRevision(applicationContext)
             val lastSynced = SyncRevisionStore.lastSyncedRevision(applicationContext)
             val dirty = SyncRevisionStore.isDirty(applicationContext)
@@ -48,6 +44,23 @@ class CloudSyncWorker(
                     return Result.success()
                 }
             }
+            if (checkOnly) {
+                if (dirty) {
+                    CloudSyncManager.markLocalChange(applicationContext)
+                } else {
+                    CloudSyncManager.updateSyncState(
+                        applicationContext,
+                        CloudSyncManager.SyncState.UP_TO_DATE,
+                        "Up to date with cloud folder"
+                    )
+                }
+                return Result.success()
+            }
+            CloudSyncManager.updateSyncState(
+                applicationContext,
+                CloudSyncManager.SyncState.SYNCING,
+                "Uploading complete Rider Notes backup…"
+            )
             if (!dirty && remoteRevision != null && remoteRevision.revisionId == lastSynced &&
                 folder.findFile("RiderNotes_Full_Backup.zip") != null
             ) {
@@ -114,5 +127,9 @@ class CloudSyncWorker(
         "vtt" -> "text/vtt"
         "srt", "txt" -> "text/plain"
         else -> "application/octet-stream"
+    }
+
+    companion object {
+        const val KEY_CHECK_ONLY = "check_only"
     }
 }
