@@ -181,8 +181,8 @@ object BackupEditor {
             snapshot,
             groupId,
             DesktopTopicItem(
-                id(), "LINK", title.ifBlank { url },
-                notes?.trim()?.takeIf { it.isNotBlank() }, url, now()
+                id(), "LINK", title.ifBlank { url }, null, url, now(),
+                notes?.trim()?.takeIf { it.isNotBlank() }
             )
         )
     }
@@ -204,8 +204,8 @@ object BackupEditor {
             snapshot,
             groupId,
             DesktopTopicItem(
-                itemId, "ATTACHMENT", source.name,
-                notes?.trim()?.takeIf { it.isNotBlank() }, relative, now()
+                itemId, "ATTACHMENT", source.name, null, relative, now(),
+                notes?.trim()?.takeIf { it.isNotBlank() }
             )
         )
     }
@@ -322,6 +322,67 @@ object BackupEditor {
         return saveLibrary(snapshot, legend = legend)
     }
 
+    fun updateAdditionalNotes(
+        snapshot: BackupSnapshot,
+        itemId: String,
+        notes: String
+    ): BackupSnapshot {
+        if (snapshot.items.none { it.id == itemId }) return snapshot
+        DesktopUndoStore.capture(snapshot)
+        val normalized = notes.trim().takeIf(String::isNotBlank)
+        return saveLibrary(
+            snapshot,
+            items = snapshot.items.map { item ->
+                if (item.id == itemId) item.copy(
+                    text = if (item.type == "TEXT") item.text else null,
+                    additionalNotes = normalized
+                ) else item
+            }
+        )
+    }
+
+    fun updateEditablePoint(
+        snapshot: BackupSnapshot,
+        itemId: String,
+        title: String,
+        body: String,
+        linkUrl: String? = null,
+        richText: String? = null
+    ): BackupSnapshot {
+        if (snapshot.items.none { it.id == itemId }) return snapshot
+        DesktopUndoStore.capture(snapshot)
+        return saveLibrary(snapshot, items = snapshot.items.map { item ->
+            if (item.id != itemId) item else item.copy(
+                title = title.trim().ifBlank { item.title },
+                text = if (item.type == "TEXT") body else null,
+                additionalNotes = if (item.type == "TEXT") item.additionalNotes
+                    else body.trim().takeIf(String::isNotBlank),
+                target = if (item.type == "LINK") linkUrl?.trim()?.takeIf(String::isNotBlank)
+                    ?: item.target else item.target,
+                richText = richText
+            )
+        })
+    }
+
+    fun replaceAttachment(
+        snapshot: BackupSnapshot,
+        itemId: String,
+        source: File
+    ): BackupSnapshot {
+        require(source.isFile) { "Replacement attachment was not found" }
+        val item = snapshot.items.firstOrNull { it.id == itemId && it.type == "ATTACHMENT" }
+            ?: return snapshot
+        DesktopUndoStore.capture(snapshot)
+        val safeName = source.name.replace(Regex("[^A-Za-z0-9._ -]"), "_")
+        val relative = "assets/${item.id}_$safeName"
+        val destination = File(snapshot.libraryRoot, relative).apply { parentFile?.mkdirs() }
+        source.copyTo(destination, overwrite = true)
+        item.target?.takeIf { it != relative }?.let { File(snapshot.libraryRoot, it).delete() }
+        return saveLibrary(snapshot, items = snapshot.items.map {
+            if (it.id == itemId) it.copy(target = relative) else it
+        })
+    }
+
     private fun addPoint(
         snapshot: BackupSnapshot,
         groupId: String,
@@ -354,6 +415,8 @@ object BackupEditor {
                 JSONObject().put("id", item.id).put("type", item.type).put("title", item.title)
                     .put("text", item.text ?: JSONObject.NULL)
                     .put("target", item.target ?: JSONObject.NULL).put("createdAt", item.createdAt)
+                    .put("additionalNotes", item.additionalNotes ?: JSONObject.NULL)
+                    .put("richText", item.richText ?: JSONObject.NULL)
             }))
             .put("placements", JSONArray(placements.map { placement ->
                 JSONObject().put("id", placement.id).put("groupId", placement.groupId)
