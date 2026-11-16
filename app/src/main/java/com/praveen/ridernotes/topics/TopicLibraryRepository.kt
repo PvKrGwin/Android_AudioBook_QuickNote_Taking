@@ -21,7 +21,9 @@ data class TopicItem(
     val title: String,
     val text: String?,
     val target: String?,
-    val createdAt: Long
+    val createdAt: Long,
+    val additionalNotes: String? = null,
+    val richText: String? = null
 )
 data class TopicPlacement(
     val id: String,
@@ -83,7 +85,7 @@ object TopicLibraryRepository {
     ) = addNewItem(
         context,
         groupId,
-        TopicItem(id(), TYPE_LINK, title.ifBlank { url }, notes?.trim()?.takeIf { it.isNotBlank() }, url, now()),
+        TopicItem(id(), TYPE_LINK, title.ifBlank { url }, null, url, now(), notes?.trim()?.takeIf { it.isNotBlank() }),
         index
     )
 
@@ -117,7 +119,7 @@ object TopicLibraryRepository {
             addNewItem(
                 context,
                 groupId,
-                TopicItem(itemId, TYPE_ATTACHMENT, displayName, notes?.trim()?.takeIf { it.isNotBlank() }, relative, now()),
+                TopicItem(itemId, TYPE_ATTACHMENT, displayName, null, relative, now(), notes?.trim()?.takeIf { it.isNotBlank() }),
                 index
             )
             true
@@ -131,8 +133,73 @@ object TopicLibraryRepository {
     }
 
     @Synchronized fun removePlacement(context: Context, placementId: String) {
+        removePlacements(context, setOf(placementId))
+    }
+
+    @Synchronized fun removePlacements(context: Context, placementIds: Set<String>) {
+        if (placementIds.isEmpty()) return
         val current = load(context)
-        save(context, pruneOrphans(context, current.copy(placements = current.placements.filterNot { it.id == placementId })))
+        val remaining = current.placements.filterNot { it.id in placementIds }
+        save(context, pruneOrphans(context, current.copy(placements = normalizePlacements(remaining))))
+    }
+
+    @Synchronized fun setAdditionalNotes(context: Context, itemId: String, notes: String) {
+        val current = load(context)
+        val normalized = notes.trim().takeIf(String::isNotBlank)
+        save(context, current.copy(items = current.items.map { item ->
+            if (item.id == itemId) item.copy(
+                text = if (item.type == TYPE_TEXT) item.text else null,
+                additionalNotes = normalized
+            ) else item
+        }))
+    }
+
+    @Synchronized fun updateEditablePoint(
+        context: Context,
+        itemId: String,
+        title: String,
+        body: String,
+        linkUrl: String? = null,
+        richText: String? = null
+    ) {
+        val current = load(context)
+        save(context, current.copy(items = current.items.map { item ->
+            if (item.id != itemId) item else item.copy(
+                title = title.trim().ifBlank { item.title },
+                text = if (item.type == TYPE_TEXT) body else null,
+                additionalNotes = if (item.type == TYPE_TEXT) item.additionalNotes
+                    else body.trim().takeIf(String::isNotBlank),
+                target = if (item.type == TYPE_LINK) linkUrl?.trim()?.takeIf(String::isNotBlank)
+                    ?: item.target else item.target,
+                richText = richText
+            )
+        }))
+    }
+
+    @Synchronized fun replaceAttachment(context: Context, itemId: String, uri: Uri): Boolean {
+        val current = load(context)
+        val item = current.items.firstOrNull { it.id == itemId && it.type == TYPE_ATTACHMENT }
+            ?: return false
+        val resolver = context.contentResolver
+        val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(0) else null
+        } ?: "attachment"
+        val safeName = displayName.replace(Regex("[^A-Za-z0-9._ -]"), "_")
+        val relative = "assets/${item.id}_$safeName"
+        val destination = File(folder(context), relative).apply { parentFile?.mkdirs() }
+        return runCatching {
+            resolver.openInputStream(uri).use { input ->
+                requireNotNull(input)
+                destination.outputStream().use(input::copyTo)
+            }
+            item.target?.let { old ->
+                if (old != relative) File(folder(context), old).delete()
+            }
+            save(context, current.copy(items = current.items.map {
+                if (it.id == itemId) it.copy(target = relative) else it
+            }))
+            true
+        }.getOrDefault(false)
     }
 
     fun willDeleteTopicRecording(context: Context, placementId: String): Boolean {
@@ -208,6 +275,11 @@ object TopicLibraryRepository {
         return existing.filterNot { it.groupId == groupId } + normalized
     }
 
+    private fun normalizePlacements(placements: List<TopicPlacement>): List<TopicPlacement> =
+        placements.groupBy { it.groupId }.values.flatMap { group ->
+            group.sortedBy { it.order }.mapIndexed { index, placement -> placement.copy(order = index) }
+        }
+
     private fun pruneOrphans(context: Context, library: TopicLibrary): TopicLibrary {
         val used = library.placements.mapTo(mutableSetOf()) { it.itemId }
         library.items.filter { it.id !in used }.forEach { item ->
@@ -239,7 +311,7 @@ object TopicLibraryRepository {
     private fun save(context: Context, library: TopicLibrary) {
         val root = JSONObject().put("version", 2)
             .put("groups", JSONArray(library.groups.map { JSONObject().put("id", it.id).put("name", it.name).put("parentId", it.parentId ?: JSONObject.NULL).put("order", it.order) }))
-            .put("items", JSONArray(library.items.map { JSONObject().put("id", it.id).put("type", it.type).put("title", it.title).put("text", it.text ?: JSONObject.NULL).put("target", it.target ?: JSONObject.NULL).put("createdAt", it.createdAt) }))
+            .put("items", JSONArray(library.items.map { JSONObject().put("id", it.id).put("type", it.type).put("title", it.title).put("text", it.text ?: JSONObject.NULL).put("target", it.target ?: JSONObject.NULL).put("createdAt", it.createdAt).put("additionalNotes", it.additionalNotes ?: JSONObject.NULL).put("richText", it.richText ?: JSONObject.NULL) }))
             .put("placements", JSONArray(library.placements.map { JSONObject().put("id", it.id).put("groupId", it.groupId).put("itemId", it.itemId).put("order", it.order).put("important", it.important).put("color", it.color) }))
             .put("colorLegend", JSONObject(library.colorLegend))
         manifest(context).apply { parentFile?.mkdirs(); writeText(root.toString(2)) }
@@ -513,7 +585,7 @@ object TopicLibraryRepository {
         val root = JSONObject(file.readText())
         return TopicLibrary(
             groups = root.optJSONArray("groups").objects().map { TopicGroup(it.getString("id"), it.getString("name"), it.nullable("parentId"), it.optInt("order")) },
-            items = root.optJSONArray("items").objects().map { TopicItem(it.getString("id"), it.getString("type"), it.optString("title", "Untitled"), it.nullable("text"), it.nullable("target"), it.optLong("createdAt")) },
+            items = root.optJSONArray("items").objects().map { TopicItem(it.getString("id"), it.getString("type"), it.optString("title", "Untitled"), it.nullable("text"), it.nullable("target"), it.optLong("createdAt"), it.nullable("additionalNotes"), it.nullable("richText")) },
             placements = root.optJSONArray("placements").objects().map { TopicPlacement(it.getString("id"), it.getString("groupId"), it.getString("itemId"), it.optInt("order"), it.optBoolean("important"), it.optString("color", "WHITE")) },
             colorLegend = root.optJSONObject("colorLegend")?.let { legend -> legend.keys().asSequence().associateWith { legend.optString(it) }.filterValues { it.isNotBlank() } }.orEmpty()
         )
