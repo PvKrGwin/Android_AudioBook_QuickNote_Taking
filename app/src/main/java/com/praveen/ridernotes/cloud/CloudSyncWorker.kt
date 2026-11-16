@@ -22,7 +22,7 @@ class CloudSyncWorker(
             CloudSyncManager.updateSyncState(
                 applicationContext,
                 CloudSyncManager.SyncState.FAILED,
-                "Sync failed: cloud folder is unavailable. Press retry to upload everything again."
+                "Upload failed: cloud folder is unavailable. Press retry to upload everything again."
             )
             return Result.failure()
         }
@@ -31,7 +31,7 @@ class CloudSyncWorker(
             CloudSyncManager.updateSyncState(
                 applicationContext,
                 CloudSyncManager.SyncState.SYNCING,
-                "Syncing complete Rider Notes backup…"
+                "Uploading complete Rider Notes backup…"
             )
             val remoteRevision = CloudSyncManager.remoteRevision(applicationContext)
             val lastSynced = SyncRevisionStore.lastSyncedRevision(applicationContext)
@@ -102,7 +102,7 @@ class CloudSyncWorker(
             CloudSyncManager.updateSyncState(
                 applicationContext,
                 CloudSyncManager.SyncState.FAILED,
-                "Sync failed: ${error.javaClass.simpleName}. Press retry to upload everything again."
+                "Upload failed: ${error.javaClass.simpleName}. Press retry to upload everything again."
             )
             Result.failure()
         }
