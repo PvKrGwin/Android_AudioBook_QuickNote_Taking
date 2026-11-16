@@ -19,12 +19,12 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.praveen.ridernotes.MainActivity
-import com.praveen.ridernotes.cloud.CloudSyncManager
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.transcription.ScribTranscriber
 import com.praveen.ridernotes.topics.TopicLibraryRepository
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -329,7 +329,6 @@ class VoiceRecordingService : Service() {
                 } else file.nameWithoutExtension
             )
             if (!topicOnly) ScribTranscriber.enqueue(this, file)
-            CloudSyncManager.enqueueNow(this)
         } else {
             TopicLibraryRepository.clearPendingRecordingGroup(this)
         }
@@ -598,7 +597,7 @@ class VoiceRecordingService : Service() {
 
             val json = JSONObject()
                 .put("audioFile", audioFile.name)
-                .put("metadataVersion", 4)
+                .put("metadataVersion", 5)
                 .put("recordedAtEpochMs", recordedAt)
                 .put("type", if (topicOnly) "TOPIC_ONLY" else if (mediaContext?.isStandalone == false) "MEDIA_LINKED" else "STANDALONE")
                 .put("topicOnly", topicOnly)
@@ -611,10 +610,14 @@ class VoiceRecordingService : Service() {
                 .put("playbackPositionMs", mediaContext?.playbackPositionMs ?: JSONObject.NULL)
                 .put("sourceUrl", mediaContext?.sourceUrl ?: JSONObject.NULL)
                 .put("recordingInput", recordingInputLabel)
+                .put("originDeviceId", SyncRevisionStore.deviceId(this))
+                .put("originDeviceName", SyncRevisionStore.deviceName())
+                .put("originDeviceType", "ANDROID")
                 .put("transcriptionStatus", if (topicOnly) "NOT_REQUESTED" else "PENDING")
 
             File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
                 .writeText(json.toString(2))
+            SyncRevisionStore.markLocalModified(this)
         } catch (error: Exception) {
             ButtonEventStore.record(
                 ButtonEvent.recordingResult(

@@ -2,6 +2,12 @@ package com.praveen.ridernotes.desktop
 
 import java.io.File
 
+data class DesktopTranscriptSegment(
+    val startMs: Long,
+    val endMs: Long,
+    val text: String
+)
+
 data class DesktopNote(
     val id: String,
     val title: String,
@@ -14,8 +20,24 @@ data class DesktopNote(
     val sourceUrl: String?,
     val transcriptionStatus: String,
     val transcript: String?,
+    val transcriptSegments: List<DesktopTranscriptSegment>,
     val audioFile: File?,
-    val topicOnly: Boolean
+    val topicOnly: Boolean,
+    val textOnly: Boolean = false,
+    val typedNote: String? = null,
+    val originDeviceId: String? = null,
+    val originDeviceName: String? = null,
+    val originDeviceType: String? = null
+)
+
+data class SyncManifest(
+    val schemaVersion: Int = 1,
+    val revisionId: String,
+    val parentRevisionId: String?,
+    val modifiedAtEpochMs: Long,
+    val deviceId: String,
+    val deviceName: String,
+    val deviceType: String
 )
 
 data class DesktopTopicGroup(
@@ -31,7 +53,9 @@ data class DesktopTopicItem(
     val title: String,
     val text: String?,
     val target: String?,
-    val createdAt: Long
+    val createdAt: Long,
+    val additionalNotes: String? = null,
+    val richText: String? = null
 )
 
 data class DesktopTopicPlacement(
@@ -51,5 +75,8 @@ data class BackupSnapshot(
     val groups: List<DesktopTopicGroup>,
     val items: List<DesktopTopicItem>,
     val placements: List<DesktopTopicPlacement>,
-    val colorLegend: Map<String, String>
+    val colorLegend: Map<String, String>,
+    val syncManifest: SyncManifest?,
+    val sourceZipLastModified: Long,
+    val sourceZipLength: Long
 )

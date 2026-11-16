@@ -5,6 +5,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.zip.ZipFile
 
 object BackupImporter {
@@ -14,9 +15,17 @@ object BackupImporter {
         val safeName = zipFile.nameWithoutExtension.replace(Regex("[^A-Za-z0-9._-]"), "_")
         val root = File(
             File(System.getProperty("user.home"), "RiderNotesPC/imports"),
-            "${safeName}_$timestamp"
+            "${safeName}_${timestamp}_${UUID.randomUUID().toString().take(8)}"
         ).apply { mkdirs() }
         extractSafely(zipFile, root)
+
+        return readExtracted(zipFile, root)
+    }
+
+    fun reload(snapshot: BackupSnapshot): BackupSnapshot =
+        readExtracted(snapshot.sourceZip, snapshot.extractedRoot)
+
+    private fun readExtracted(zipFile: File, root: File): BackupSnapshot {
 
         val libraryFile = root.walkTopDown()
             .firstOrNull { it.isFile && it.name == "library.json" }
@@ -54,7 +63,9 @@ object BackupImporter {
                     title = it.optString("title", "Untitled"),
                     text = it.nullable("text"),
                     target = it.nullable("target"),
-                    createdAt = it.optLong("createdAt")
+                    createdAt = it.optLong("createdAt"),
+                    additionalNotes = it.nullable("additionalNotes"),
+                    richText = it.nullable("richText")
                 )
             },
             placements = library.optJSONArray("placements").objects().map {
@@ -70,7 +81,12 @@ object BackupImporter {
             colorLegend = library.optJSONObject("colorLegend")?.let { legend ->
                 legend.keys().asSequence().associateWith { legend.optString(it) }
                     .filterValues(String::isNotBlank)
-            }.orEmpty()
+            }.orEmpty(),
+            syncManifest = root.walkTopDown()
+                .firstOrNull { it.isFile && it.name == SyncManifestCodec.FILE_NAME }
+                ?.let(SyncManifestCodec::read),
+            sourceZipLastModified = zipFile.lastModified(),
+            sourceZipLength = zipFile.length()
         )
     }
 
@@ -99,8 +115,27 @@ object BackupImporter {
             transcriptionStatus = json.nullable("transcriptionStatus") ?: "NOT_STARTED",
             transcript = json.nullable("transcript")
                 ?: transcriptText?.substringAfter("\nTRANSCRIPT\n", transcriptText),
+            transcriptSegments = json.optJSONArray("transcriptSegments")?.let { array ->
+                buildList {
+                    for (index in 0 until array.length()) {
+                        val segment = array.optJSONObject(index) ?: continue
+                        val text = segment.optString("text").trim()
+                        val start = segment.optLong("startMs", -1L)
+                        val end = segment.optLong("endMs", -1L)
+                        if (text.isNotBlank() && start >= 0L && end > start) {
+                            add(DesktopTranscriptSegment(start, end, text))
+                        }
+                    }
+                }
+            }.orEmpty(),
             audioFile = filesByName["$base.m4a"]?.firstOrNull(),
-            topicOnly = json.optBoolean("topicOnly", false)
+            topicOnly = json.optBoolean("topicOnly", false),
+            textOnly = json.optBoolean("textOnly", false) ||
+                json.optString("noteKind").equals("TEXT", ignoreCase = true),
+            typedNote = json.nullable("typedNote"),
+            originDeviceId = json.nullable("originDeviceId"),
+            originDeviceName = json.nullable("originDeviceName"),
+            originDeviceType = json.nullable("originDeviceType")
         )
     }.getOrNull()
 

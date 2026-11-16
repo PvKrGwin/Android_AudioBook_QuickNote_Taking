@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.praveen.ridernotes.media.MediaControlGateway
+import com.praveen.ridernotes.cloud.CloudSyncManager
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 
 object RecordingController {
     @Volatile
@@ -25,6 +27,9 @@ object RecordingController {
     private var recordingRequestedAtElapsedMs: Long = 0L
 
     fun start(context: Context): String {
+        pendingCloudRevision(context)?.let {
+            return "Cloud update from ${it.deviceName} needs review in Rider Notes"
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -56,6 +61,9 @@ object RecordingController {
     }
 
     fun startTopic(context: Context): String {
+        pendingCloudRevision(context)?.let {
+            return "Cloud update from ${it.deviceName} needs review in Rider Notes"
+        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) return "Microphone permission required"
@@ -140,6 +148,10 @@ object RecordingController {
     internal fun markStopped() {
         recordingRequestedAtElapsedMs = 0L
     }
+
+    private fun pendingCloudRevision(context: Context) =
+        SyncRevisionStore.pendingRemote(context)
+            ?: runCatching { CloudSyncManager.inspectRemote(context) }.getOrNull()
 
     private const val STARTUP_STOP_GUARD_MS = 2_000L
 }

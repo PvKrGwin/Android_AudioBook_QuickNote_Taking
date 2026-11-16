@@ -10,11 +10,14 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -44,9 +47,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -60,11 +65,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -77,6 +85,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.praveen.ridernotes.input.BleButtonAccessibilityService
 import com.praveen.ridernotes.cloud.CloudSyncManager
+import com.praveen.ridernotes.cloud.CloudRevision
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.input.RemoteButtonConfig
@@ -96,6 +106,7 @@ import com.praveen.ridernotes.topics.TopicLibraryRepository
 import com.praveen.ridernotes.topics.TopicLibraryScreen
 import com.praveen.ridernotes.topics.TopicLibrary
 import com.praveen.ridernotes.topics.TopicGroup
+import kotlinx.coroutines.delay
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
@@ -115,6 +126,40 @@ class MainActivity : ComponentActivity() {
     private val cloudSyncStatus = mutableStateOf(
         CloudSyncManager.Status(null, CloudSyncManager.Mode.OFF, "")
     )
+    private val cloudConflict = mutableStateOf<CloudRevision?>(null)
+    private val cloudSyncCompletionHandler = Handler(Looper.getMainLooper())
+    private val settleCloudSyncCompletion = Runnable {
+        CloudSyncManager.settleCompletedIfReady(this)
+        cloudSyncStatus.value = CloudSyncManager.status(this)
+    }
+    private val cloudStatusPreferenceListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            runOnUiThread {
+                val status = CloudSyncManager.status(this)
+                cloudSyncStatus.value = status
+                cloudSyncCompletionHandler.removeCallbacks(settleCloudSyncCompletion)
+                if (status.syncState == CloudSyncManager.SyncState.COMPLETED) {
+                    val remaining = CloudSyncManager.settleCompletedIfReady(this)
+                    if (remaining > 0L) {
+                        cloudSyncCompletionHandler.postDelayed(
+                            settleCloudSyncCompletion,
+                            remaining
+                        )
+                    } else {
+                        cloudSyncStatus.value = CloudSyncManager.status(this)
+                    }
+                }
+            }
+        }
+    private val cloudNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            runOnUiThread { cloudSyncStatus.value = CloudSyncManager.status(this@MainActivity) }
+        }
+
+        override fun onLost(network: Network) {
+            runOnUiThread { cloudSyncStatus.value = CloudSyncManager.status(this@MainActivity) }
+        }
+    }
     private val sharedLinkStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
@@ -210,6 +255,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CloudSyncManager.registerStatusListener(this, cloudStatusPreferenceListener)
+        runCatching {
+            getSystemService(ConnectivityManager::class.java)
+                .registerDefaultNetworkCallback(cloudNetworkCallback)
+        }
         setupDiagnosticMediaSession()
         ContextCompat.registerReceiver(
             this,
@@ -275,6 +325,7 @@ class MainActivity : ComponentActivity() {
                     onRemoveCloudFolder = ::removeCloudFolder,
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
+                    onCheckCloud = { checkCloudRevision(manual = true) },
                     onCreateFreshBackup = ::createFreshBackup,
                     onStartTopicRecording = ::startTopicRecording,
                     onStopTopicRecording = ::stopTopicRecording,
@@ -283,6 +334,44 @@ class MainActivity : ComponentActivity() {
                     quickTileSetupStatus = quickTileSetupStatus,
                     onAddQuickTile = ::addQuickSettingsTile
                 )
+                cloudConflict.value?.let { revision ->
+                    val formatter = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
+                    val local = SyncRevisionStore.localRevisionForDisplay(this)
+                    AlertDialog(
+                        onDismissRequest = { },
+                        title = { Text("Newer cloud version found") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    local?.let {
+                                        "Phone copy: ${it.deviceName} · ${formatter.format(Date(it.modifiedAtEpochMs))}"
+                                    } ?: "Phone copy: timestamp not available"
+                                )
+                                Text(
+                                    "Cloud copy: ${revision.deviceName} · " +
+                                        formatter.format(Date(revision.modifiedAtEpochMs)),
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text("Merge both is recommended when both devices contain changes.")
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { mergeCloudRevision(revision) }) {
+                                Text("Merge both (recommended)")
+                            }
+                        },
+                        dismissButton = {
+                            Row {
+                                TextButton(onClick = { applyCloudRevision(revision) }) {
+                                    Text("Use cloud")
+                                }
+                                TextButton(onClick = { keepLocalAsCloudBase(revision) }) {
+                                    Text("Keep phone")
+                                }
+                            }
+                        }
+                    )
+                }
             }
         }
         handleSharedMediaIntent(intent)
@@ -296,19 +385,130 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        val completionRemaining = CloudSyncManager.settleCompletedIfReady(this)
+        cloudSyncCompletionHandler.removeCallbacks(settleCloudSyncCompletion)
+        if (completionRemaining > 0L) {
+            cloudSyncCompletionHandler.postDelayed(
+                settleCloudSyncCompletion,
+                completionRemaining
+            )
+        }
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
+        cloudSyncStatus.value = CloudSyncManager.status(this)
+        checkCloudRevision()
         MediaControlGateway.observeActivePlayback(this)
         refreshSharedLinkStatus()
         refreshGestureActions()
         refreshSavedNotes()
-        cloudSyncStatus.value = CloudSyncManager.status(this)
         savedNotes.value
             .filter { it.transcriptionStatus in setOf("PENDING", "QUEUED", "TRANSCRIBING") }
             .forEach { ScribTranscriber.enqueue(this, it.audioFile) }
         diagnosticMediaSession.isActive = true
+    }
+
+    private fun checkCloudRevision(manual: Boolean = false) {
+        if (CloudSyncManager.destinationUri(this) == null) return
+        if (manual) backupStatus.value = "Checking cloud revision…"
+        Thread {
+            val remote = CloudSyncManager.remoteRevision(this)
+            val conflict = CloudSyncManager.inspectRemote(this)
+            val local = SyncRevisionStore.localRevisionForDisplay(this)
+            val formatter = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
+            runOnUiThread {
+                cloudConflict.value = conflict
+                if (manual) {
+                    backupStatus.value = when {
+                        remote == null ->
+                            "Cloud check could not find RiderNotes_Sync_State.json. " +
+                                "Please wait for Drive to finish uploading, then check again."
+                        conflict != null ->
+                            "Newer cloud version: ${conflict.deviceName}, " +
+                                "${formatter.format(Date(conflict.modifiedAtEpochMs))}. " +
+                                (local?.let {
+                                    "Phone version: ${formatter.format(Date(it.modifiedAtEpochMs))}."
+                                } ?: "Phone version time is not available yet.")
+                        SyncRevisionStore.isDirty(this) ->
+                            "Cloud checked: ${formatter.format(Date(remote.modifiedAtEpochMs))}. " +
+                                "This phone also has unsynced local changes; upload is recommended."
+                        else ->
+                            "Cloud checked and this phone is up to date. Latest version: " +
+                                "${formatter.format(Date(remote.modifiedAtEpochMs))}, " +
+                                "from ${remote.deviceName}."
+                    }
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+        }.start()
+    }
+
+    private fun applyCloudRevision(revision: CloudRevision) {
+        backupStatus.value = "Updating this phone from ${revision.deviceName}..."
+        Thread {
+            val remote = CloudSyncManager.downloadRemoteFullBackup(this)
+            val result = if (remote == null) {
+                "Cloud restore failed: full backup ZIP was not found"
+            } else if (SyncRevisionStore.revisionInside(remote)?.revisionId != revision.revisionId) {
+                "Cloud files are still synchronizing. Please wait briefly and try again."
+            } else {
+                remote.inputStream().use { TopicLibraryRepository.replaceFromFullBackup(this, it) }
+            }
+            val succeeded = result.startsWith("Cloud snapshot restored")
+            if (succeeded) SyncRevisionStore.acceptRemote(this, revision)
+            remote?.delete()
+            runOnUiThread {
+                backupStatus.value = result
+                if (succeeded) {
+                    cloudConflict.value = null
+                    refreshSavedNotes()
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+        }.start()
+    }
+
+    private fun keepLocalAsCloudBase(revision: CloudRevision) {
+        SyncRevisionStore.keepLocalOver(this, revision)
+        TopicLibraryRepository.createFreshBackup(this)
+            .onSuccess {
+                cloudConflict.value = null
+                backupStatus.value = "Local phone version kept; upload local changes is recommended"
+            }
+            .onFailure { error ->
+                backupStatus.value = "Could not prepare local base: ${error.javaClass.simpleName}"
+            }
+        cloudSyncStatus.value = CloudSyncManager.status(this)
+    }
+
+    private fun mergeCloudRevision(revision: CloudRevision) {
+        backupStatus.value = "Merging phone changes with ${revision.deviceName}..."
+        Thread {
+            val remote = CloudSyncManager.downloadRemoteFullBackup(this)
+            val result = if (remote == null) {
+                "Cloud merge failed: full backup ZIP was not found"
+            } else if (SyncRevisionStore.revisionInside(remote)?.revisionId != revision.revisionId) {
+                "Cloud files are still synchronizing. Please wait briefly and try again."
+            } else {
+                SyncRevisionStore.setPendingRemote(this, revision)
+                remote.inputStream().use { TopicLibraryRepository.mergeFromFullBackup(this, it) }
+            }
+            val succeeded = result.startsWith("Cloud and phone merged")
+            if (succeeded) {
+                SyncRevisionStore.keepLocalOver(this, revision)
+                TopicLibraryRepository.createFreshBackup(this)
+            }
+            remote?.delete()
+            runOnUiThread {
+                backupStatus.value = if (succeeded) "$result; upload local changes is recommended" else result
+                if (succeeded) {
+                    cloudConflict.value = null
+                    refreshSavedNotes()
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+        }.start()
     }
 
     override fun onPause() {
@@ -319,9 +519,15 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         stopNotePlayback()
         remoteSetupHandler.removeCallbacks(remoteTrainingTimeout)
+        cloudSyncCompletionHandler.removeCallbacks(settleCloudSyncCompletion)
         if (remoteTraining) RemoteButtonConfig.setTraining(this, false)
         diagnosticMediaSession.release()
         runCatching { unregisterReceiver(topicRecordingReceiver) }
+        CloudSyncManager.unregisterStatusListener(this, cloudStatusPreferenceListener)
+        runCatching {
+            getSystemService(ConnectivityManager::class.java)
+                .unregisterNetworkCallback(cloudNetworkCallback)
+        }
         super.onDestroy()
     }
 
@@ -471,6 +677,7 @@ class MainActivity : ComponentActivity() {
             stopNotePlayback()
         }
         notes.forEach { SavedVoiceNoteRepository.delete(it) }
+        if (notes.isNotEmpty()) SyncRevisionStore.markLocalModified(this)
         refreshSavedNotes()
     }
 
@@ -571,23 +778,33 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createFreshBackup() {
-        TopicLibraryRepository.createFreshBackup(this)
-            .onSuccess { backup ->
-                val status = CloudSyncManager.status(this)
-                if (status.destinationName != null && status.mode != CloudSyncManager.Mode.OFF) {
-                    CloudSyncManager.enqueueNow(this)
-                    backupStatus.value =
-                        "Fresh full backup created (${backup.length() / 1024} KB); cloud sync queued"
-                } else {
-                    backupStatus.value =
-                        "Fresh full backup created locally (${backup.length() / 1024} KB); enable cloud sync to upload"
+        if (backupStatus.value.startsWith("Creating fresh full backup")) return
+        backupStatus.value = "Creating fresh full backup… Please keep Rider Notes open."
+        SyncRevisionStore.markLocalModified(this)
+        Thread {
+            TopicLibraryRepository.createFreshBackup(this)
+                .onSuccess { backup ->
+                    runOnUiThread {
+                        val status = CloudSyncManager.status(this)
+                        backupStatus.value = if (
+                            status.destinationName != null &&
+                            status.mode != CloudSyncManager.Mode.OFF
+                        ) {
+                            "Fresh full backup ready (${backup.length() / 1024} KB). Press Upload local changes to send it to ${status.destinationName}."
+                        } else {
+                            "Fresh full backup ready locally (${backup.length() / 1024} KB). Choose a cloud folder and enable sync before uploading local changes."
+                        }
+                        cloudSyncStatus.value = CloudSyncManager.status(this)
+                    }
                 }
-                cloudSyncStatus.value = CloudSyncManager.status(this)
-            }
-            .onFailure { error ->
-                backupStatus.value =
-                    "Fresh backup failed: ${error.javaClass.simpleName}"
-            }
+                .onFailure { error ->
+                    runOnUiThread {
+                        backupStatus.value =
+                            "Fresh backup failed: ${error.javaClass.simpleName}"
+                        cloudSyncStatus.value = CloudSyncManager.status(this)
+                    }
+                }
+        }.start()
     }
 
     private fun startTopicRecording(groupId: String, index: Int?) {
@@ -641,6 +858,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun playOrPauseNote(note: SavedVoiceNote) {
+        if (note.textOnly || note.audioFile.length() == 0L) return
         if (playingFileName.value == note.audioFile.name) {
             val player = notePlayer ?: return
             if (player.isPlaying) {
@@ -784,7 +1002,7 @@ class MainActivity : ComponentActivity() {
                 importedNotes += 1
             }
             refreshSavedNotes()
-            CloudSyncManager.enqueueNow(this)
+            SyncRevisionStore.markLocalModified(this)
             backupStatus.value =
                 "Backup restored: $importedNotes note(s), $importedFiles file(s). " +
                     "Expand its source heading to view it."
@@ -870,7 +1088,7 @@ class MainActivity : ComponentActivity() {
             return false
         }
         refreshSavedNotes()
-        CloudSyncManager.enqueueNow(this)
+        if (updated > 0) SyncRevisionStore.markLocalModified(this)
         backupStatus.value = if (updated > 0) {
             "Link saved to $updated ${note.sourceApp} recording(s) with the same title and channel."
         } else {
@@ -1028,6 +1246,7 @@ private fun DetectorScreen(
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
+    onCheckCloud: () -> Unit,
     onCreateFreshBackup: () -> Unit,
     onStartTopicRecording: (String, Int?) -> Unit,
     onStopTopicRecording: () -> Unit,
@@ -1041,6 +1260,9 @@ private fun DetectorScreen(
     val expandedSources = remember { mutableStateOf<Set<String>>(emptySet()) }
     val expandedTitles = remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectedNotePaths = remember { mutableStateOf<Set<String>>(emptySet()) }
+    val requestedOriginalNotePath = remember { mutableStateOf<String?>(null) }
+    val highlightedOriginalNotePath = remember { mutableStateOf<String?>(null) }
+    val notesListState = rememberLazyListState()
     val showDeleteConfirmation = remember { mutableStateOf(false) }
     val showLinkGuide = remember { mutableStateOf(false) }
     val showSharedLinkDetails = remember { mutableStateOf(false) }
@@ -1050,13 +1272,119 @@ private fun DetectorScreen(
     val cloudWebLinkText = remember { mutableStateOf("") }
     val cloudWebLinkError = remember { mutableStateOf(false) }
     val addToTopicNote = remember { mutableStateOf<SavedVoiceNote?>(null) }
+    val notesSearchQuery = remember { mutableStateOf("") }
     val context = LocalContext.current
     val topicPickerLibrary = remember { mutableStateOf(TopicLibraryRepository.load(context)) }
     val topicPickerGroupId = remember { mutableStateOf<String?>(null) }
     val topicPickerCreatingFolder = remember { mutableStateOf(false) }
     val topicPickerNewFolderName = remember { mutableStateOf("") }
+    val setupPreferences = remember {
+        context.getSharedPreferences("rider_notes_first_run_guide", Context.MODE_PRIVATE)
+    }
+    val setupGuideStep = remember {
+        mutableIntStateOf(
+            if (setupPreferences.getBoolean("completed", false)) -1
+            else setupPreferences.getInt("step", 0).coerceIn(0, 5)
+        )
+    }
+    val setupGuideIsDemo = remember { mutableStateOf(false) }
     val selectedNotes = savedNotes.value.filter {
         it.audioFile.absolutePath in selectedNotePaths.value
+    }
+
+    fun advanceSetupGuide() {
+        var next = setupGuideStep.intValue + 1
+        if (setupGuideIsDemo.value && next == 1 && detectorEnabled.value) next = 2
+        if (next > 5) {
+            if (!setupGuideIsDemo.value) {
+                setupPreferences.edit().putBoolean("completed", true).remove("step").apply()
+            }
+            setupGuideStep.intValue = -1
+            setupGuideIsDemo.value = false
+        } else {
+            setupGuideStep.intValue = next
+            if (!setupGuideIsDemo.value) setupPreferences.edit().putInt("step", next).apply()
+        }
+    }
+
+    if (setupGuideStep.intValue >= 0) {
+        val step = setupGuideStep.intValue
+        val titles = listOf(
+            "Add Rider Record to Quick Settings",
+            "Enable the Rider Notes button service",
+            "Choose your cloud-sync folder",
+            "Review gesture actions",
+            "Choose transcription language",
+            "Train your Bluetooth button"
+        )
+        val descriptions = listOf(
+            "Adds the Rider Record tile so you can start or stop a note without Beauty-R1. Confirm the Android dialog, then place the tile in Quick Settings.",
+            "Android Accessibility must allow Rider Notes to receive the configured remote-button events while another media app is open.",
+            "Choose a Google Drive, OneDrive, or other Android document-provider folder, then select Off, Wi-Fi only, or any network on the Home page.",
+            "The defaults are single: play/pause, double: record, triple: rewind, and four presses: forward. You can change every mapping later on Home.",
+            "Choose Auto, English, or Kannada. This controls the language request sent to Scrib for future transcripts.",
+            "Optional: train another Bluetooth remote by pressing its button four times within 15 seconds. Beauty-R1 remains the default until training succeeds."
+        )
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("First-time setup ${step + 1} of 6\n${titles[step]}") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(descriptions[step])
+                    when (step) {
+                        0 -> Button(onClick = onAddQuickTile, modifier = Modifier.fillMaxWidth()) {
+                            Text("Add Rider Record tile")
+                        }
+                        1 -> Button(onClick = onOpenAccessibilitySettings, modifier = Modifier.fillMaxWidth()) {
+                            Text("Open Accessibility settings")
+                        }
+                        2 -> Button(onClick = onChooseCloudFolder, modifier = Modifier.fillMaxWidth()) {
+                            Text("Choose cloud folder")
+                        }
+                        3 -> Text(
+                            "Current mappings are shown in Gesture action settings on Home after this guide.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        4 -> Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf(
+                                ScribTranscriber.LANGUAGE_AUTO to "Auto",
+                                ScribTranscriber.LANGUAGE_ENGLISH to "English",
+                                ScribTranscriber.LANGUAGE_KANNADA to "Kannada"
+                            ).forEach { (mode, label) ->
+                                val selected = transcriptionLanguage.value == mode
+                                if (selected) Button(
+                                    onClick = { onSelectTranscriptionLanguage(mode) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("✓ $label") }
+                                else OutlinedButton(
+                                    onClick = { onSelectTranscriptionLanguage(mode) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text(label) }
+                            }
+                        }
+                        5 -> Button(onClick = onStartRemoteSetup, modifier = Modifier.fillMaxWidth()) {
+                            Text("Start 15-second remote training")
+                        }
+                    }
+                    Text(
+                        if (setupGuideIsDemo.value) {
+                            "Demo mode: configured Accessibility is skipped automatically. No existing setting is reset."
+                        } else {
+                            "This guide is shown only after a new installation. Skipping affects only this step; every option remains available on Home."
+                        },
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = ::advanceSetupGuide) {
+                    Text(if (step == 5) "Finish setup" else "Next")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = ::advanceSetupGuide) { Text("Skip this step") }
+            }
+        )
     }
 
     if (showCloudWebLinkDialog.value) {
@@ -1066,7 +1394,7 @@ private fun DetectorScreen(
             text = {
                 Column {
                     Text(
-                        "Paste the browser link for the same folder used by automatic sync " +
+                        "Paste the browser link for the same folder used by cloud backup " +
                             "(Google Drive, OneDrive, Dropbox, or another provider)."
                     )
                     OutlinedTextField(
@@ -1100,6 +1428,7 @@ private fun DetectorScreen(
             note = note,
             isPlaying = playingFileName.value == note.audioFile.name,
             isSelected = note.audioFile.absolutePath in selectedNotePaths.value,
+            isHighlighted = note.audioFile.absolutePath == highlightedOriginalNotePath.value,
             onSelectionChange = { selected ->
                 selectedNotePaths.value = if (selected) {
                     selectedNotePaths.value + note.audioFile.absolutePath
@@ -1329,16 +1658,44 @@ private fun DetectorScreen(
                 .padding(innerPadding)
                 .padding(horizontal = 18.dp, vertical = 14.dp)
         ) {
-            Text(
-                text = "Rider Notes",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Rider Notes",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(onClick = {
+                    setupGuideIsDemo.value = true
+                    setupGuideStep.intValue = 0
+                }) { Text("Show demo") }
+            }
             Text(
                 text = "Bluetooth media controls and voice notes",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            val topSyncState = cloudSyncStatus.value.syncState
+            if (cloudSyncStatus.value.syncRecommended) {
+                val offline = topSyncState == CloudSyncManager.SyncState.OFFLINE_PENDING
+                Button(
+                    onClick = { selectedTab.value = 0 },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (offline) Color(0xFFFFC107) else Color(0xFFC62828),
+                        contentColor = if (offline) Color(0xFF1F1F1F) else Color.White
+                    )
+                ) {
+                    Text(
+                        if (offline) {
+                            "⚠ Phone changes not uploaded · offline · tap for sync"
+                        } else {
+                            "⚠ Phone changes need upload · tap for sync"
+                        }
+                    )
+                }
+            }
 
             Spacer(Modifier.height(12.dp))
             Row(
@@ -1359,15 +1716,15 @@ private fun DetectorScreen(
                         Text("Notes (${savedNotes.value.size})")
                     }
                 }
-                if (selectedTab.value == 2) {
-                    Button(onClick = { selectedTab.value = 2 }) { Text("Log") }
-                } else {
-                    OutlinedButton(onClick = { selectedTab.value = 2 }) { Text("Log") }
-                }
                 if (selectedTab.value == 3) {
                     Button(onClick = { selectedTab.value = 3 }) { Text("Topics") }
                 } else {
                     OutlinedButton(onClick = { selectedTab.value = 3 }) { Text("Topics") }
+                }
+                if (selectedTab.value == 2) {
+                    Button(onClick = { selectedTab.value = 2 }) { Text("Log") }
+                } else {
+                    OutlinedButton(onClick = { selectedTab.value = 2 }) { Text("Log") }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -1574,12 +1931,30 @@ private fun DetectorScreen(
                                     modifier = Modifier.padding(14.dp),
                                     verticalArrangement = Arrangement.spacedBy(7.dp)
                                 ) {
-                                    Text("Automatic cloud sync", fontWeight = FontWeight.Bold)
+                                    Text("Cloud backup and manual upload", fontWeight = FontWeight.Bold)
                                     Text(
                                         cloudSyncStatus.value.destinationName?.let {
                                             "Cloud folder: $it"
                                         } ?: "No cloud folder selected"
                                     )
+                                    val revisionFormatter = SimpleDateFormat(
+                                        "dd MMM yyyy, h:mm a",
+                                        Locale.getDefault()
+                                    )
+                                    cloudSyncStatus.value.localRevision?.let { revision ->
+                                        Text(
+                                            "Phone copy: ${revision.deviceName} · " +
+                                                revisionFormatter.format(Date(revision.modifiedAtEpochMs)),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    cloudSyncStatus.value.cloudRevision?.let { revision ->
+                                        Text(
+                                            "Cloud copy: ${revision.deviceName} · " +
+                                                revisionFormatter.format(Date(revision.modifiedAtEpochMs)),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
                                     cloudSyncStatus.value.destinationWebUrl?.let { webUrl ->
                                         TextButton(onClick = onOpenCloudFolder) {
                                             Text(
@@ -1640,36 +2015,105 @@ private fun DetectorScreen(
                                             ) { Text(mode.label) }
                                         }
                                     }
+                                    val syncState = cloudSyncStatus.value.syncState
+                                    val syncEnabled = syncState in setOf(
+                                        CloudSyncManager.SyncState.RECOMMENDED,
+                                        CloudSyncManager.SyncState.OFFLINE_PENDING,
+                                        CloudSyncManager.SyncState.FAILED
+                                    )
+                                    val syncContainerColor = when (syncState) {
+                                        CloudSyncManager.SyncState.RECOMMENDED,
+                                        CloudSyncManager.SyncState.QUEUED,
+                                        CloudSyncManager.SyncState.SYNCING -> Color(0xFFD81B60)
+                                        CloudSyncManager.SyncState.OFFLINE_PENDING -> Color(0xFFFFC107)
+                                        CloudSyncManager.SyncState.FAILED -> Color(0xFFC62828)
+                                        CloudSyncManager.SyncState.COMPLETED -> Color(0xFF2E7D32)
+                                        else -> Color(0xFF9E9E9E)
+                                    }
+                                    val syncLabel = when (syncState) {
+                                        CloudSyncManager.SyncState.UP_TO_DATE -> "Local changes uploaded — up to date"
+                                        CloudSyncManager.SyncState.RECOMMENDED -> "Upload local changes — recommended"
+                                        CloudSyncManager.SyncState.OFFLINE_PENDING -> "Upload local changes — offline"
+                                        CloudSyncManager.SyncState.QUEUED -> "Upload queued…"
+                                        CloudSyncManager.SyncState.SYNCING -> "Uploading local changes…"
+                                        CloudSyncManager.SyncState.FAILED -> "Upload failed — retry"
+                                        CloudSyncManager.SyncState.COMPLETED -> "Upload completed"
+                                        CloudSyncManager.SyncState.CLOUD_UPDATE_AVAILABLE -> "Cloud update available"
+                                        CloudSyncManager.SyncState.DISABLED -> "Upload local changes"
+                                    }
                                     Button(
                                         onClick = onSyncNow,
-                                        enabled = cloudSyncStatus.value.destinationName != null &&
-                                            cloudSyncStatus.value.mode != CloudSyncManager.Mode.OFF
+                                        enabled = syncEnabled,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = syncContainerColor,
+                                            contentColor = if (syncState == CloudSyncManager.SyncState.OFFLINE_PENDING) {
+                                                Color(0xFF1F1F1F)
+                                            } else Color.White,
+                                            disabledContainerColor = syncContainerColor,
+                                            disabledContentColor = Color.White
+                                        )
                                     ) {
-                                        Text("Sync now")
+                                        Text(syncLabel)
                                     }
                                     OutlinedButton(
-                                        onClick = onCreateFreshBackup,
+                                        onClick = onCheckCloud,
+                                        enabled = cloudSyncStatus.value.destinationName != null,
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Text("Create fresh full backup")
-                                    }
-                                    Text(
-                                        "Creates RiderNotes_Full_Backup.zip with every note, transcript, " +
-                                            "recording, Topic folder, and attachment, then queues upload " +
-                                            "when cloud sync is enabled. This ZIP can be opened by Rider Notes PC.",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                    if (cloudSyncStatus.value.message.isNotBlank()) {
                                         Text(
-                                            cloudSyncStatus.value.message,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.primary
+                                            if (syncState == CloudSyncManager.SyncState.CLOUD_UPDATE_AVAILABLE) {
+                                                "Review cloud update"
+                                            } else {
+                                                "Check cloud for updates"
+                                            }
                                         )
                                     }
                                     Text(
-                                        "New and locally changed recordings, metadata, and transcripts " +
-                                            "are uploaded automatically. Cloud copies are not deleted " +
-                                            "when a local note is deleted."
+                                        "Checks whether Rider Notes PC or another phone uploaded a newer " +
+                                            "version. If found, you can merge it, use the cloud copy, or keep " +
+                                            "this phone as the base.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    OutlinedButton(
+                                        onClick = onCreateFreshBackup,
+                                        enabled = !backupStatus.value.startsWith("Creating fresh full backup"),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            if (backupStatus.value.startsWith("Creating fresh full backup")) {
+                                                "Creating fresh full backup…"
+                                            } else {
+                                                "Create fresh full backup"
+                                            }
+                                        )
+                                    }
+                                    Text(
+                                        "Creates RiderNotes_Full_Backup.zip with every note, transcript, " +
+                                            "recording, Topic folder, and attachment. When it is ready, " +
+                                            "press Upload local changes to send it. This ZIP can be opened by Rider Notes PC.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    if (cloudSyncStatus.value.message.isNotBlank()) {
+                                        val statusColor = when (syncState) {
+                                            CloudSyncManager.SyncState.FAILED -> Color(0xFFC62828)
+                                            CloudSyncManager.SyncState.COMPLETED -> Color(0xFF2E7D32)
+                                            CloudSyncManager.SyncState.OFFLINE_PENDING -> Color(0xFF8A6D00)
+                                            CloudSyncManager.SyncState.RECOMMENDED,
+                                            CloudSyncManager.SyncState.QUEUED,
+                                            CloudSyncManager.SyncState.SYNCING -> Color(0xFFD81B60)
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }
+                                        Text(
+                                            cloudSyncStatus.value.message,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = statusColor
+                                        )
+                                    }
+                                    Text(
+                                        "New and locally changed recordings, metadata, transcripts, and " +
+                                            "Topics remain pending on this phone until you press Upload local " +
+                                            "changes. Background checks only look for newer cloud versions."
                                     )
                                 }
                             }
@@ -1688,9 +2132,85 @@ private fun DetectorScreen(
                 }
 
                 1 -> {
+                    val notesSearchActive = notesSearchQuery.value.isNotBlank()
                     val notesBySource = savedNotes.value
+                        .filter { !notesSearchActive || savedNoteSearchMatches(it, notesSearchQuery.value) }
                         .groupBy { it.sourceApp }
                         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+
+                    LaunchedEffect(
+                        requestedOriginalNotePath.value,
+                        selectedTab.value,
+                        notesBySource,
+                        expandedSources.value,
+                        expandedTitles.value
+                    ) {
+                        val requestedPath = requestedOriginalNotePath.value
+                        if (selectedTab.value != 1 || requestedPath == null) return@LaunchedEffect
+                        var targetIndex: Int? = null
+                        var index = 0
+                        notesBySource.forEach { (source, sourceNotes) ->
+                            index += 1 // source heading
+                            if (source in expandedSources.value || notesSearchActive) {
+                                index += 1 // select-all row
+                                if (supportsTitleGrouping(source)) {
+                                    val notesByTitle = sourceNotes
+                                        .groupBy { titleGroupKey(source, it) }
+                                        .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                                    notesByTitle.forEach { (groupKey, titleNotes) ->
+                                        index += 1 // title heading
+                                        val titleKey = "$source::$groupKey"
+                                        if (titleKey in expandedTitles.value || notesSearchActive) {
+                                            titleNotes.sortedByDescending { it.recordedAtEpochMs }.forEach { note ->
+                                                if (note.audioFile.absolutePath == requestedPath) {
+                                                    targetIndex = index
+                                                }
+                                                index += 1
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    sourceNotes.sortedByDescending { it.recordedAtEpochMs }.forEach { note ->
+                                        if (note.audioFile.absolutePath == requestedPath) {
+                                            targetIndex = index
+                                        }
+                                        index += 1
+                                    }
+                                }
+                            }
+                        }
+                        targetIndex?.let {
+                            delay(80)
+                            notesListState.animateScrollToItem(it)
+                            highlightedOriginalNotePath.value = requestedPath
+                            requestedOriginalNotePath.value = null
+                        }
+                    }
+
+                    LaunchedEffect(highlightedOriginalNotePath.value) {
+                        val highlightedPath = highlightedOriginalNotePath.value
+                            ?: return@LaunchedEffect
+                        delay(3_000)
+                        if (highlightedOriginalNotePath.value == highlightedPath) {
+                            highlightedOriginalNotePath.value = null
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = notesSearchQuery.value,
+                        onValueChange = { notesSearchQuery.value = it },
+                        label = { Text("Search Notes (* wildcard)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (notesSearchActive) {
+                        Text(
+                            "${notesBySource.values.sumOf { it.size }} matching note(s). Search is not case-sensitive.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
 
                     if (sharedLinkStatus.value.isNotBlank()) {
                         Card(
@@ -1781,6 +2301,7 @@ private fun DetectorScreen(
                         }
                     } else {
                         LazyColumn(
+                            state = notesListState,
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
@@ -1809,7 +2330,7 @@ private fun DetectorScreen(
                                     }
                                 }
 
-                                if (source in expandedSources.value) {
+                                if (source in expandedSources.value || notesSearchActive) {
                                     item(key = "select-source-$source") {
                                         val paths = sourceNotes.mapTo(mutableSetOf()) { it.audioFile.absolutePath }
                                         val allSelected = paths.all { it in selectedNotePaths.value }
@@ -1876,7 +2397,7 @@ private fun DetectorScreen(
                                                     }) { Text(if (allTitleSelected) "Clear this title selection" else "Select all in this title") }
                                                 }
                                             }
-                                            if (titleKey in expandedTitles.value) {
+                                            if (titleKey in expandedTitles.value || notesSearchActive) {
                                                 items(
                                                     items = titleNotes.sortedByDescending {
                                                         it.recordedAtEpochMs
@@ -1913,7 +2434,17 @@ private fun DetectorScreen(
                         playbackPaused = playbackPaused.value,
                         onSeekRecording = onSeekNote,
                         onStopPlayback = onStopNote,
-                        onRefreshNotes = onRefreshNotes
+                        onRefreshNotes = onRefreshNotes,
+                        onGoToOriginalNote = { note ->
+                            notesSearchQuery.value = ""
+                            expandedSources.value = expandedSources.value + note.sourceApp
+                            if (supportsTitleGrouping(note.sourceApp)) {
+                                val groupKey = titleGroupKey(note.sourceApp, note)
+                                expandedTitles.value = expandedTitles.value + "${note.sourceApp}::$groupKey"
+                            }
+                            requestedOriginalNotePath.value = note.audioFile.absolutePath
+                            selectedTab.value = 1
+                        }
                     )
                 }
 
@@ -2011,6 +2542,7 @@ private fun SavedNoteCard(
     note: SavedVoiceNote,
     isPlaying: Boolean,
     isSelected: Boolean,
+    isHighlighted: Boolean,
     onSelectionChange: (Boolean) -> Unit,
     playbackPositionMs: Long,
     playbackDurationMs: Long,
@@ -2027,7 +2559,10 @@ private fun SavedNoteCard(
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isHighlighted) Color(0xFFFFF176)
+            else MaterialTheme.colorScheme.surfaceVariant
+        ),
         modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongPress)
     ) {
         Column(
@@ -2045,6 +2580,11 @@ private fun SavedNoteCard(
                 Text(note.title, fontWeight = FontWeight.Bold)
             }
             Text("${note.sourceApp} · ${note.recordedAtLabel}")
+            Text(
+                "Origin: ${note.originDeviceName ?: "Legacy / unknown device"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             note.module?.let { Text("Module: $it") }
             note.author?.let { Text("${creatorLabel(note.sourceApp)}: $it") }
             note.chapter?.let {
@@ -2075,18 +2615,20 @@ private fun SavedNoteCard(
                     )
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onPlay) {
-                    Text(
-                        when {
-                            !isPlaying -> "Play recording"
-                            isPaused -> "Resume"
-                            else -> "Pause"
-                        }
-                    )
-                }
-                if (isPlaying) {
-                    OutlinedButton(onClick = onStop) { Text("Stop") }
+            if (!note.textOnly && note.audioFile.length() > 0L) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onPlay) {
+                        Text(
+                            when {
+                                !isPlaying -> "Play recording"
+                                isPaused -> "Resume"
+                                else -> "Pause"
+                            }
+                        )
+                    }
+                    if (isPlaying) {
+                        OutlinedButton(onClick = onStop) { Text("Stop") }
+                    }
                 }
             }
             if (isPlaying && playbackDurationMs > 0L) {
@@ -2101,11 +2643,16 @@ private fun SavedNoteCard(
                     style = MaterialTheme.typography.bodySmall
                 )
             }
-            Text(
-                "Audio: ${note.audioFile.name}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            if (!note.transcript.isNullOrBlank()) {
+            if (note.textOnly) {
+                Text("Typed note", fontWeight = FontWeight.SemiBold)
+                Text(note.typedNote.orEmpty())
+            } else {
+                Text(
+                    "Audio: ${note.audioFile.name}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (!note.textOnly && !note.transcript.isNullOrBlank()) {
                 Text("Transcript", fontWeight = FontWeight.SemiBold)
                 if (isPlaying && playbackDurationMs > 0L) {
                     PlaybackHighlightedTranscript(
@@ -2116,7 +2663,7 @@ private fun SavedNoteCard(
                 } else {
                     Text(note.transcript)
                 }
-            } else {
+            } else if (!note.textOnly) {
                 Text(
                     "Transcript: ${note.transcriptionStatus.lowercase().replace('_', ' ')}",
                     style = MaterialTheme.typography.bodySmall
@@ -2320,6 +2867,29 @@ private fun EmptyInstructions() {
             Text("4. Clear, repeat for each physical button, then copy the results.")
         }
     }
+}
+
+private fun savedNoteSearchMatches(note: SavedVoiceNote, query: String): Boolean {
+    val searchable = listOfNotNull(
+        note.sourceApp,
+        note.title,
+        note.module,
+        note.chapter,
+        note.author,
+        note.transcript,
+        note.typedNote,
+        note.sourceUrl,
+        note.audioFile.name
+    ).joinToString("\n")
+    val parts = query.trim().split('*').filter(String::isNotBlank)
+    if (parts.isEmpty()) return true
+    var from = 0
+    parts.forEach { part ->
+        val found = searchable.indexOf(part, startIndex = from, ignoreCase = true)
+        if (found < 0) return false
+        from = found + part.length
+    }
+    return true
 }
 
 @Composable

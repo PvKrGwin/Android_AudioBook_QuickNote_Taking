@@ -17,6 +17,10 @@ dependencies {
     implementation(compose.desktop.currentOs)
     implementation(compose.material3)
     implementation(libs.json)
+    val javafxVersion = "17.0.14"
+    implementation("org.openjfx:javafx-base:$javafxVersion:win")
+    implementation("org.openjfx:javafx-graphics:$javafxVersion:win")
+    implementation("org.openjfx:javafx-media:$javafxVersion:win")
     testImplementation(kotlin("test"))
 }
 
@@ -26,14 +30,30 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "RiderNotesPC"
-            packageVersion = "0.1.0"
+            packageVersion = "0.1.11"
             description = "Windows companion for Rider Notes backups"
             vendor = "Praveen Kumar V"
-            modules("java.desktop")
+            // Compose Desktop and JavaFX Media need more than java.desktop at runtime.
+            // Keep these explicit so jpackage cannot produce a launcher whose JVM starts
+            // without the modules required by the UI/audio stack.
+            modules(
+                "java.desktop",
+                "java.logging",
+                "java.management",
+                "java.naming",
+                "java.prefs",
+                "java.rmi",
+                "java.scripting",
+                "java.sql",
+                "java.xml",
+                "jdk.unsupported"
+            )
             windows {
+                console = false
                 menuGroup = "Rider Notes"
                 shortcut = true
                 perUserInstall = true
+                iconFile.set(project.file("src/main/resources/rider_notes.ico"))
             }
         }
     }

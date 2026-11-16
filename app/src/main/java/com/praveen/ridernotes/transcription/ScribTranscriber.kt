@@ -1,5 +1,7 @@
 package com.praveen.ridernotes.transcription
 
+import com.praveen.ridernotes.cloud.SyncRevisionStore
+
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -8,7 +10,6 @@ import android.os.IBinder
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
-import com.praveen.ridernotes.cloud.CloudSyncManager
 import org.json.JSONArray
 import org.json.JSONObject
 import org.opentranscribe.api.ITranscriptionCallback
@@ -50,6 +51,7 @@ object ScribTranscriber {
 
     private val queue = ArrayDeque<QueuedJob>()
     private var activeJob: ActiveJob? = null
+    private var revisionContext: Context? = null
     private val timeoutHandler = Handler(Looper.getMainLooper())
     private var activeTimeout: Runnable? = null
 
@@ -98,6 +100,7 @@ object ScribTranscriber {
 
     @Synchronized
     fun enqueue(context: Context, audioFile: File) {
+        revisionContext = context.applicationContext
         val savedTimeout = readTimeout(metadataFileFor(audioFile))
         enqueue(context, audioFile, savedTimeout)
     }
@@ -127,6 +130,7 @@ object ScribTranscriber {
 
     @Synchronized
     fun stop(context: Context, audioFile: File): String {
+        revisionContext = context.applicationContext
         val queued = queue.firstOrNull { it.file.absolutePath == audioFile.absolutePath }
         if (queued != null) {
             queue.remove(queued)
@@ -145,6 +149,7 @@ object ScribTranscriber {
 
     @Synchronized
     fun retry(context: Context, audioFile: File): String {
+        revisionContext = context.applicationContext
         val wasTimedOut = readStatus(metadataFileFor(audioFile)) == "TIMED_OUT"
         stop(context, audioFile)
         val timeoutMs = if (wasTimedOut) RETRY_AFTER_TIMEOUT_MS else NORMAL_TIMEOUT_MS
@@ -244,7 +249,6 @@ object ScribTranscriber {
                                     audioFile.nameWithoutExtension + ".txt"
                                 ).writeText(transcript)
                             }
-                            CloudSyncManager.enqueueNow(appContext)
                             finishActive(appContext, audioFile, startNext = true)
                         }
 
@@ -268,7 +272,6 @@ object ScribTranscriber {
                                 ?: error?.type?.toString()
                                 ?: "Unknown Scrib error"
                             updateMetadata(metadataFile, "FAILED", error = detail)
-                            CloudSyncManager.enqueueNow(appContext)
                             finishActive(appContext, audioFile, startNext = true)
                         }
                     }
@@ -451,6 +454,7 @@ object ScribTranscriber {
                 json.remove("transcriptionError")
             }
             metadataFile.writeText(json.toString(2))
+            revisionContext?.let(SyncRevisionStore::markLocalModified)
         } catch (_: Exception) {
             // Audio remains available even if transcript metadata cannot update.
         }

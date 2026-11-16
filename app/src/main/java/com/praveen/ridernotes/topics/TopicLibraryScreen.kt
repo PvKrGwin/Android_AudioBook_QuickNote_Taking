@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,18 +17,25 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,6 +52,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -64,7 +77,8 @@ fun TopicLibraryScreen(
     playbackPaused: Boolean,
     onSeekRecording: (Long) -> Unit,
     onStopPlayback: () -> Unit,
-    onRefreshNotes: () -> Unit
+    onRefreshNotes: () -> Unit,
+    onGoToOriginalNote: (SavedVoiceNote) -> Unit
 ) {
     val context = LocalContext.current
     var library by remember { mutableStateOf(TopicLibraryRepository.load(context)) }
@@ -72,6 +86,8 @@ fun TopicLibraryScreen(
     var dialog by remember { mutableStateOf<String?>(null) }
     var inputTitle by remember { mutableStateOf("") }
     var inputBody by remember { mutableStateOf("") }
+    var inputNotes by remember { mutableStateOf("") }
+    var pendingAttachmentNotes by remember { mutableStateOf<String?>(null) }
     var insertionIndex by remember { mutableIntStateOf(-1) }
     var actionPlacement by remember { mutableStateOf<TopicPlacement?>(null) }
     var linkItemId by remember { mutableStateOf<String?>(null) }
@@ -84,6 +100,24 @@ fun TopicLibraryScreen(
     var restoreStatus by remember { mutableStateOf<String?>(null) }
     var addMenuExpanded by remember { mutableStateOf(false) }
     var recordingElapsedSeconds by remember { mutableStateOf(0L) }
+    var filterColor by remember { mutableStateOf<String?>(null) }
+    var filterStarred by remember { mutableStateOf(false) }
+    var showFilterColorDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var toolsExpanded by remember { mutableStateOf(false) }
+    var selectedPlacementIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var editingItemId by remember { mutableStateOf<String?>(null) }
+    var editTitle by remember { mutableStateOf("") }
+    var editUrl by remember { mutableStateOf("") }
+    var editBody by remember { mutableStateOf(TextFieldValue("")) }
+    var editBold by remember { mutableStateOf(false) }
+    var editItalic by remember { mutableStateOf(false) }
+    var editUnderline by remember { mutableStateOf(false) }
+    var editStrike by remember { mutableStateOf(false) }
+    var editBullets by remember { mutableStateOf(false) }
+    var editFont by remember { mutableStateOf<FontFamily?>(null) }
+    var editTextColor by remember { mutableStateOf(Color.Unspecified) }
 
     LaunchedEffect(isRecording, recordingStartedAtElapsedMs) {
         if (!isRecording || recordingStartedAtElapsedMs == null) {
@@ -98,15 +132,33 @@ fun TopicLibraryScreen(
         }
     }
 
+    LaunchedEffect(currentGroupId) {
+        selectedPlacementIds = emptySet()
+    }
+
     fun refresh() { library = TopicLibraryRepository.load(context) }
-    fun resetInput() { inputTitle = ""; inputBody = ""; insertionIndex = -1; dialog = null }
+    fun resetInput() { inputTitle = ""; inputBody = ""; inputNotes = ""; editBody = TextFieldValue(""); insertionIndex = -1; dialog = null }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val groupId = currentGroupId
         if (uri != null && groupId != null) {
-            TopicLibraryRepository.addAttachment(context, groupId, uri, insertionIndex.takeIf { it >= 0 })
+            TopicLibraryRepository.addAttachment(
+                context,
+                groupId,
+                uri,
+                insertionIndex.takeIf { it >= 0 },
+                pendingAttachmentNotes
+            )
             refresh()
         }
+        pendingAttachmentNotes = null
         insertionIndex = -1
+    }
+    val replacementPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val itemId = editingItemId
+        if (uri != null && itemId != null) {
+            TopicLibraryRepository.replaceAttachment(context, itemId, uri)
+            refresh()
+        }
     }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -117,9 +169,39 @@ fun TopicLibraryScreen(
     }
 
     val currentGroup = library.groups.firstOrNull { it.id == currentGroupId }
-    val childGroups = library.groups.filter { it.parentId == currentGroupId }.sortedBy { it.order }
-    val placements = currentGroupId?.let { id -> library.placements.filter { it.groupId == id }.sortedBy { it.order } }.orEmpty()
     val itemById = library.items.associateBy { it.id }
+    val matchingPlacements = library.placements.filter { placement ->
+        val item = itemById[placement.itemId]
+        val linkedNote = item?.target?.let { target ->
+            savedNotes.firstOrNull { it.audioFile.name == target }
+        }
+        (filterColor == null || placement.color == filterColor) &&
+            (!filterStarred || placement.important) &&
+            (searchQuery.isBlank() || topicSearchMatches(item, linkedNote, searchQuery))
+    }
+    val relevantGroupIds = matchingPlacements.mapTo(mutableSetOf()) { it.groupId }.apply {
+        var changed: Boolean
+        do {
+            changed = false
+            library.groups.filter { it.id in this }.mapNotNull { it.parentId }.forEach { parent ->
+                if (add(parent)) changed = true
+            }
+        } while (changed)
+    }
+    val filtering = filterColor != null || filterStarred || searchQuery.isNotBlank()
+    val childGroups = library.groups
+        .filter { it.parentId == currentGroupId && (!filtering || it.id in relevantGroupIds) }
+        .sortedBy { it.order }
+    val allCurrentPlacements = currentGroupId?.let { id ->
+        library.placements.filter { it.groupId == id }.sortedBy { it.order }
+    }.orEmpty()
+    val placements = if (searchQuery.isNotBlank()) {
+        matchingPlacements.sortedByDescending { placement ->
+            itemById[placement.itemId]?.createdAt ?: 0L
+        }
+    } else currentGroupId?.let { id ->
+        matchingPlacements.filter { it.groupId == id }.sortedBy { it.order }
+    }.orEmpty()
 
     legendColor?.let { color ->
         InputDialog(
@@ -134,17 +216,163 @@ fun TopicLibraryScreen(
         }
     }
 
+    editingItemId?.let { itemId ->
+        val item = library.items.firstOrNull { it.id == itemId }
+        if (item != null) {
+            AlertDialog(
+                onDismissRequest = { editingItemId = null },
+                title = { Text("Edit Topic point") },
+                text = {
+                    Column(
+                        modifier = Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = editTitle,
+                            onValueChange = { editTitle = it },
+                            label = { Text("Heading") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (item.type == TopicLibraryRepository.TYPE_LINK) {
+                            OutlinedTextField(
+                                value = editUrl,
+                                onValueChange = { editUrl = it },
+                                label = { Text("Link URL") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        MobileRichTextField(
+                            value = editBody,
+                            onValueChange = { editBody = it },
+                            label = if (item.type == TopicLibraryRepository.TYPE_TEXT) "Text" else "Additional text"
+                        )
+                        if (item.type == TopicLibraryRepository.TYPE_ATTACHMENT) {
+                            OutlinedButton(
+                                onClick = { replacementPicker.launch(arrayOf("*/*")) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Replace attachment") }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        TopicLibraryRepository.updateEditablePoint(
+                            context = context,
+                            itemId = item.id,
+                            title = editTitle,
+                            body = editBody.text,
+                            linkUrl = editUrl,
+                            richText = TopicRichText.encode(editBody)
+                        )
+                        editingItemId = null
+                        refresh()
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { editingItemId = null }) { Text("Cancel") } }
+            )
+        }
+    }
+
+    if (pendingPointDeleteIds.isNotEmpty()) {
+        val deletesTopicRecording = pendingPointDeleteIds.any {
+            TopicLibraryRepository.willDeleteTopicRecording(context, it)
+        }
+        AlertDialog(
+            onDismissRequest = { pendingPointDeleteIds = emptySet() },
+            title = { Text("Delete selected Topic point(s)?") },
+            text = {
+                Text(
+                    "Remove ${pendingPointDeleteIds.size} selected point(s) from this Topic? " +
+                        (if (deletesTopicRecording) {
+                            "A Topic-only recording is permanently deleted when this is its final placement."
+                        } else {
+                            "Original media notes and points linked in other Topic folders remain available."
+                        })
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    TopicLibraryRepository.removePlacements(context, pendingPointDeleteIds)
+                    selectedPlacementIds = selectedPlacementIds - pendingPointDeleteIds
+                    pendingPointDeleteIds = emptySet()
+                    onRefreshNotes()
+                    refresh()
+                }) { Text("Yes, delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPointDeleteIds = emptySet() }) { Text("No") }
+            }
+        )
+    }
+
     if (dialog == "group") InputDialog("New group", "Group name", inputTitle, { inputTitle = it }, ::resetInput) {
         if (inputTitle.isNotBlank()) TopicLibraryRepository.createGroup(context, inputTitle, currentGroupId)
         resetInput(); refresh()
     }
-    if (dialog == "text") TwoInputDialog("New text point", "Title", "Text", inputTitle, inputBody, { inputTitle = it }, { inputBody = it }, ::resetInput) {
-        currentGroupId?.let { TopicLibraryRepository.addText(context, it, inputTitle, inputBody, insertionIndex.takeIf { value -> value >= 0 }) }
+    if (dialog == "text") {
+        AlertDialog(
+            onDismissRequest = ::resetInput,
+            title = { Text("New text point") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    OutlinedTextField(
+                        value = inputTitle,
+                        onValueChange = { inputTitle = it },
+                        label = { Text("Heading") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    MobileRichTextField(
+                        value = editBody,
+                        onValueChange = { editBody = it },
+                        label = "Text"
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = editBody.text.isNotBlank(),
+                    onClick = {
+                        currentGroupId?.let {
+                            TopicLibraryRepository.addText(
+                                context = context,
+                                groupId = it,
+                                title = inputTitle,
+                                text = editBody.text,
+                                index = insertionIndex.takeIf { value -> value >= 0 },
+                                richText = TopicRichText.encode(editBody)
+                            )
+                        }
+                        resetInput()
+                        refresh()
+                    }
+                ) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = ::resetInput) { Text("Cancel") } }
+        )
+    }
+    if (dialog == "link") ThreeInputDialog(
+        "New web link", "Title", "https://…", "Notes about this link (optional)",
+        inputTitle, inputBody, inputNotes,
+        { inputTitle = it }, { inputBody = it }, { inputNotes = it }, ::resetInput
+    ) {
+        currentGroupId?.let {
+            TopicLibraryRepository.addLink(
+                context, it, inputTitle, inputBody,
+                insertionIndex.takeIf { value -> value >= 0 }, inputNotes
+            )
+        }
         resetInput(); refresh()
     }
-    if (dialog == "link") TwoInputDialog("New web link", "Title", "https://…", inputTitle, inputBody, { inputTitle = it }, { inputBody = it }, ::resetInput) {
-        currentGroupId?.let { TopicLibraryRepository.addLink(context, it, inputTitle, inputBody, insertionIndex.takeIf { value -> value >= 0 }) }
-        resetInput(); refresh()
+    if (dialog == "attachmentNote") InputDialog(
+        "Attachment notes", "Notes about this file or image (optional)", inputNotes,
+        { inputNotes = it }, ::resetInput
+    ) {
+        pendingAttachmentNotes = inputNotes
+        dialog = null
+        filePicker.launch(arrayOf("*/*"))
     }
     if (dialog == "recordings") {
         AlertDialog(onDismissRequest = { dialog = null }, title = { Text("Add recording") }, text = {
@@ -216,18 +444,29 @@ fun TopicLibraryScreen(
         )
     }
     actionPlacement?.let { placement ->
-        val pointIndex = placements.indexOfFirst { it.id == placement.id }
+        val pointIndex = allCurrentPlacements.indexOfFirst { it.id == placement.id }
+        val actionItem = itemById[placement.itemId]
+        val originalNote = actionItem?.target?.let { target ->
+            savedNotes.firstOrNull { it.audioFile.name == target && !it.topicOnly }
+        }
         AlertDialog(onDismissRequest = { actionPlacement = null }, title = { Text("Point options") }, text = {
-            Column {
+            Column(
+                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())
+            ) {
                 TextButton(onClick = { TopicLibraryRepository.setImportant(context, placement.id, !placement.important); actionPlacement = null; refresh() }) {
                     Text(if (placement.important) "Remove important star" else "Mark as important")
                 }
                 TextButton(onClick = { colorPlacement = placement; actionPlacement = null }) { Text("Set colour") }
                 TextButton(onClick = { TopicLibraryRepository.move(context, placement.id, -1); actionPlacement = null; refresh() }) { Text("Move up") }
                 TextButton(onClick = { TopicLibraryRepository.move(context, placement.id, 1); actionPlacement = null; refresh() }) { Text("Move down") }
-                TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "text"; actionPlacement = null }) { Text("Insert text after this point") }
+                TextButton(onClick = { insertionIndex = pointIndex + 1; editBody = TextFieldValue(""); dialog = "text"; actionPlacement = null }) { Text("Insert text after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "link"; actionPlacement = null }) { Text("Insert web link after this point") }
-                TextButton(onClick = { insertionIndex = pointIndex + 1; actionPlacement = null; filePicker.launch(arrayOf("*/*")) }) { Text("Insert file after this point") }
+                TextButton(onClick = {
+                    insertionIndex = pointIndex + 1
+                    inputNotes = ""
+                    dialog = "attachmentNote"
+                    actionPlacement = null
+                }) { Text("Insert file after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "recordings"; actionPlacement = null }) { Text("Insert existing recording after this point") }
                 TextButton(onClick = { onStartRecording(placement.groupId, pointIndex + 1); actionPlacement = null }) { Text("Record after this point") }
                 TextButton(onClick = {
@@ -235,15 +474,40 @@ fun TopicLibraryScreen(
                     linkItemId = placement.itemId
                     actionPlacement = null
                 }) { Text("Link this point to another group") }
+                TextButton(onClick = {
+                    val editable = actionItem ?: return@TextButton
+                    editingItemId = editable.id
+                    editTitle = editable.title
+                    editUrl = editable.target.takeIf { editable.type == TopicLibraryRepository.TYPE_LINK }.orEmpty()
+                    val body = if (editable.type == TopicLibraryRepository.TYPE_TEXT) editable.text.orEmpty()
+                    else editable.additionalNotes ?: editable.text.orEmpty()
+                    editBody = TopicRichText.decode(body, editable.richText)
+                    editBold = false; editItalic = false; editUnderline = false; editStrike = false
+                    editBullets = false; editFont = null; editTextColor = Color.Unspecified
+                    actionPlacement = null
+                }) {
+                    Text(
+                        when (actionItem?.type) {
+                            TopicLibraryRepository.TYPE_LINK -> "Edit heading, link and text"
+                            TopicLibraryRepository.TYPE_ATTACHMENT -> "Edit heading, text or attachment"
+                            else -> "Edit heading and text"
+                        }
+                    )
+                }
+                TextButton(
+                    enabled = originalNote != null,
+                    onClick = {
+                        originalNote?.let(onGoToOriginalNote)
+                        actionPlacement = null
+                    }
+                ) { Text("Go to original note") }
                 val deletesTopicRecording = TopicLibraryRepository.willDeleteTopicRecording(
                     context,
                     placement.id
                 )
                 TextButton(onClick = {
-                    TopicLibraryRepository.removePlacement(context, placement.id)
+                    pendingPointDeleteIds = setOf(placement.id)
                     actionPlacement = null
-                    onRefreshNotes()
-                    refresh()
                 }) {
                     Text(
                         if (deletesTopicRecording) {
@@ -283,6 +547,31 @@ fun TopicLibraryScreen(
         )
     }
 
+    if (showFilterColorDialog) {
+        AlertDialog(
+            onDismissRequest = { showFilterColorDialog = false },
+            title = { Text("Filter Topics by colour") },
+            text = {
+                LazyColumn {
+                    items(topicColors) { color ->
+                        val meaning = if (color == "WHITE") "Nothing special"
+                        else library.colorLegend[color] ?: "Not defined"
+                        TextButton(onClick = {
+                            filterColor = color
+                            currentGroupId = null
+                            showFilterColorDialog = false
+                        }) {
+                            Text("${color.lowercase().replaceFirstChar { it.uppercase() }} — $meaning")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showFilterColorDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (currentGroup != null) OutlinedButton(onClick = { currentGroupId = currentGroup.parentId }) { Text("← Back", fontSize = 11.sp) }
@@ -290,16 +579,122 @@ fun TopicLibraryScreen(
                 currentGroup?.let { groupPath(library, it) } ?: "Topic groups",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 12.dp).weight(1f)
+                modifier = Modifier.weight(1f)
             )
-            if (currentGroup != null) TextButton(onClick = { legendExpanded = true }) { Text("🎨 Legend", fontSize = 11.sp) }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Button(onClick = { inputTitle = ""; dialog = "group" }) { Text(if (currentGroup == null) "+ Group" else "+ Subgroup", fontSize = 11.sp) }
-            OutlinedButton(onClick = { onRefreshNotes(); refresh() }) { Text("Refresh", fontSize = 11.sp) }
-            if (currentGroup == null) OutlinedButton(onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Restore backup", fontSize = 11.sp) }
-            if (currentGroup != null) {
-                OutlinedButton(onClick = { addMenuExpanded = true }) { Text("＋ Add point", fontSize = 11.sp) }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(onClick = { toolsExpanded = !toolsExpanded }) {
+                Text(if (toolsExpanded) "Hide topic tools ▲" else "Topic tools ▼", fontSize = 11.sp)
+            }
+            if (!toolsExpanded && selectedPlacementIds.isNotEmpty()) {
+                Text(
+                    "${selectedPlacementIds.size} selected",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (!toolsExpanded && filtering) {
+                Text(
+                    "Filter active",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        if (toolsExpanded) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Search Topics (* wildcard)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(onClick = { inputTitle = ""; dialog = "group" }) {
+                            Text(if (currentGroup == null) "+ Group" else "+ Subgroup", fontSize = 11.sp)
+                        }
+                        OutlinedButton(onClick = { onRefreshNotes(); refresh() }) {
+                            Text("Refresh", fontSize = 11.sp)
+                        }
+                        if (currentGroup == null) {
+                            OutlinedButton(onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) {
+                                Text("Restore backup", fontSize = 11.sp)
+                            }
+                        } else {
+                            OutlinedButton(onClick = { addMenuExpanded = true }) {
+                                Text("＋ Add point", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    if (currentGroup != null) {
+                        TextButton(onClick = { legendExpanded = true }) {
+                            Text("🎨 Legend", fontSize = 11.sp)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { showFilterColorDialog = true }) {
+                            Text(
+                                filterColor?.let { "🎨 ${it.lowercase().replaceFirstChar { value -> value.uppercase() }}" }
+                                    ?: "🎨 Filter colour",
+                                fontSize = 11.sp
+                            )
+                        }
+                        OutlinedButton(onClick = {
+                            filterStarred = !filterStarred
+                            currentGroupId = null
+                        }) {
+                            Text(if (filterStarred) "★ Starred only" else "☆ Filter starred", fontSize = 11.sp)
+                        }
+                    }
+                    if (filtering) {
+                        TextButton(onClick = {
+                            filterColor = null
+                            filterStarred = false
+                            currentGroupId = null
+                        }) { Text("Clear filters", fontSize = 11.sp) }
+                        Text(
+                            "Filtered view: folders show only matching points. Edits apply immediately.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (currentGroup != null) {
+                        Text(
+                            "Selected: ${selectedPlacementIds.size}",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                enabled = placements.isNotEmpty() && selectedPlacementIds.size != placements.size,
+                                onClick = { selectedPlacementIds = placements.mapTo(mutableSetOf()) { it.id } }
+                            ) { Text("Select all", fontSize = 11.sp) }
+                            OutlinedButton(
+                                enabled = selectedPlacementIds.isNotEmpty(),
+                                onClick = { selectedPlacementIds = emptySet() }
+                            ) { Text("Clear", fontSize = 11.sp) }
+                            Button(
+                                enabled = selectedPlacementIds.isNotEmpty(),
+                                onClick = { pendingPointDeleteIds = selectedPlacementIds }
+                            ) { Text("Delete selected", fontSize = 11.sp) }
+                        }
+                    }
+                }
             }
         }
         if (currentGroup != null && isRecording) {
@@ -345,6 +740,15 @@ fun TopicLibraryScreen(
                     else -> false
                 }
                 val expanded = placement.id in expandedPlacements
+                if (searchQuery.isNotBlank()) {
+                    val group = library.groups.firstOrNull { it.id == placement.groupId }
+                    TextButton(onClick = {
+                        currentGroupId = placement.groupId
+                        searchQuery = ""
+                    }) {
+                        Text("Go to folder: ${group?.let { groupPath(library, it) }.orEmpty()}", fontSize = 11.sp)
+                    }
+                }
                 Card(
                     colors = CardDefaults.cardColors(
                         containerColor = topicCardColor(placement.color),
@@ -356,19 +760,52 @@ fun TopicLibraryScreen(
                 )) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "${placement.order + 1}. ${item.title}",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                textDecoration = if (originalMissing) TextDecoration.LineThrough else TextDecoration.None,
-                                modifier = Modifier.weight(1f)
+                            Checkbox(
+                                checked = placement.id in selectedPlacementIds,
+                                onCheckedChange = { checked ->
+                                    selectedPlacementIds = if (checked) {
+                                        selectedPlacementIds + placement.id
+                                    } else {
+                                        selectedPlacementIds - placement.id
+                                    }
+                                }
                             )
+                            SelectionContainer(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${placement.order + 1}. ${item.title}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    textDecoration = if (originalMissing) TextDecoration.LineThrough else TextDecoration.None,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                             if (placement.important) Text("★", color = Color(0xFFFFB300), fontWeight = FontWeight.Bold)
                         }
                         if (originalMissing) Text("Original content is missing — restore it from backup to reactivate this point.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                         if (expanded) {
+                            val displayBody = if (item.type == TopicLibraryRepository.TYPE_TEXT) item.text
+                            else item.additionalNotes ?: item.text
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(onClick = {
+                                    context.getSystemService(android.content.ClipboardManager::class.java)
+                                        .setPrimaryClip(android.content.ClipData.newPlainText("Topic heading", item.title))
+                                }) { Text("Copy heading", fontSize = 11.sp) }
+                                displayBody?.takeIf(String::isNotBlank)?.let { body ->
+                                    OutlinedButton(onClick = {
+                                        context.getSystemService(android.content.ClipboardManager::class.java)
+                                            .setPrimaryClip(android.content.ClipData.newPlainText("Topic text", body))
+                                    }) { Text("Copy text", fontSize = 11.sp) }
+                                }
+                            }
                             Text(item.type.lowercase().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelSmall)
-                            item.text?.let { Text(it, fontSize = 12.sp) }
+                            displayBody?.takeIf(String::isNotBlank)?.let { body ->
+                                if (item.type != TopicLibraryRepository.TYPE_TEXT) {
+                                Text("Additional notes", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                }
+                                SelectionContainer {
+                                    Text(TopicRichText.decode(body, item.richText).annotatedString, fontSize = 12.sp)
+                                }
+                            }
                             item.target?.takeIf { item.type == TopicLibraryRepository.TYPE_LINK }?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
                             if (item.type == TopicLibraryRepository.TYPE_ATTACHMENT && attachment?.exists() == true && isImageFile(attachment)) {
                                 val bitmap = remember(attachment.absolutePath, attachment.lastModified()) {
@@ -422,7 +859,9 @@ fun TopicLibraryScreen(
                     }
                 }
             }
-            if (currentGroup == null && childGroups.isEmpty()) item { Text("Create your first topic group, for example Biology.") }
+            if (currentGroup == null && childGroups.isEmpty()) item {
+                Text(if (filtering) "No Topic points match this filter." else "Create your first topic group, for example Biology.")
+            }
         }
     }
 
@@ -432,9 +871,13 @@ fun TopicLibraryScreen(
             title = { Text("Add point") },
             text = {
                 Column {
-                    TextButton(onClick = { addMenuExpanded = false; dialog = "text" }) { Text("Text") }
+                    TextButton(onClick = { addMenuExpanded = false; editBody = TextFieldValue(""); dialog = "text" }) { Text("Text") }
                     TextButton(onClick = { addMenuExpanded = false; dialog = "link" }) { Text("Web link") }
-                    TextButton(onClick = { addMenuExpanded = false; filePicker.launch(arrayOf("*/*")) }) { Text("File or image") }
+                    TextButton(onClick = {
+                        addMenuExpanded = false
+                        inputNotes = ""
+                        dialog = "attachmentNote"
+                    }) { Text("File or image") }
                     TextButton(onClick = { addMenuExpanded = false; dialog = "recordings" }) { Text("Existing recording") }
                     TextButton(onClick = { addMenuExpanded = false; onStartRecording(currentGroup.id, null) }) { Text("New recording") }
                 }
@@ -477,11 +920,162 @@ private fun topicCardColor(color: String): Color = when (color) {
     else -> MaterialTheme.colorScheme.surface
 }
 
+
+@Composable
+private fun MobileRichTextField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    label: String
+) {
+    var bold by remember { mutableStateOf(false) }
+    var italic by remember { mutableStateOf(false) }
+    var underline by remember { mutableStateOf(false) }
+    var strike by remember { mutableStateOf(false) }
+    var bullets by remember { mutableStateOf(false) }
+    var font by remember { mutableStateOf<FontFamily?>(null) }
+    var textColor by remember { mutableStateOf(Color.Unspecified) }
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = { proposed ->
+            val hasTypingStyle = bold || italic || underline || strike ||
+                font != null || textColor != Color.Unspecified
+            val decoration = when {
+                underline && strike -> TextDecoration.combine(
+                    listOf(TextDecoration.Underline, TextDecoration.LineThrough)
+                )
+                underline -> TextDecoration.Underline
+                strike -> TextDecoration.LineThrough
+                else -> null
+            }
+            val typingStyle = if (hasTypingStyle) {
+                SpanStyle(
+                    fontWeight = FontWeight.Bold.takeIf { bold },
+                    fontStyle = FontStyle.Italic.takeIf { italic },
+                    textDecoration = decoration,
+                    fontFamily = font,
+                    color = textColor
+                )
+            } else null
+            var next = TopicRichText.reconcileEdit(value, proposed, typingStyle)
+            next = TopicRichText.continueBullets(value, next, bullets)
+            onValueChange(next)
+        },
+        label = { Text(label) },
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text("Select text, then format:", style = MaterialTheme.typography.labelSmall)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !bold else !TopicRichText.selectionIsBold(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setBold(value, enabled))
+            bold = enabled
+        }) { Text(if (bold) "✓B" else "B", fontWeight = FontWeight.Bold) }
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !italic else !TopicRichText.selectionIsItalic(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setItalic(value, enabled))
+            italic = enabled
+        }) { Text(if (italic) "✓I" else "I", fontStyle = FontStyle.Italic) }
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !underline else !TopicRichText.selectionIsUnderlined(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setUnderline(value, enabled))
+            underline = enabled
+        }) { Text(if (underline) "✓U" else "U", textDecoration = TextDecoration.Underline) }
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !strike else !TopicRichText.selectionIsStruck(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setStrike(value, enabled))
+            strike = enabled
+        }) { Text(if (strike) "✓S" else "S", textDecoration = TextDecoration.LineThrough) }
+        TextButton(onClick = {
+            bullets = !bullets
+            if (bullets) onValueChange(TopicRichText.bullets(value))
+        }) { Text(if (bullets) "✓•" else "•") }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly
+    ) {
+        TextButton(onClick = {
+            font = FontFamily.Serif
+            onValueChange(TopicRichText.apply(value, SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Serif) "✓S" else "S", fontFamily = FontFamily.Serif) }
+        TextButton(onClick = {
+            font = FontFamily.Monospace
+            onValueChange(TopicRichText.apply(value, SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Monospace) "✓M" else "M", fontFamily = FontFamily.Monospace) }
+        TextButton(onClick = {
+            font = FontFamily.Cursive
+            onValueChange(TopicRichText.apply(value, SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Cursive) "✓𝒮" else "𝒮", fontFamily = FontFamily.Cursive) }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        listOf(
+            Color.Black,
+            Color(0xFFC62828),
+            Color(0xFF1565C0),
+            Color(0xFF2E7D32),
+            Color(0xFF6A1B9A)
+        ).forEach { color ->
+            Surface(
+                onClick = {
+                    textColor = color
+                    onValueChange(TopicRichText.apply(value, SpanStyle(color = color)))
+                },
+                modifier = Modifier.size(32.dp),
+                shape = CircleShape,
+                color = color,
+                border = BorderStroke(2.dp, Color.White)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    if (textColor == color) Text("✓", color = Color.White)
+                }
+            }
+        }
+    }
+}
+
 @Composable private fun InputDialog(title: String, label: String, value: String, onChange: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =
     AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { OutlinedTextField(value, onChange, label = { Text(label) }) }, confirmButton = { TextButton(onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
 
 @Composable private fun TwoInputDialog(title: String, firstLabel: String, secondLabel: String, first: String, second: String, onFirst: (String) -> Unit, onSecond: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =
     AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { Column { OutlinedTextField(first, onFirst, label = { Text(firstLabel) }); Spacer(Modifier.height(8.dp)); OutlinedTextField(second, onSecond, label = { Text(secondLabel) }) } }, confirmButton = { TextButton(onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
+
+@Composable private fun ThreeInputDialog(
+    title: String,
+    firstLabel: String,
+    secondLabel: String,
+    thirdLabel: String,
+    first: String,
+    second: String,
+    third: String,
+    onFirst: (String) -> Unit,
+    onSecond: (String) -> Unit,
+    onThird: (String) -> Unit,
+    onCancel: () -> Unit,
+    onSave: () -> Unit
+) = AlertDialog(
+    onDismissRequest = onCancel,
+    title = { Text(title) },
+    text = {
+        Column {
+            OutlinedTextField(first, onFirst, label = { Text(firstLabel) })
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(second, onSecond, label = { Text(secondLabel) })
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(third, onThird, label = { Text(thirdLabel) })
+        }
+    },
+    confirmButton = { TextButton(onClick = onSave) { Text("Save") } },
+    dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } }
+)
 
 private fun groupPath(library: TopicLibrary, group: TopicGroup): String {
     val names = mutableListOf(group.name)
@@ -512,4 +1106,32 @@ private fun formatTopicTime(valueMs: Long): String {
     val minutes = totalSeconds / 60L
     val seconds = totalSeconds % 60L
     return "%d:%02d".format(minutes, seconds)
+}
+
+private fun topicSearchMatches(item: TopicItem?, note: SavedVoiceNote?, query: String): Boolean {
+    val searchable = listOfNotNull(
+        item?.title,
+        item?.text,
+        item?.additionalNotes,
+        item?.target,
+        note?.sourceApp,
+        note?.title,
+        note?.module,
+        note?.chapter,
+        note?.author,
+        note?.transcript
+    ).joinToString("\n")
+    return wildcardSearchMatches(query, searchable)
+}
+
+private fun wildcardSearchMatches(query: String, text: String): Boolean {
+    val parts = query.trim().split('*').filter(String::isNotBlank)
+    if (parts.isEmpty()) return true
+    var from = 0
+    parts.forEach { part ->
+        val found = text.indexOf(part, startIndex = from, ignoreCase = true)
+        if (found < 0) return false
+        from = found + part.length
+    }
+    return true
 }

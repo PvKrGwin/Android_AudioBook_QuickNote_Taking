@@ -3,10 +3,11 @@ package com.praveen.ridernotes.topics
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.praveen.ridernotes.cloud.CloudSyncManager
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.InputStream
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -19,7 +20,9 @@ data class TopicItem(
     val title: String,
     val text: String?,
     val target: String?,
-    val createdAt: Long
+    val createdAt: Long,
+    val additionalNotes: String? = null,
+    val richText: String? = null
 )
 data class TopicPlacement(
     val id: String,
@@ -68,11 +71,33 @@ object TopicLibraryRepository {
         )))
     }
 
-    @Synchronized fun addText(context: Context, groupId: String, title: String, text: String, index: Int? = null) =
-        addNewItem(context, groupId, TopicItem(id(), TYPE_TEXT, title.ifBlank { "Text note" }, text, null, now()), index)
+    @Synchronized fun addText(
+        context: Context,
+        groupId: String,
+        title: String,
+        text: String,
+        index: Int? = null,
+        richText: String? = null
+    ) = addNewItem(
+        context,
+        groupId,
+        TopicItem(id(), TYPE_TEXT, title.ifBlank { "Text note" }, text, null, now(), richText = richText),
+        index
+    )
 
-    @Synchronized fun addLink(context: Context, groupId: String, title: String, url: String, index: Int? = null) =
-        addNewItem(context, groupId, TopicItem(id(), TYPE_LINK, title.ifBlank { url }, null, url, now()), index)
+    @Synchronized fun addLink(
+        context: Context,
+        groupId: String,
+        title: String,
+        url: String,
+        index: Int? = null,
+        notes: String? = null
+    ) = addNewItem(
+        context,
+        groupId,
+        TopicItem(id(), TYPE_LINK, title.ifBlank { url }, null, url, now(), notes?.trim()?.takeIf { it.isNotBlank() }),
+        index
+    )
 
     @Synchronized fun addRecording(context: Context, groupId: String, fileName: String, title: String, index: Int? = null) {
         val current = load(context)
@@ -81,7 +106,13 @@ object TopicLibraryRepository {
         else addNewItem(context, groupId, TopicItem(id(), TYPE_RECORDING, title, null, fileName, now()), index)
     }
 
-    @Synchronized fun addAttachment(context: Context, groupId: String, uri: Uri, index: Int? = null): Boolean {
+    @Synchronized fun addAttachment(
+        context: Context,
+        groupId: String,
+        uri: Uri,
+        index: Int? = null,
+        notes: String? = null
+    ): Boolean {
         val resolver = context.contentResolver
         val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
             if (it.moveToFirst()) it.getString(0) else null
@@ -95,7 +126,12 @@ object TopicLibraryRepository {
                 requireNotNull(input)
                 output.outputStream().use(input::copyTo)
             }
-            addNewItem(context, groupId, TopicItem(itemId, TYPE_ATTACHMENT, displayName, null, relative, now()), index)
+            addNewItem(
+                context,
+                groupId,
+                TopicItem(itemId, TYPE_ATTACHMENT, displayName, null, relative, now(), notes?.trim()?.takeIf { it.isNotBlank() }),
+                index
+            )
             true
         }.getOrDefault(false)
     }
@@ -107,8 +143,73 @@ object TopicLibraryRepository {
     }
 
     @Synchronized fun removePlacement(context: Context, placementId: String) {
+        removePlacements(context, setOf(placementId))
+    }
+
+    @Synchronized fun removePlacements(context: Context, placementIds: Set<String>) {
+        if (placementIds.isEmpty()) return
         val current = load(context)
-        save(context, pruneOrphans(context, current.copy(placements = current.placements.filterNot { it.id == placementId })))
+        val remaining = current.placements.filterNot { it.id in placementIds }
+        save(context, pruneOrphans(context, current.copy(placements = normalizePlacements(remaining))))
+    }
+
+    @Synchronized fun setAdditionalNotes(context: Context, itemId: String, notes: String) {
+        val current = load(context)
+        val normalized = notes.trim().takeIf(String::isNotBlank)
+        save(context, current.copy(items = current.items.map { item ->
+            if (item.id == itemId) item.copy(
+                text = if (item.type == TYPE_TEXT) item.text else null,
+                additionalNotes = normalized
+            ) else item
+        }))
+    }
+
+    @Synchronized fun updateEditablePoint(
+        context: Context,
+        itemId: String,
+        title: String,
+        body: String,
+        linkUrl: String? = null,
+        richText: String? = null
+    ) {
+        val current = load(context)
+        save(context, current.copy(items = current.items.map { item ->
+            if (item.id != itemId) item else item.copy(
+                title = title.trim().ifBlank { item.title },
+                text = if (item.type == TYPE_TEXT) body else null,
+                additionalNotes = if (item.type == TYPE_TEXT) item.additionalNotes
+                    else body.trim().takeIf(String::isNotBlank),
+                target = if (item.type == TYPE_LINK) linkUrl?.trim()?.takeIf(String::isNotBlank)
+                    ?: item.target else item.target,
+                richText = richText
+            )
+        }))
+    }
+
+    @Synchronized fun replaceAttachment(context: Context, itemId: String, uri: Uri): Boolean {
+        val current = load(context)
+        val item = current.items.firstOrNull { it.id == itemId && it.type == TYPE_ATTACHMENT }
+            ?: return false
+        val resolver = context.contentResolver
+        val displayName = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) it.getString(0) else null
+        } ?: "attachment"
+        val safeName = displayName.replace(Regex("[^A-Za-z0-9._ -]"), "_")
+        val relative = "assets/${item.id}_$safeName"
+        val destination = File(folder(context), relative).apply { parentFile?.mkdirs() }
+        return runCatching {
+            resolver.openInputStream(uri).use { input ->
+                requireNotNull(input)
+                destination.outputStream().use(input::copyTo)
+            }
+            item.target?.let { old ->
+                if (old != relative) File(folder(context), old).delete()
+            }
+            save(context, current.copy(items = current.items.map {
+                if (it.id == itemId) it.copy(target = relative) else it
+            }))
+            true
+        }.getOrDefault(false)
     }
 
     fun willDeleteTopicRecording(context: Context, placementId: String): Boolean {
@@ -184,6 +285,11 @@ object TopicLibraryRepository {
         return existing.filterNot { it.groupId == groupId } + normalized
     }
 
+    private fun normalizePlacements(placements: List<TopicPlacement>): List<TopicPlacement> =
+        placements.groupBy { it.groupId }.values.flatMap { group ->
+            group.sortedBy { it.order }.mapIndexed { index, placement -> placement.copy(order = index) }
+        }
+
     private fun pruneOrphans(context: Context, library: TopicLibrary): TopicLibrary {
         val used = library.placements.mapTo(mutableSetOf()) { it.itemId }
         library.items.filter { it.id !in used }.forEach { item ->
@@ -215,12 +321,12 @@ object TopicLibraryRepository {
     private fun save(context: Context, library: TopicLibrary) {
         val root = JSONObject().put("version", 2)
             .put("groups", JSONArray(library.groups.map { JSONObject().put("id", it.id).put("name", it.name).put("parentId", it.parentId ?: JSONObject.NULL).put("order", it.order) }))
-            .put("items", JSONArray(library.items.map { JSONObject().put("id", it.id).put("type", it.type).put("title", it.title).put("text", it.text ?: JSONObject.NULL).put("target", it.target ?: JSONObject.NULL).put("createdAt", it.createdAt) }))
+            .put("items", JSONArray(library.items.map { JSONObject().put("id", it.id).put("type", it.type).put("title", it.title).put("text", it.text ?: JSONObject.NULL).put("target", it.target ?: JSONObject.NULL).put("createdAt", it.createdAt).put("additionalNotes", it.additionalNotes ?: JSONObject.NULL).put("richText", it.richText ?: JSONObject.NULL) }))
             .put("placements", JSONArray(library.placements.map { JSONObject().put("id", it.id).put("groupId", it.groupId).put("itemId", it.itemId).put("order", it.order).put("important", it.important).put("color", it.color) }))
             .put("colorLegend", JSONObject(library.colorLegend))
         manifest(context).apply { parentFile?.mkdirs(); writeText(root.toString(2)) }
+        SyncRevisionStore.markLocalModified(context)
         rebuildBackup(context, library)
-        CloudSyncManager.enqueueNow(context)
     }
 
     private fun rebuildBackup(
@@ -231,6 +337,9 @@ object TopicLibraryRepository {
     ) {
         val base = folder(context)
         val temp = File(base, "topics.tmp")
+        val revision = if (includeAllRecordings) {
+            SyncRevisionStore.writeManifest(context, base)
+        } else null
         ZipOutputStream(temp.outputStream()).use { zip ->
             zip.putNextEntry(ZipEntry("rider_notes_backup.json"))
             zip.write(
@@ -242,8 +351,15 @@ object TopicLibraryRepository {
                     .toByteArray(Charsets.UTF_8)
             )
             zip.closeEntry()
+            if (revision != null) {
+                val revisionFile = File(base, SyncRevisionStore.MANIFEST_FILE)
+                zip.putNextEntry(ZipEntry(SyncRevisionStore.MANIFEST_FILE))
+                revisionFile.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
             base.walkTopDown().filter {
-                it.isFile && it != backup(context) && it != fullBackup(context) && it != temp
+                it.isFile && it != backup(context) && it != fullBackup(context) && it != temp &&
+                    it.name != SyncRevisionStore.MANIFEST_FILE
             }.forEach { file ->
                 zip.putNextEntry(ZipEntry(file.relativeTo(base).invariantSeparatorsPath))
                 file.inputStream().use { it.copyTo(zip) }
@@ -329,11 +445,156 @@ object TopicLibraryRepository {
         "Topic backup merged: ${cloud.groups.size} cloud group(s), ${cloud.items.size} cloud point(s); phone-only content kept"
     }.getOrElse { "Topic restore failed: ${it.javaClass.simpleName}" }
 
+    /**
+     * Keep both sides of a full-backup conflict. Existing phone entities win only when the
+     * same UUID was edited on both devices; cloud-only notes, files and Topic points are kept.
+     */
+    @Synchronized fun mergeFromFullBackup(context: Context, input: InputStream): String = runCatching {
+        val tempRoot = File(context.cacheDir, "full_merge_${System.currentTimeMillis()}").apply { mkdirs() }
+        ZipInputStream(input).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                val safe = File(tempRoot, entry.name).canonicalFile
+                require(safe.path.startsWith(tempRoot.canonicalPath + File.separator))
+                if (!entry.isDirectory) {
+                    safe.parentFile?.mkdirs()
+                    safe.outputStream().use { zip.copyTo(it) }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        val cloudManifest = File(tempRoot, "library.json")
+        require(cloudManifest.exists()) { "Topic manifest is missing" }
+        require(File(tempRoot, "rider_notes_backup.json").exists()) { "Backup marker is missing" }
+
+        val localFolder = folder(context)
+        tempRoot.walkTopDown().filter(File::isFile).forEach { source ->
+            val relative = source.relativeTo(tempRoot).invariantSeparatorsPath
+            when {
+                relative.startsWith("recordings/") -> {
+                    val target = File(File(context.filesDir, "voice_notes").apply { mkdirs() }, source.name)
+                    if (!target.exists()) source.copyTo(target)
+                }
+                relative !in setOf(
+                    "library.json",
+                    "rider_notes_backup.json",
+                    SyncRevisionStore.MANIFEST_FILE
+                ) -> {
+                    val target = File(localFolder, relative)
+                    if (!target.exists()) {
+                        target.parentFile?.mkdirs()
+                        source.copyTo(target)
+                    }
+                }
+            }
+        }
+        val local = load(context)
+        val cloud = readLibrary(cloudManifest)
+        val merged = TopicLibrary(
+            groups = mergeById(local.groups, cloud.groups) { it.id },
+            items = mergeById(local.items, cloud.items) { it.id },
+            placements = mergeById(local.placements, cloud.placements) { it.id },
+            colorLegend = cloud.colorLegend + local.colorLegend
+        )
+        save(context, merged)
+        File(context.filesDir, "voice_notes").listFiles().orEmpty()
+            .filter { it.extension.equals("json", true) }
+            .forEach { metadata ->
+                val json = runCatching { JSONObject(metadata.readText()) }.getOrNull() ?: return@forEach
+                if (json.optBoolean("textOnly", false)) {
+                    File(metadata.parentFile, metadata.nameWithoutExtension + ".m4a")
+                        .takeUnless(File::exists)
+                        ?.writeBytes(byteArrayOf())
+                }
+            }
+        tempRoot.deleteRecursively()
+        "Cloud and phone merged; phone-only and cloud-only content kept"
+    }.getOrElse { "Cloud merge failed: ${it.javaClass.simpleName}" }
+
+    /**
+     * Replace the phone's managed Rider Notes content with one complete cloud snapshot.
+     * A safety copy of the previous full backup is retained locally before replacement.
+     */
+    @Synchronized fun replaceFromFullBackup(context: Context, input: InputStream): String = runCatching {
+        val tempRoot = File(context.cacheDir, "full_restore_${System.currentTimeMillis()}").apply { mkdirs() }
+        ZipInputStream(input).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                val safe = File(tempRoot, entry.name).canonicalFile
+                require(safe.path.startsWith(tempRoot.canonicalPath + File.separator))
+                if (!entry.isDirectory) {
+                    safe.parentFile?.mkdirs()
+                    safe.outputStream().use { zip.copyTo(it) }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        require(File(tempRoot, "library.json").exists()) { "Topic manifest is missing" }
+        require(File(tempRoot, "rider_notes_backup.json").exists()) { "Backup marker is missing" }
+
+        val localFolder = folder(context)
+        val safety = File(
+            File(context.filesDir, "safety_backups").apply { mkdirs() },
+            "RiderNotes_PreCloudRestore_${System.currentTimeMillis()}.zip"
+        )
+        rebuildBackup(
+            context = context,
+            library = load(context),
+            target = safety,
+            includeAllRecordings = true
+        )
+        localFolder.listFiles().orEmpty().filter { file ->
+            file.name !in setOf(
+                backup(context).name,
+                fullBackup(context).name,
+                SyncRevisionStore.MANIFEST_FILE
+            )
+        }.forEach { it.deleteRecursively() }
+        val voiceFolder = File(context.filesDir, "voice_notes").apply { mkdirs() }
+        voiceFolder.listFiles().orEmpty().forEach { it.deleteRecursively() }
+
+        tempRoot.walkTopDown().filter(File::isFile).forEach { source ->
+            val relative = source.relativeTo(tempRoot).invariantSeparatorsPath
+            when {
+                relative.startsWith("recordings/") -> {
+                    source.copyTo(File(voiceFolder, source.name), overwrite = true)
+                }
+                relative !in setOf("rider_notes_backup.json", SyncRevisionStore.MANIFEST_FILE) -> {
+                    val target = File(localFolder, relative)
+                    target.parentFile?.mkdirs()
+                    source.copyTo(target, overwrite = true)
+                }
+            }
+        }
+
+        // Text-only PC notes intentionally have no audio. A zero-byte marker keeps them
+        // visible to the existing Notes list while playback remains disabled.
+        voiceFolder.listFiles().orEmpty()
+            .filter { it.extension.equals("json", true) }
+            .forEach { metadata ->
+                val json = runCatching { JSONObject(metadata.readText()) }.getOrNull() ?: return@forEach
+                if (json.optBoolean("textOnly", false)) {
+                    File(voiceFolder, metadata.nameWithoutExtension + ".m4a")
+                        .takeUnless(File::exists)
+                        ?.writeBytes(byteArrayOf())
+                }
+            }
+        // The next explicit/automatic sync rebuilds the archive from this restored state.
+        // Do not generate a new local revision while the caller is still accepting the
+        // cloud revision that was just downloaded.
+        backup(context).delete()
+        fullBackup(context).delete()
+        tempRoot.deleteRecursively()
+        "Cloud snapshot restored; ${safety.name} retained"
+    }.getOrElse { "Cloud restore failed: ${it.javaClass.simpleName}" }
+
     private fun readLibrary(file: File): TopicLibrary {
         val root = JSONObject(file.readText())
         return TopicLibrary(
             groups = root.optJSONArray("groups").objects().map { TopicGroup(it.getString("id"), it.getString("name"), it.nullable("parentId"), it.optInt("order")) },
-            items = root.optJSONArray("items").objects().map { TopicItem(it.getString("id"), it.getString("type"), it.optString("title", "Untitled"), it.nullable("text"), it.nullable("target"), it.optLong("createdAt")) },
+            items = root.optJSONArray("items").objects().map { TopicItem(it.getString("id"), it.getString("type"), it.optString("title", "Untitled"), it.nullable("text"), it.nullable("target"), it.optLong("createdAt"), it.nullable("additionalNotes"), it.nullable("richText")) },
             placements = root.optJSONArray("placements").objects().map { TopicPlacement(it.getString("id"), it.getString("groupId"), it.getString("itemId"), it.optInt("order"), it.optBoolean("important"), it.optString("color", "WHITE")) },
             colorLegend = root.optJSONObject("colorLegend")?.let { legend -> legend.keys().asSequence().associateWith { legend.optString(it) }.filterValues { it.isNotBlank() } }.orEmpty()
         )

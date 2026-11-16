@@ -2,6 +2,7 @@ package com.praveen.ridernotes.recording
 
 import android.content.Context
 import com.praveen.ridernotes.media.YouTubeSourceLink
+import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
@@ -27,7 +28,12 @@ data class SavedVoiceNote(
     val transcriptionStatus: String,
     val transcript: String?,
     val transcriptSegments: List<TranscriptSegment>,
-    val topicOnly: Boolean = false
+    val topicOnly: Boolean = false,
+    val textOnly: Boolean = false,
+    val typedNote: String? = null,
+    val originDeviceId: String? = null,
+    val originDeviceName: String? = null,
+    val originDeviceType: String? = null
 ) {
     val recordedAtLabel: String
         get() = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
@@ -117,6 +123,7 @@ object SavedVoiceNoteRepository {
                     updated += 1
                 }
             }
+        if (updated > 0) SyncRevisionStore.markLocalModified(context)
         return updated
     }
 
@@ -143,6 +150,7 @@ object SavedVoiceNoteRepository {
                 updated += 1
             }
         }
+        if (updated > 0) SyncRevisionStore.markLocalModified(context)
         return updated
     }
 
@@ -237,7 +245,13 @@ object SavedVoiceNoteRepository {
                         }
                     }
                 }.orEmpty(),
-                topicOnly = json.optBoolean("topicOnly", false)
+                topicOnly = json.optBoolean("topicOnly", false),
+                textOnly = json.optBoolean("textOnly", false) ||
+                    json.optNullableString("noteKind").equals("TEXT", ignoreCase = true),
+                typedNote = json.optNullableString("typedNote"),
+                originDeviceId = json.optNullableString("originDeviceId"),
+                originDeviceName = json.optNullableString("originDeviceName"),
+                originDeviceType = json.optNullableString("originDeviceType")
             )
         } catch (_: Exception) {
             SavedVoiceNote(
