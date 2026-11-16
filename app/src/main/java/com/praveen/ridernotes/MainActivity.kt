@@ -397,12 +397,12 @@ class MainActivity : ComponentActivity() {
         microphoneEnabled.value = hasMicrophonePermission()
         scribStatus.value = ScribTranscriber.status(this)
         transcriptionLanguage.value = ScribTranscriber.languageMode(this)
+        cloudSyncStatus.value = CloudSyncManager.status(this)
+        checkCloudRevision()
         MediaControlGateway.observeActivePlayback(this)
         refreshSharedLinkStatus()
         refreshGestureActions()
         refreshSavedNotes()
-        cloudSyncStatus.value = CloudSyncManager.status(this)
-        checkCloudRevision()
         savedNotes.value
             .filter { it.transcriptionStatus in setOf("PENDING", "QUEUED", "TRANSCRIBING") }
             .forEach { ScribTranscriber.enqueue(this, it.audioFile) }
@@ -2184,10 +2184,15 @@ private fun DetectorScreen(
                             notesListState.animateScrollToItem(it)
                             highlightedOriginalNotePath.value = requestedPath
                             requestedOriginalNotePath.value = null
-                            delay(3_000)
-                            if (highlightedOriginalNotePath.value == requestedPath) {
-                                highlightedOriginalNotePath.value = null
-                            }
+                        }
+                    }
+
+                    LaunchedEffect(highlightedOriginalNotePath.value) {
+                        val highlightedPath = highlightedOriginalNotePath.value
+                            ?: return@LaunchedEffect
+                        delay(3_000)
+                        if (highlightedOriginalNotePath.value == highlightedPath) {
+                            highlightedOriginalNotePath.value = null
                         }
                     }
 
