@@ -885,9 +885,6 @@ private fun NoteCard(
     onAddToTopics: (() -> Unit)? = null
 ) {
     var expanded by remember(note.id) { mutableStateOf(false) }
-    fun formattingValue(): TextFieldValue = if (!editBody.selection.collapsed) editBody
-        else lastEditSelection?.let { editBody.copy(selection = it) } ?: editBody
-
     val playback = audioPlayer.state
     val isCurrent = playback.file?.absolutePath == note.audioFile?.absolutePath
     Card(
@@ -1777,6 +1774,10 @@ private fun TopicPointCard(
     var editBullets by remember(placement.id) { mutableStateOf(false) }
     var editFont by remember(placement.id) { mutableStateOf<FontFamily?>(null) }
     var editTextColor by remember(placement.id) { mutableStateOf(Color.Unspecified) }
+
+    fun formattingValue(): TextFieldValue = if (!editBody.selection.collapsed) editBody
+        else lastEditSelection?.let { editBody.copy(selection = it) } ?: editBody
+
     val playback = audioPlayer.state
     val isCurrent = playback.file?.absolutePath == linkedNote?.audioFile?.absolutePath
     val linkedBrowseUrl = linkedNote?.let(::noteBrowseUrl)
