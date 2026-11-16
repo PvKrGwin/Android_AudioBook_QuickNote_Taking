@@ -53,6 +53,13 @@ object SyncRevisionStore {
     fun lastSyncedRevision(context: Context): String? =
         preferences(context).getString(KEY_LAST_SYNCED_REVISION, null)
 
+    /** Most recent local/cloud revision known by this phone, for sync-status display. */
+    fun revisionForDisplay(context: Context): CloudRevision? {
+        val prefs = preferences(context)
+        return prefs.getString(KEY_PENDING_LOCAL, null)?.let(::parse)
+            ?: prefs.getString(KEY_LAST_KNOWN_REVISION, null)?.let(::parse)
+    }
+
     fun pendingRemote(context: Context): CloudRevision? =
         preferences(context).getString(KEY_PENDING_REMOTE, null)
             ?.let(::parse)
@@ -90,6 +97,7 @@ object SyncRevisionStore {
     fun markSynced(context: Context, revision: CloudRevision) {
         preferences(context).edit()
             .putString(KEY_LAST_SYNCED_REVISION, revision.revisionId)
+            .putString(KEY_LAST_KNOWN_REVISION, toJson(revision).toString())
             .putBoolean(KEY_DIRTY, false)
             .remove(KEY_DIRTY_AT)
             .remove(KEY_PENDING_LOCAL)
@@ -100,6 +108,7 @@ object SyncRevisionStore {
     fun acceptRemote(context: Context, revision: CloudRevision) {
         preferences(context).edit()
             .putString(KEY_LAST_SYNCED_REVISION, revision.revisionId)
+            .putString(KEY_LAST_KNOWN_REVISION, toJson(revision).toString())
             .putBoolean(KEY_DIRTY, false)
             .remove(KEY_DIRTY_AT)
             .remove(KEY_PENDING_LOCAL)
@@ -160,6 +169,7 @@ object SyncRevisionStore {
     private const val KEY_DIRTY = "dirty"
     private const val KEY_DIRTY_AT = "dirty_at"
     private const val KEY_LAST_SYNCED_REVISION = "last_synced_revision"
+    private const val KEY_LAST_KNOWN_REVISION = "last_known_revision"
     private const val KEY_PENDING_LOCAL = "pending_local_revision"
     private const val KEY_PENDING_REMOTE = "pending_remote_revision"
 }
