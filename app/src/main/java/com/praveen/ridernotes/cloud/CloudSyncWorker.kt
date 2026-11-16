@@ -11,7 +11,8 @@ class CloudSyncWorker(
     params: WorkerParameters
 ) : Worker(appContext, params) {
     override fun doWork(): Result {
-        val checkOnly = inputData.getBoolean(KEY_CHECK_ONLY, false)
+        val manualUploadAuthorized = inputData.getBoolean(KEY_MANUAL_UPLOAD, false)
+        val checkOnly = inputData.getBoolean(KEY_CHECK_ONLY, false) || !manualUploadAuthorized
         if (CloudSyncManager.mode(applicationContext) == CloudSyncManager.Mode.OFF) {
             return Result.success()
         }
@@ -131,5 +132,6 @@ class CloudSyncWorker(
 
     companion object {
         const val KEY_CHECK_ONLY = "check_only"
+        const val KEY_MANUAL_UPLOAD = "manual_upload_authorized"
     }
 }
