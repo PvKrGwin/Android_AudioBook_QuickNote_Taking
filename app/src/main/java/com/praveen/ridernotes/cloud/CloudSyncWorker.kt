@@ -18,11 +18,21 @@ class CloudSyncWorker(
             ?: return Result.success()
         val folder = DocumentFile.fromTreeUri(applicationContext, treeUri)
         if (folder == null || !folder.canWrite()) {
-            CloudSyncManager.updateStatus(applicationContext, "Cloud folder is unavailable")
+            CloudSyncManager.prepareCompleteRetry(applicationContext)
+            CloudSyncManager.updateSyncState(
+                applicationContext,
+                CloudSyncManager.SyncState.FAILED,
+                "Sync failed: cloud folder is unavailable. Press retry to upload everything again."
+            )
             return Result.failure()
         }
 
         return try {
+            CloudSyncManager.updateSyncState(
+                applicationContext,
+                CloudSyncManager.SyncState.SYNCING,
+                "Syncing complete Rider Notes backup…"
+            )
             val remoteRevision = CloudSyncManager.remoteRevision(applicationContext)
             val lastSynced = SyncRevisionStore.lastSyncedRevision(applicationContext)
             val dirty = SyncRevisionStore.isDirty(applicationContext)
@@ -30,8 +40,9 @@ class CloudSyncWorker(
                 val local = if (dirty) SyncRevisionStore.currentOrNextRevision(applicationContext) else null
                 if (!dirty || local?.parentRevisionId != remoteRevision.revisionId) {
                     SyncRevisionStore.setPendingRemote(applicationContext, remoteRevision)
-                    CloudSyncManager.updateStatus(
+                    CloudSyncManager.updateSyncState(
                         applicationContext,
+                        CloudSyncManager.SyncState.CLOUD_UPDATE_AVAILABLE,
                         "Cloud update available from ${remoteRevision.deviceName}; open Rider Notes to choose"
                     )
                     return Result.success()
@@ -40,7 +51,11 @@ class CloudSyncWorker(
             if (!dirty && remoteRevision != null && remoteRevision.revisionId == lastSynced &&
                 folder.findFile("RiderNotes_Full_Backup.zip") != null
             ) {
-                CloudSyncManager.updateStatus(applicationContext, "Cloud backup is up to date")
+                CloudSyncManager.updateSyncState(
+                    applicationContext,
+                    CloudSyncManager.SyncState.UP_TO_DATE,
+                    "Up to date with cloud folder"
+                )
                 return Result.success()
             }
 
@@ -76,17 +91,20 @@ class CloudSyncWorker(
                 output.write(SyncRevisionStore.toJson(localRevision).toString(2).toByteArray())
             }
             SyncRevisionStore.markSynced(applicationContext, localRevision)
-            CloudSyncManager.updateStatus(
+            CloudSyncManager.updateSyncState(
                 applicationContext,
+                CloudSyncManager.SyncState.COMPLETED,
                 "Sync complete: $uploaded uploaded, $unchanged unchanged"
             )
             Result.success()
         } catch (error: Exception) {
-            CloudSyncManager.updateStatus(
+            CloudSyncManager.prepareCompleteRetry(applicationContext)
+            CloudSyncManager.updateSyncState(
                 applicationContext,
-                "Sync paused: ${error.javaClass.simpleName}"
+                CloudSyncManager.SyncState.FAILED,
+                "Sync failed: ${error.javaClass.simpleName}. Press retry to upload everything again."
             )
-            Result.retry()
+            Result.failure()
         }
     }
 

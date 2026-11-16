@@ -10,11 +10,14 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -47,6 +50,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -119,6 +123,19 @@ class MainActivity : ComponentActivity() {
         CloudSyncManager.Status(null, CloudSyncManager.Mode.OFF, "")
     )
     private val cloudConflict = mutableStateOf<CloudRevision?>(null)
+    private val cloudStatusPreferenceListener =
+        SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
+            runOnUiThread { cloudSyncStatus.value = CloudSyncManager.status(this) }
+        }
+    private val cloudNetworkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            runOnUiThread { cloudSyncStatus.value = CloudSyncManager.status(this@MainActivity) }
+        }
+
+        override fun onLost(network: Network) {
+            runOnUiThread { cloudSyncStatus.value = CloudSyncManager.status(this@MainActivity) }
+        }
+    }
     private val sharedLinkStatus = mutableStateOf("")
     private val remoteSetupStatus = mutableStateOf("")
     private val gestureActions = mutableStateOf<Map<RemotePressPatternDetector.Gesture, GestureActionConfig.Action>>(emptyMap())
@@ -214,6 +231,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CloudSyncManager.registerStatusListener(this, cloudStatusPreferenceListener)
+        runCatching {
+            getSystemService(ConnectivityManager::class.java)
+                .registerDefaultNetworkCallback(cloudNetworkCallback)
+        }
         setupDiagnosticMediaSession()
         ContextCompat.registerReceiver(
             this,
@@ -436,6 +458,11 @@ class MainActivity : ComponentActivity() {
         if (remoteTraining) RemoteButtonConfig.setTraining(this, false)
         diagnosticMediaSession.release()
         runCatching { unregisterReceiver(topicRecordingReceiver) }
+        CloudSyncManager.unregisterStatusListener(this, cloudStatusPreferenceListener)
+        runCatching {
+            getSystemService(ConnectivityManager::class.java)
+                .unregisterNetworkCallback(cloudNetworkCallback)
+        }
         super.onDestroy()
     }
 
@@ -1881,18 +1908,46 @@ private fun DetectorScreen(
                                             ) { Text(mode.label) }
                                         }
                                     }
+                                    val syncState = cloudSyncStatus.value.syncState
+                                    val syncEnabled = syncState in setOf(
+                                        CloudSyncManager.SyncState.RECOMMENDED,
+                                        CloudSyncManager.SyncState.OFFLINE_PENDING,
+                                        CloudSyncManager.SyncState.FAILED
+                                    )
+                                    val syncContainerColor = when (syncState) {
+                                        CloudSyncManager.SyncState.RECOMMENDED,
+                                        CloudSyncManager.SyncState.QUEUED,
+                                        CloudSyncManager.SyncState.SYNCING -> Color(0xFFD81B60)
+                                        CloudSyncManager.SyncState.OFFLINE_PENDING -> Color(0xFFFFC107)
+                                        CloudSyncManager.SyncState.FAILED -> Color(0xFFC62828)
+                                        CloudSyncManager.SyncState.COMPLETED -> Color(0xFF2E7D32)
+                                        else -> Color(0xFF9E9E9E)
+                                    }
+                                    val syncLabel = when (syncState) {
+                                        CloudSyncManager.SyncState.UP_TO_DATE -> "Up to date with cloud folder"
+                                        CloudSyncManager.SyncState.RECOMMENDED -> "Sync now — recommended"
+                                        CloudSyncManager.SyncState.OFFLINE_PENDING -> "Sync now — offline"
+                                        CloudSyncManager.SyncState.QUEUED -> "Sync queued…"
+                                        CloudSyncManager.SyncState.SYNCING -> "Syncing…"
+                                        CloudSyncManager.SyncState.FAILED -> "Sync failed — retry"
+                                        CloudSyncManager.SyncState.COMPLETED -> "Sync completed"
+                                        CloudSyncManager.SyncState.CLOUD_UPDATE_AVAILABLE -> "Cloud update available"
+                                        CloudSyncManager.SyncState.DISABLED -> "Sync now"
+                                    }
                                     Button(
                                         onClick = onSyncNow,
-                                        enabled = cloudSyncStatus.value.destinationName != null &&
-                                            cloudSyncStatus.value.mode != CloudSyncManager.Mode.OFF
-                                    ) {
-                                        Text(
-                                            if (cloudSyncStatus.value.syncRecommended) {
-                                                "Sync now — recommended"
-                                            } else {
-                                                "Sync now"
-                                            }
+                                        enabled = syncEnabled,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = syncContainerColor,
+                                            contentColor = if (syncState == CloudSyncManager.SyncState.OFFLINE_PENDING) {
+                                                Color(0xFF1F1F1F)
+                                            } else Color.White,
+                                            disabledContainerColor = syncContainerColor,
+                                            disabledContentColor = Color.White
                                         )
+                                    ) {
+                                        Text(syncLabel)
                                     }
                                     OutlinedButton(
                                         onClick = onCreateFreshBackup,
@@ -1914,10 +1969,19 @@ private fun DetectorScreen(
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     if (cloudSyncStatus.value.message.isNotBlank()) {
+                                        val statusColor = when (syncState) {
+                                            CloudSyncManager.SyncState.FAILED -> Color(0xFFC62828)
+                                            CloudSyncManager.SyncState.COMPLETED -> Color(0xFF2E7D32)
+                                            CloudSyncManager.SyncState.OFFLINE_PENDING -> Color(0xFF8A6D00)
+                                            CloudSyncManager.SyncState.RECOMMENDED,
+                                            CloudSyncManager.SyncState.QUEUED,
+                                            CloudSyncManager.SyncState.SYNCING -> Color(0xFFD81B60)
+                                            else -> MaterialTheme.colorScheme.primary
+                                        }
                                         Text(
                                             cloudSyncStatus.value.message,
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.primary
+                                            color = statusColor
                                         )
                                     }
                                     Text(

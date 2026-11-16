@@ -1,7 +1,10 @@
 package com.praveen.ridernotes.cloud
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import androidx.documentfile.provider.DocumentFile
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -20,6 +23,18 @@ object CloudSyncManager {
         ANY_NETWORK("Wi-Fi or mobile data")
     }
 
+    enum class SyncState {
+        DISABLED,
+        UP_TO_DATE,
+        RECOMMENDED,
+        OFFLINE_PENDING,
+        QUEUED,
+        SYNCING,
+        FAILED,
+        COMPLETED,
+        CLOUD_UPDATE_AVAILABLE
+    }
+
     data class Status(
         val destinationName: String?,
         val mode: Mode,
@@ -27,7 +42,8 @@ object CloudSyncManager {
         val destinationPath: String? = null,
         val destinationWebUrl: String? = null,
         val syncRecommended: Boolean = false,
-        val pendingRemote: CloudRevision? = null
+        val pendingRemote: CloudRevision? = null,
+        val syncState: SyncState = SyncState.DISABLED
     )
 
     fun destinationUri(context: Context): Uri? = preferences(context)
@@ -39,16 +55,41 @@ object CloudSyncManager {
         val name = uri?.let {
             runCatching { DocumentFile.fromTreeUri(context, it)?.name }.getOrNull()
         }
+        val selectedMode = mode(context)
+        val dirty = SyncRevisionStore.syncRecommended(context)
+        val prefs = preferences(context)
+        val storedState = if (!prefs.contains(KEY_SYNC_STATE)) {
+            if (dirty) SyncState.RECOMMENDED else SyncState.UP_TO_DATE
+        } else runCatching {
+            SyncState.valueOf(prefs.getString(KEY_SYNC_STATE, SyncState.DISABLED.name)!!)
+        }.getOrDefault(SyncState.DISABLED)
+        val effectiveState = when {
+            uri == null || selectedMode == Mode.OFF -> SyncState.DISABLED
+            SyncRevisionStore.pendingRemote(context) != null -> SyncState.CLOUD_UPDATE_AVAILABLE
+            storedState == SyncState.FAILED -> SyncState.FAILED
+            dirty && storedState !in setOf(SyncState.QUEUED, SyncState.SYNCING) ->
+                if (isNetworkReady(context, selectedMode)) SyncState.RECOMMENDED
+                else SyncState.OFFLINE_PENDING
+            !dirty && storedState in setOf(
+                SyncState.RECOMMENDED,
+                SyncState.OFFLINE_PENDING,
+                SyncState.QUEUED,
+                SyncState.SYNCING,
+                SyncState.CLOUD_UPDATE_AVAILABLE
+            ) -> SyncState.UP_TO_DATE
+            else -> storedState
+        }
         return Status(
             destinationName = name ?: uri?.lastPathSegment,
-            mode = mode(context),
+            mode = selectedMode,
             message = preferences(context).getString(KEY_STATUS, "").orEmpty(),
             destinationPath = name,
             destinationWebUrl = preferences(context)
                 .getString(KEY_WEB_URL, null)
                 ?.takeIf(String::isNotBlank),
-            syncRecommended = SyncRevisionStore.syncRecommended(context),
-            pendingRemote = SyncRevisionStore.pendingRemote(context)
+            syncRecommended = dirty,
+            pendingRemote = SyncRevisionStore.pendingRemote(context),
+            syncState = effectiveState
         )
     }
 
@@ -68,6 +109,7 @@ object CloudSyncManager {
         preferences(context).edit()
             .putString(KEY_TREE_URI, uri.toString())
             .putString(KEY_STATUS, "Cloud folder selected")
+            .putString(KEY_SYNC_STATE, SyncState.UP_TO_DATE.name)
             .apply()
         if (previous != uri) {
             preferences(context).edit().remove(KEY_WEB_URL).apply()
@@ -89,7 +131,15 @@ object CloudSyncManager {
     }.getOrDefault(Mode.OFF)
 
     fun setMode(context: Context, mode: Mode) {
-        preferences(context).edit().putString(KEY_MODE, mode.name).apply()
+        preferences(context).edit()
+            .putString(KEY_MODE, mode.name)
+            .putString(
+                KEY_SYNC_STATE,
+                if (mode == Mode.OFF) SyncState.DISABLED.name
+                else if (SyncRevisionStore.isDirty(context)) SyncState.RECOMMENDED.name
+                else SyncState.UP_TO_DATE.name
+            )
+            .apply()
         schedule(context)
         if (mode != Mode.OFF) enqueueNow(context)
     }
@@ -105,7 +155,15 @@ object CloudSyncManager {
             ExistingWorkPolicy.REPLACE,
             request
         )
-        updateStatus(context, "Sync queued")
+        if (isNetworkReady(context, selectedMode)) {
+            updateSyncState(context, SyncState.QUEUED, "Sync queued")
+        } else {
+            updateSyncState(
+                context,
+                SyncState.OFFLINE_PENDING,
+                "Offline — sync will start automatically when the required connection returns"
+            )
+        }
     }
 
     fun noteFiles(context: Context): List<File> {
@@ -134,6 +192,51 @@ object CloudSyncManager {
 
     internal fun updateStatus(context: Context, message: String) {
         preferences(context).edit().putString(KEY_STATUS, message).apply()
+    }
+
+    internal fun updateSyncState(context: Context, state: SyncState, message: String) {
+        preferences(context).edit()
+            .putString(KEY_SYNC_STATE, state.name)
+            .putString(KEY_STATUS, message)
+            .apply()
+    }
+
+    internal fun prepareCompleteRetry(context: Context) {
+        clearUploadMarkers(context)
+    }
+
+    fun markLocalChange(context: Context) {
+        val selectedMode = mode(context)
+        if (destinationUri(context) == null || selectedMode == Mode.OFF) return
+        updateSyncState(
+            context,
+            if (isNetworkReady(context, selectedMode)) SyncState.RECOMMENDED
+            else SyncState.OFFLINE_PENDING,
+            if (isNetworkReady(context, selectedMode)) {
+                "Local changes are ready — Sync now is recommended"
+            } else {
+                "Local changes are waiting for internet — sync will resume when online"
+            }
+        )
+    }
+
+    fun registerStatusListener(
+        context: Context,
+        listener: SharedPreferences.OnSharedPreferenceChangeListener
+    ) = preferences(context).registerOnSharedPreferenceChangeListener(listener)
+
+    fun unregisterStatusListener(
+        context: Context,
+        listener: SharedPreferences.OnSharedPreferenceChangeListener
+    ) = preferences(context).unregisterOnSharedPreferenceChangeListener(listener)
+
+    fun isNetworkReady(context: Context, selectedMode: Mode = mode(context)): Boolean {
+        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return false
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return false
+        return selectedMode != Mode.WIFI_ONLY ||
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
     fun remoteRevision(context: Context): CloudRevision? {
@@ -216,6 +319,7 @@ object CloudSyncManager {
     private const val KEY_TREE_URI = "tree_uri"
     private const val KEY_MODE = "mode"
     private const val KEY_STATUS = "status"
+    private const val KEY_SYNC_STATE = "sync_state"
     private const val KEY_WEB_URL = "web_url"
     private const val MARKER_PREFIX = "uploaded:"
     private const val PERIODIC_WORK = "rider-notes-cloud-periodic"

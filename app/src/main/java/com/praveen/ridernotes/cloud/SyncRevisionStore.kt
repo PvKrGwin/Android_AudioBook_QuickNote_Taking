@@ -43,6 +43,7 @@ object SyncRevisionStore {
             prefs.edit().putLong(KEY_DIRTY_AT, System.currentTimeMillis()).apply()
         }
         prefs.edit().putBoolean(KEY_DIRTY, true).apply()
+        CloudSyncManager.markLocalChange(context)
     }
 
     fun isDirty(context: Context): Boolean = preferences(context).getBoolean(KEY_DIRTY, false)
@@ -104,6 +105,11 @@ object SyncRevisionStore {
             .remove(KEY_PENDING_LOCAL)
             .remove(KEY_PENDING_REMOTE)
             .apply()
+        CloudSyncManager.updateSyncState(
+            context,
+            CloudSyncManager.SyncState.UP_TO_DATE,
+            "Up to date with cloud folder"
+        )
     }
 
     fun keepLocalOver(context: Context, remote: CloudRevision) {
