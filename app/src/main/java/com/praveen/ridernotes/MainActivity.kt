@@ -47,6 +47,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -64,12 +65,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -103,6 +106,7 @@ import com.praveen.ridernotes.topics.TopicLibraryRepository
 import com.praveen.ridernotes.topics.TopicLibraryScreen
 import com.praveen.ridernotes.topics.TopicLibrary
 import com.praveen.ridernotes.topics.TopicGroup
+import kotlinx.coroutines.delay
 import java.io.File
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
@@ -1256,6 +1260,9 @@ private fun DetectorScreen(
     val expandedSources = remember { mutableStateOf<Set<String>>(emptySet()) }
     val expandedTitles = remember { mutableStateOf<Set<String>>(emptySet()) }
     val selectedNotePaths = remember { mutableStateOf<Set<String>>(emptySet()) }
+    val requestedOriginalNotePath = remember { mutableStateOf<String?>(null) }
+    val highlightedOriginalNotePath = remember { mutableStateOf<String?>(null) }
+    val notesListState = rememberLazyListState()
     val showDeleteConfirmation = remember { mutableStateOf(false) }
     val showLinkGuide = remember { mutableStateOf(false) }
     val showSharedLinkDetails = remember { mutableStateOf(false) }
@@ -1421,6 +1428,7 @@ private fun DetectorScreen(
             note = note,
             isPlaying = playingFileName.value == note.audioFile.name,
             isSelected = note.audioFile.absolutePath in selectedNotePaths.value,
+            isHighlighted = note.audioFile.absolutePath == highlightedOriginalNotePath.value,
             onSelectionChange = { selected ->
                 selectedNotePaths.value = if (selected) {
                     selectedNotePaths.value + note.audioFile.absolutePath
@@ -2130,6 +2138,59 @@ private fun DetectorScreen(
                         .groupBy { it.sourceApp }
                         .toSortedMap(String.CASE_INSENSITIVE_ORDER)
 
+                    LaunchedEffect(
+                        requestedOriginalNotePath.value,
+                        selectedTab.value,
+                        notesBySource,
+                        expandedSources.value,
+                        expandedTitles.value
+                    ) {
+                        val requestedPath = requestedOriginalNotePath.value
+                        if (selectedTab.value != 1 || requestedPath == null) return@LaunchedEffect
+                        var targetIndex: Int? = null
+                        var index = 0
+                        notesBySource.forEach { (source, sourceNotes) ->
+                            index += 1 // source heading
+                            if (source in expandedSources.value || notesSearchActive) {
+                                index += 1 // select-all row
+                                if (supportsTitleGrouping(source)) {
+                                    val notesByTitle = sourceNotes
+                                        .groupBy { titleGroupKey(source, it) }
+                                        .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+                                    notesByTitle.forEach { (groupKey, titleNotes) ->
+                                        index += 1 // title heading
+                                        val titleKey = "$source::$groupKey"
+                                        if (titleKey in expandedTitles.value || notesSearchActive) {
+                                            titleNotes.sortedByDescending { it.recordedAtEpochMs }.forEach { note ->
+                                                if (note.audioFile.absolutePath == requestedPath) {
+                                                    targetIndex = index
+                                                }
+                                                index += 1
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    sourceNotes.sortedByDescending { it.recordedAtEpochMs }.forEach { note ->
+                                        if (note.audioFile.absolutePath == requestedPath) {
+                                            targetIndex = index
+                                        }
+                                        index += 1
+                                    }
+                                }
+                            }
+                        }
+                        targetIndex?.let {
+                            delay(80)
+                            notesListState.animateScrollToItem(it)
+                            highlightedOriginalNotePath.value = requestedPath
+                            requestedOriginalNotePath.value = null
+                            delay(3_000)
+                            if (highlightedOriginalNotePath.value == requestedPath) {
+                                highlightedOriginalNotePath.value = null
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = notesSearchQuery.value,
                         onValueChange = { notesSearchQuery.value = it },
@@ -2235,6 +2296,7 @@ private fun DetectorScreen(
                         }
                     } else {
                         LazyColumn(
+                            state = notesListState,
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
@@ -2375,6 +2437,7 @@ private fun DetectorScreen(
                                 val groupKey = titleGroupKey(note.sourceApp, note)
                                 expandedTitles.value = expandedTitles.value + "${note.sourceApp}::$groupKey"
                             }
+                            requestedOriginalNotePath.value = note.audioFile.absolutePath
                             selectedTab.value = 1
                         }
                     )
@@ -2474,6 +2537,7 @@ private fun SavedNoteCard(
     note: SavedVoiceNote,
     isPlaying: Boolean,
     isSelected: Boolean,
+    isHighlighted: Boolean,
     onSelectionChange: (Boolean) -> Unit,
     playbackPositionMs: Long,
     playbackDurationMs: Long,
@@ -2490,7 +2554,10 @@ private fun SavedNoteCard(
 ) {
     Card(
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isHighlighted) Color(0xFFFFF176)
+            else MaterialTheme.colorScheme.surfaceVariant
+        ),
         modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongPress)
     ) {
         Column(

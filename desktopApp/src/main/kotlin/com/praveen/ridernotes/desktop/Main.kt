@@ -549,6 +549,10 @@ private fun RiderNotesDesktopApp(
                             .onFailure { status = it.message ?: "Could not change Windows startup" }
                     }) { Text(if (startupEnabled) "Startup: On" else "Startup: Off") }
                 }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text("Designed by Praveen", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Powered by ChatGPT", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                }
             }
             Spacer(Modifier.height(6.dp))
             Card(Modifier.fillMaxWidth()) {
@@ -690,6 +694,8 @@ private fun NotesScreen(
     var pendingDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingDeleteLabel by remember { mutableStateOf("") }
     var sidebarWidth by remember { mutableStateOf(300f) }
+    var highlightedNoteId by remember { mutableStateOf<String?>(null) }
+    val notesListState = rememberLazyListState()
     val searching = searchQuery.isNotBlank()
     val searchMatches = if (searching) notes.filter { noteMatchesSearch(it, searchQuery) } else emptyList()
     val folderNotes = grouped[selectedSource].orEmpty().filter { it.title == selectedTitle }
@@ -701,7 +707,18 @@ private fun NotesScreen(
         selectedTitle = target.title
         expandedSources = expandedSources + target.sourceApp
         onSearchQueryChange("")
+        val targetList = notes
+            .filter { it.sourceApp == target.sourceApp && it.title == target.title }
+            .sortedByDescending { it.recordedAtEpochMs }
+        val index = targetList.indexOfFirst { it.id == target.id }
+        if (index >= 0) {
+            delay(80)
+            notesListState.animateScrollToItem(index)
+            highlightedNoteId = target.id
+        }
         onRequestedNoteShown()
+        delay(3_000)
+        if (highlightedNoteId == target.id) highlightedNoteId = null
     }
 
     fun requestDelete(ids: Set<String>, label: String) {
@@ -825,7 +842,7 @@ private fun NotesScreen(
                     ) { Text("🗑 Delete") }
                 }
             }
-            LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), state = notesListState, verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 items(visibleNotes, key = { it.id }) { note ->
                     val goToSource = {
                                 selectedSource = note.sourceApp
@@ -849,6 +866,7 @@ private fun NotesScreen(
                         note = note,
                         audioPlayer = audioPlayer,
                         selected = note.id in selectedNoteIds,
+                        highlighted = note.id == highlightedNoteId,
                         onSelectedChange = { selected ->
                             selectedNoteIds = if (selected) selectedNoteIds + note.id else selectedNoteIds - note.id
                         },
@@ -880,6 +898,7 @@ private fun NoteCard(
     note: DesktopNote,
     audioPlayer: DesktopAudioPlayer,
     selected: Boolean = false,
+    highlighted: Boolean = false,
     onSelectedChange: ((Boolean) -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     onAddToTopics: (() -> Unit)? = null
@@ -889,7 +908,10 @@ private fun NoteCard(
     val isCurrent = playback.file?.absolutePath == note.audioFile?.absolutePath
     Card(
         modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded },
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        colors = CardDefaults.cardColors(
+            containerColor = if (highlighted) Color(0xFFFFF176)
+            else MaterialTheme.colorScheme.surfaceVariant
+        )
     ) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

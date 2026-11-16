@@ -450,7 +450,9 @@ fun TopicLibraryScreen(
             savedNotes.firstOrNull { it.audioFile.name == target && !it.topicOnly }
         }
         AlertDialog(onDismissRequest = { actionPlacement = null }, title = { Text("Point options") }, text = {
-            Column {
+            Column(
+                modifier = Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState())
+            ) {
                 TextButton(onClick = { TopicLibraryRepository.setImportant(context, placement.id, !placement.important); actionPlacement = null; refresh() }) {
                     Text(if (placement.important) "Remove important star" else "Mark as important")
                 }
