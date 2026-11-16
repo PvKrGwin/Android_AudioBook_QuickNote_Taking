@@ -53,7 +53,9 @@ data class DesktopTopicItem(
     val title: String,
     val text: String?,
     val target: String?,
-    val createdAt: Long
+    val createdAt: Long,
+    val additionalNotes: String? = null,
+    val richText: String? = null
 )
 
 data class DesktopTopicPlacement(
