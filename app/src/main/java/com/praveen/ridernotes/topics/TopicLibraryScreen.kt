@@ -15,14 +15,19 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -43,6 +48,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -91,6 +100,18 @@ fun TopicLibraryScreen(
     var filterStarred by remember { mutableStateOf(false) }
     var showFilterColorDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var selectedPlacementIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var editingItemId by remember { mutableStateOf<String?>(null) }
+    var editTitle by remember { mutableStateOf("") }
+    var editUrl by remember { mutableStateOf("") }
+    var editBody by remember { mutableStateOf(TextFieldValue("")) }
+    var editBold by remember { mutableStateOf(false) }
+    var editItalic by remember { mutableStateOf(false) }
+    var editUnderline by remember { mutableStateOf(false) }
+    var editBullets by remember { mutableStateOf(false) }
+    var editFont by remember { mutableStateOf<FontFamily?>(null) }
+    var editTextColor by remember { mutableStateOf(Color.Unspecified) }
 
     LaunchedEffect(isRecording, recordingStartedAtElapsedMs) {
         if (!isRecording || recordingStartedAtElapsedMs == null) {
@@ -103,6 +124,10 @@ fun TopicLibraryScreen(
                 delay(250L)
             }
         }
+    }
+
+    LaunchedEffect(currentGroupId) {
+        selectedPlacementIds = emptySet()
     }
 
     fun refresh() { library = TopicLibraryRepository.load(context) }
@@ -121,6 +146,13 @@ fun TopicLibraryScreen(
         }
         pendingAttachmentNotes = null
         insertionIndex = -1
+    }
+    val replacementPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val itemId = editingItemId
+        if (uri != null && itemId != null) {
+            TopicLibraryRepository.replaceAttachment(context, itemId, uri)
+            refresh()
+        }
     }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -176,6 +208,152 @@ fun TopicLibraryScreen(
             TopicLibraryRepository.setLegendMeaning(context, color, inputBody)
             legendColor = null; inputBody = ""; refresh()
         }
+    }
+
+    editingItemId?.let { itemId ->
+        val item = library.items.firstOrNull { it.id == itemId }
+        if (item != null) {
+            AlertDialog(
+                onDismissRequest = { editingItemId = null },
+                title = { Text("Edit Topic point") },
+                text = {
+                    Column(
+                        modifier = Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(7.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = editTitle,
+                            onValueChange = { editTitle = it },
+                            label = { Text("Heading") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (item.type == TopicLibraryRepository.TYPE_LINK) {
+                            OutlinedTextField(
+                                value = editUrl,
+                                onValueChange = { editUrl = it },
+                                label = { Text("Link URL") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        Text("Select text, then apply formatting:", style = MaterialTheme.typography.labelSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            TextButton(onClick = {
+                                editBold = !editBold
+                                if (editBold) editBody = TopicRichText.apply(editBody, SpanStyle(fontWeight = FontWeight.Bold))
+                            }) { Text(if (editBold) "✓ B" else "B", fontWeight = FontWeight.Bold) }
+                            TextButton(onClick = {
+                                editItalic = !editItalic
+                                if (editItalic) editBody = TopicRichText.apply(editBody, SpanStyle(fontStyle = FontStyle.Italic))
+                            }) { Text(if (editItalic) "✓ I" else "I", fontStyle = FontStyle.Italic) }
+                            TextButton(onClick = {
+                                editUnderline = !editUnderline
+                                if (editUnderline) editBody = TopicRichText.apply(editBody, SpanStyle(textDecoration = TextDecoration.Underline))
+                            }) { Text(if (editUnderline) "✓ U" else "U", textDecoration = TextDecoration.Underline) }
+                            TextButton(onClick = {
+                                editBullets = !editBullets
+                                if (editBullets) editBody = TopicRichText.bullets(editBody)
+                            }) { Text(if (editBullets) "✓ • List" else "• List") }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            TextButton(onClick = { editFont = FontFamily.Serif; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Serif) "✓ Serif" else "Serif") }
+                            TextButton(onClick = { editFont = FontFamily.Monospace; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Monospace) "✓ Mono" else "Mono") }
+                            TextButton(onClick = { editFont = FontFamily.Cursive; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Cursive) "✓ Script" else "Script") }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            listOf(
+                                "Black" to Color.Black,
+                                "Red" to Color(0xFFC62828),
+                                "Blue" to Color(0xFF1565C0),
+                                "Green" to Color(0xFF2E7D32),
+                                "Purple" to Color(0xFF6A1B9A)
+                            ).forEach { (name, color) ->
+                                TextButton(onClick = {
+                                    editTextColor = color
+                                    editBody = TopicRichText.apply(editBody, SpanStyle(color = color))
+                                }) {
+                                    Text(if (editTextColor == color) "✓ $name" else name, color = color, fontSize = 11.sp)
+                                }
+                            }
+                        }
+                        OutlinedTextField(
+                            value = editBody,
+                            onValueChange = { proposed ->
+                                var next = TopicRichText.continueBullets(editBody, proposed, editBullets)
+                                if (editBold || editItalic || editUnderline || editFont != null || editTextColor != Color.Unspecified) {
+                                    next = TopicRichText.styleInserted(
+                                        editBody,
+                                        next,
+                                        SpanStyle(
+                                            fontWeight = FontWeight.Bold.takeIf { editBold },
+                                            fontStyle = FontStyle.Italic.takeIf { editItalic },
+                                            textDecoration = TextDecoration.Underline.takeIf { editUnderline },
+                                            fontFamily = editFont,
+                                            color = editTextColor
+                                        )
+                                    )
+                                }
+                                editBody = next
+                            },
+                            label = { Text(if (item.type == TopicLibraryRepository.TYPE_TEXT) "Text" else "Additional text") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (item.type == TopicLibraryRepository.TYPE_ATTACHMENT) {
+                            OutlinedButton(
+                                onClick = { replacementPicker.launch(arrayOf("*/*")) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) { Text("Replace attachment") }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        TopicLibraryRepository.updateEditablePoint(
+                            context = context,
+                            itemId = item.id,
+                            title = editTitle,
+                            body = editBody.text,
+                            linkUrl = editUrl,
+                            richText = TopicRichText.encode(editBody)
+                        )
+                        editingItemId = null
+                        refresh()
+                    }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { editingItemId = null }) { Text("Cancel") } }
+            )
+        }
+    }
+
+    if (pendingPointDeleteIds.isNotEmpty()) {
+        val deletesTopicRecording = pendingPointDeleteIds.any {
+            TopicLibraryRepository.willDeleteTopicRecording(context, it)
+        }
+        AlertDialog(
+            onDismissRequest = { pendingPointDeleteIds = emptySet() },
+            title = { Text("Delete selected Topic point(s)?") },
+            text = {
+                Text(
+                    "Remove ${pendingPointDeleteIds.size} selected point(s) from this Topic? " +
+                        (if (deletesTopicRecording) {
+                            "A Topic-only recording is permanently deleted when this is its final placement."
+                        } else {
+                            "Original media notes and points linked in other Topic folders remain available."
+                        })
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    TopicLibraryRepository.removePlacements(context, pendingPointDeleteIds)
+                    selectedPlacementIds = selectedPlacementIds - pendingPointDeleteIds
+                    pendingPointDeleteIds = emptySet()
+                    onRefreshNotes()
+                    refresh()
+                }) { Text("Yes, delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingPointDeleteIds = emptySet() }) { Text("No") }
+            }
+        )
     }
 
     if (dialog == "group") InputDialog("New group", "Group name", inputTitle, { inputTitle = it }, ::resetInput) {
@@ -305,6 +483,26 @@ fun TopicLibraryScreen(
                     linkItemId = placement.itemId
                     actionPlacement = null
                 }) { Text("Link this point to another group") }
+                TextButton(onClick = {
+                    val editable = actionItem ?: return@TextButton
+                    editingItemId = editable.id
+                    editTitle = editable.title
+                    editUrl = editable.target.takeIf { editable.type == TopicLibraryRepository.TYPE_LINK }.orEmpty()
+                    val body = if (editable.type == TopicLibraryRepository.TYPE_TEXT) editable.text.orEmpty()
+                    else editable.additionalNotes ?: editable.text.orEmpty()
+                    editBody = TopicRichText.decode(body, editable.richText)
+                    editBold = false; editItalic = false; editUnderline = false
+                    editBullets = false; editFont = null; editTextColor = Color.Unspecified
+                    actionPlacement = null
+                }) {
+                    Text(
+                        when (actionItem?.type) {
+                            TopicLibraryRepository.TYPE_LINK -> "Edit heading, link and text"
+                            TopicLibraryRepository.TYPE_ATTACHMENT -> "Edit heading, text or attachment"
+                            else -> "Edit heading and text"
+                        }
+                    )
+                }
                 TextButton(
                     enabled = originalNote != null,
                     onClick = {
@@ -317,10 +515,8 @@ fun TopicLibraryScreen(
                     placement.id
                 )
                 TextButton(onClick = {
-                    TopicLibraryRepository.removePlacement(context, placement.id)
+                    pendingPointDeleteIds = setOf(placement.id)
                     actionPlacement = null
-                    onRefreshNotes()
-                    refresh()
                 }) {
                     Text(
                         if (deletesTopicRecording) {
@@ -434,6 +630,27 @@ fun TopicLibraryScreen(
                 color = MaterialTheme.colorScheme.primary
             )
         }
+        if (currentGroup != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Selected: ${selectedPlacementIds.size}", modifier = Modifier.weight(1f), fontSize = 11.sp)
+                OutlinedButton(
+                    enabled = placements.isNotEmpty() && selectedPlacementIds.size != placements.size,
+                    onClick = { selectedPlacementIds = placements.mapTo(mutableSetOf()) { it.id } }
+                ) { Text("Select all", fontSize = 11.sp) }
+                OutlinedButton(
+                    enabled = selectedPlacementIds.isNotEmpty(),
+                    onClick = { selectedPlacementIds = emptySet() }
+                ) { Text("Clear", fontSize = 11.sp) }
+                Button(
+                    enabled = selectedPlacementIds.isNotEmpty(),
+                    onClick = { pendingPointDeleteIds = selectedPlacementIds }
+                ) { Text("Delete selected", fontSize = 11.sp) }
+            }
+        }
         if (currentGroup != null && isRecording) {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -497,19 +714,52 @@ fun TopicLibraryScreen(
                 )) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "${placement.order + 1}. ${item.title}",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                textDecoration = if (originalMissing) TextDecoration.LineThrough else TextDecoration.None,
-                                modifier = Modifier.weight(1f)
+                            Checkbox(
+                                checked = placement.id in selectedPlacementIds,
+                                onCheckedChange = { checked ->
+                                    selectedPlacementIds = if (checked) {
+                                        selectedPlacementIds + placement.id
+                                    } else {
+                                        selectedPlacementIds - placement.id
+                                    }
+                                }
                             )
+                            SelectionContainer(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${placement.order + 1}. ${item.title}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    textDecoration = if (originalMissing) TextDecoration.LineThrough else TextDecoration.None,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
                             if (placement.important) Text("★", color = Color(0xFFFFB300), fontWeight = FontWeight.Bold)
                         }
                         if (originalMissing) Text("Original content is missing — restore it from backup to reactivate this point.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
                         if (expanded) {
+                            val displayBody = if (item.type == TopicLibraryRepository.TYPE_TEXT) item.text
+                            else item.additionalNotes ?: item.text
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(onClick = {
+                                    context.getSystemService(android.content.ClipboardManager::class.java)
+                                        .setPrimaryClip(android.content.ClipData.newPlainText("Topic heading", item.title))
+                                }) { Text("Copy heading", fontSize = 11.sp) }
+                                displayBody?.takeIf(String::isNotBlank)?.let { body ->
+                                    OutlinedButton(onClick = {
+                                        context.getSystemService(android.content.ClipboardManager::class.java)
+                                            .setPrimaryClip(android.content.ClipData.newPlainText("Topic text", body))
+                                    }) { Text("Copy text", fontSize = 11.sp) }
+                                }
+                            }
                             Text(item.type.lowercase().replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelSmall)
-                            item.text?.let { Text(it, fontSize = 12.sp) }
+                            displayBody?.takeIf(String::isNotBlank)?.let { body ->
+                                if (item.type != TopicLibraryRepository.TYPE_TEXT) {
+                                Text("Additional notes", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                }
+                                SelectionContainer {
+                                    Text(TopicRichText.decode(body, item.richText).annotatedString, fontSize = 12.sp)
+                                }
+                            }
                             item.target?.takeIf { item.type == TopicLibraryRepository.TYPE_LINK }?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
                             if (item.type == TopicLibraryRepository.TYPE_ATTACHMENT && attachment?.exists() == true && isImageFile(attachment)) {
                                 val bitmap = remember(attachment.absolutePath, attachment.lastModified()) {
@@ -694,6 +944,7 @@ private fun topicSearchMatches(item: TopicItem?, note: SavedVoiceNote?, query: S
     val searchable = listOfNotNull(
         item?.title,
         item?.text,
+        item?.additionalNotes,
         item?.target,
         note?.sourceApp,
         note?.title,
