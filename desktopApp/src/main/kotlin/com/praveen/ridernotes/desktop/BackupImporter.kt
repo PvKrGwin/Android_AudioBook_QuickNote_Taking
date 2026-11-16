@@ -63,7 +63,9 @@ object BackupImporter {
                     title = it.optString("title", "Untitled"),
                     text = it.nullable("text"),
                     target = it.nullable("target"),
-                    createdAt = it.optLong("createdAt")
+                    createdAt = it.optLong("createdAt"),
+                    additionalNotes = it.nullable("additionalNotes"),
+                    richText = it.nullable("richText")
                 )
             },
             placements = library.optJSONArray("placements").objects().map {
