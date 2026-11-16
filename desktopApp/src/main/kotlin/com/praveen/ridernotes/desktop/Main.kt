@@ -1101,6 +1101,7 @@ private fun TopicsScreen(
     var pointDialogMode by remember { mutableStateOf<String?>(null) }
     var pointTitle by remember { mutableStateOf("") }
     var pointBody by remember { mutableStateOf("") }
+    var pointRichBody by remember { mutableStateOf(TextFieldValue("")) }
     var pointNotes by remember { mutableStateOf("") }
     var pendingAttachment by remember { mutableStateOf<File?>(null) }
     var showAttachmentNotesDialog by remember { mutableStateOf(false) }
@@ -1439,14 +1440,23 @@ private fun TopicsScreen(
             onDismissRequest = { pointDialogMode = null; pointNotes = "" },
             title = { Text(if (mode == "TEXT") "New text point" else "New link point") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     OutlinedTextField(pointTitle, { pointTitle = it }, label = { Text("Title") })
-                    OutlinedTextField(
-                        pointBody,
-                        { pointBody = it },
-                        label = { Text(if (mode == "TEXT") "Text" else "Web link") }
-                    )
-                    if (mode == "LINK") {
+                    if (mode == "TEXT") {
+                        DesktopRichTextField(
+                            value = pointRichBody,
+                            onValueChange = { pointRichBody = it },
+                            label = "Text"
+                        )
+                    } else {
+                        OutlinedTextField(
+                            pointBody,
+                            { pointBody = it },
+                            label = { Text("Web link") }
+                        )
                         OutlinedTextField(
                             pointNotes,
                             { pointNotes = it },
@@ -1456,16 +1466,25 @@ private fun TopicsScreen(
                 }
             },
             confirmButton = {
-                TextButton(enabled = pointBody.isNotBlank() && selectedGroupId != null, onClick = {
+                val canAdd = selectedGroupId != null &&
+                    if (mode == "TEXT") pointRichBody.text.isNotBlank() else pointBody.isNotBlank()
+                TextButton(enabled = canAdd, onClick = {
                     val groupId = selectedGroupId ?: return@TextButton
                     val updated = if (mode == "TEXT") {
-                        BackupEditor.addTextPoint(snapshot, groupId, pointTitle, pointBody)
+                        BackupEditor.addTextPoint(
+                            snapshot,
+                            groupId,
+                            pointTitle,
+                            pointRichBody.text,
+                            TopicRichText.encode(pointRichBody)
+                        )
                     } else {
                         BackupEditor.addLinkPoint(snapshot, groupId, pointTitle, pointBody, pointNotes)
                     }
                     onChanged(updated)
                     pointTitle = ""
                     pointBody = ""
+                    pointRichBody = TextFieldValue("")
                     pointNotes = ""
                     pointDialogMode = null
                 }) { Text("Add") }
@@ -1570,7 +1589,7 @@ private fun TopicsScreen(
                         groupDialogParent = group.id
                         showGroupDialog = true
                     }) { Text("+ Subfolder") }
-                    TextButton(onClick = { pointNotes = ""; pointDialogMode = "TEXT" }) { Text("+ Text") }
+                    TextButton(onClick = { pointNotes = ""; pointTitle = ""; pointRichBody = TextFieldValue(""); pointDialogMode = "TEXT" }) { Text("+ Text") }
                     TextButton(onClick = { pointNotes = ""; pointDialogMode = "LINK" }) { Text("+ Link") }
                     TextButton(onClick = {
                         chooseAttachment()?.let {
@@ -1734,6 +1753,118 @@ private fun TopicsScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun DesktopRichTextField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    label: String
+) {
+    var bold by remember { mutableStateOf(false) }
+    var italic by remember { mutableStateOf(false) }
+    var underline by remember { mutableStateOf(false) }
+    var strike by remember { mutableStateOf(false) }
+    var bullets by remember { mutableStateOf(false) }
+    var font by remember { mutableStateOf<FontFamily?>(null) }
+    var textColor by remember { mutableStateOf(Color.Unspecified) }
+    var lastSelection by remember { mutableStateOf<TextRange?>(null) }
+
+    fun formattingValue(): TextFieldValue = if (!value.selection.collapsed) value
+        else lastSelection?.let { value.copy(selection = it) } ?: value
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = { proposed ->
+            if (!proposed.selection.collapsed) lastSelection = proposed.selection
+            val hasTypingStyle = bold || italic || underline || strike ||
+                font != null || textColor != Color.Unspecified
+            val decoration = when {
+                underline && strike -> TextDecoration.combine(
+                    listOf(TextDecoration.Underline, TextDecoration.LineThrough)
+                )
+                underline -> TextDecoration.Underline
+                strike -> TextDecoration.LineThrough
+                else -> null
+            }
+            val typingStyle = if (hasTypingStyle) {
+                SpanStyle(
+                    fontWeight = FontWeight.Bold.takeIf { bold },
+                    fontStyle = FontStyle.Italic.takeIf { italic },
+                    textDecoration = decoration,
+                    fontFamily = font,
+                    color = textColor
+                )
+            } else null
+            var next = TopicRichText.reconcileEdit(value, proposed, typingStyle)
+            next = TopicRichText.continueBullets(value, next, bullets)
+            onValueChange(next)
+        },
+        label = { Text(label) },
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text("Select text, then apply formatting:", fontSize = 12.sp)
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = {
+            val target = formattingValue()
+            val enabled = if (target.selection.collapsed) !bold else !TopicRichText.selectionIsBold(target)
+            if (!target.selection.collapsed) onValueChange(TopicRichText.setBold(target, enabled))
+            bold = enabled
+        }) { Text(if (bold) "✓ B" else "B", fontWeight = FontWeight.Bold) }
+        TextButton(onClick = {
+            val target = formattingValue()
+            val enabled = if (target.selection.collapsed) !italic else !TopicRichText.selectionIsItalic(target)
+            if (!target.selection.collapsed) onValueChange(TopicRichText.setItalic(target, enabled))
+            italic = enabled
+        }) { Text(if (italic) "✓ I" else "I", fontStyle = FontStyle.Italic) }
+        TextButton(onClick = {
+            val target = formattingValue()
+            val enabled = if (target.selection.collapsed) !underline else !TopicRichText.selectionIsUnderlined(target)
+            if (!target.selection.collapsed) onValueChange(TopicRichText.setUnderline(target, enabled))
+            underline = enabled
+        }) { Text(if (underline) "✓ U" else "U", textDecoration = TextDecoration.Underline) }
+        TextButton(onClick = {
+            val target = formattingValue()
+            val enabled = if (target.selection.collapsed) !strike else !TopicRichText.selectionIsStruck(target)
+            if (!target.selection.collapsed) onValueChange(TopicRichText.setStrike(target, enabled))
+            strike = enabled
+        }) { Text(if (strike) "✓ S" else "S", textDecoration = TextDecoration.LineThrough) }
+        TextButton(onClick = {
+            bullets = !bullets
+            if (bullets) onValueChange(TopicRichText.bullets(formattingValue()))
+        }) { Text(if (bullets) "✓ • List" else "• List") }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        TextButton(onClick = {
+            font = FontFamily.Serif
+            onValueChange(TopicRichText.apply(formattingValue(), SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Serif) "✓ Serif" else "Serif") }
+        TextButton(onClick = {
+            font = FontFamily.Monospace
+            onValueChange(TopicRichText.apply(formattingValue(), SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Monospace) "✓ Mono" else "Mono") }
+        TextButton(onClick = {
+            font = FontFamily.Cursive
+            onValueChange(TopicRichText.apply(formattingValue(), SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Cursive) "✓ Script" else "Script") }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        listOf(
+            "Black" to Color.Black,
+            "Red" to Color(0xFFC62828),
+            "Blue" to Color(0xFF1565C0),
+            "Green" to Color(0xFF2E7D32),
+            "Purple" to Color(0xFF6A1B9A)
+        ).forEach { (name, color) ->
+            TextButton(onClick = {
+                textColor = color
+                onValueChange(TopicRichText.apply(formattingValue(), SpanStyle(color = color)))
+            }) {
+                Text(if (textColor == color) "✓ $name" else name, color = color, fontSize = 11.sp)
             }
         }
     }

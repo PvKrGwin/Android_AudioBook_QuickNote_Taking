@@ -137,7 +137,7 @@ fun TopicLibraryScreen(
     }
 
     fun refresh() { library = TopicLibraryRepository.load(context) }
-    fun resetInput() { inputTitle = ""; inputBody = ""; inputNotes = ""; insertionIndex = -1; dialog = null }
+    fun resetInput() { inputTitle = ""; inputBody = ""; inputNotes = ""; editBody = TextFieldValue(""); insertionIndex = -1; dialog = null }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val groupId = currentGroupId
         if (uri != null && groupId != null) {
@@ -241,104 +241,10 @@ fun TopicLibraryScreen(
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
-                        Text("Select text, then format:", style = MaterialTheme.typography.labelSmall)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            TextButton(onClick = {
-                                val enabled = if (editBody.selection.collapsed) !editBold
-                                    else !TopicRichText.selectionIsBold(editBody)
-                                if (!editBody.selection.collapsed) editBody = TopicRichText.setBold(editBody, enabled)
-                                editBold = enabled
-                            }) { Text(if (editBold) "✓B" else "B", fontWeight = FontWeight.Bold) }
-                            TextButton(onClick = {
-                                val enabled = if (editBody.selection.collapsed) !editItalic
-                                    else !TopicRichText.selectionIsItalic(editBody)
-                                if (!editBody.selection.collapsed) editBody = TopicRichText.setItalic(editBody, enabled)
-                                editItalic = enabled
-                            }) { Text(if (editItalic) "✓I" else "I", fontStyle = FontStyle.Italic) }
-                            TextButton(onClick = {
-                                val enabled = if (editBody.selection.collapsed) !editUnderline
-                                    else !TopicRichText.selectionIsUnderlined(editBody)
-                                if (!editBody.selection.collapsed) editBody = TopicRichText.setUnderline(editBody, enabled)
-                                editUnderline = enabled
-                            }) { Text(if (editUnderline) "✓U" else "U", textDecoration = TextDecoration.Underline) }
-                            TextButton(onClick = {
-                                val enabled = if (editBody.selection.collapsed) !editStrike
-                                    else !TopicRichText.selectionIsStruck(editBody)
-                                if (!editBody.selection.collapsed) editBody = TopicRichText.setStrike(editBody, enabled)
-                                editStrike = enabled
-                            }) { Text(if (editStrike) "✓S" else "S", textDecoration = TextDecoration.LineThrough) }
-                            TextButton(onClick = {
-                                editBullets = !editBullets
-                                if (editBullets) editBody = TopicRichText.bullets(editBody)
-                            }) { Text(if (editBullets) "✓•" else "•") }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly
-                        ) {
-                            TextButton(onClick = { editFont = FontFamily.Serif; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Serif) "✓S" else "S", fontFamily = FontFamily.Serif) }
-                            TextButton(onClick = { editFont = FontFamily.Monospace; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Monospace) "✓M" else "M", fontFamily = FontFamily.Monospace) }
-                            TextButton(onClick = { editFont = FontFamily.Cursive; editBody = TopicRichText.apply(editBody, SpanStyle(fontFamily = editFont)) }) { Text(if (editFont == FontFamily.Cursive) "✓𝒮" else "𝒮", fontFamily = FontFamily.Cursive) }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceEvenly,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            listOf(
-                                Color.Black,
-                                Color(0xFFC62828),
-                                Color(0xFF1565C0),
-                                Color(0xFF2E7D32),
-                                Color(0xFF6A1B9A)
-                            ).forEach { color ->
-                                Surface(
-                                    onClick = {
-                                        editTextColor = color
-                                        editBody = TopicRichText.apply(editBody, SpanStyle(color = color))
-                                    },
-                                    modifier = Modifier.size(32.dp),
-                                    shape = CircleShape,
-                                    color = color,
-                                    border = BorderStroke(2.dp, Color.White)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        if (editTextColor == color) {
-                                            Text("✓", color = if (color == Color.Black) Color.White else Color.White)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        OutlinedTextField(
+                        MobileRichTextField(
                             value = editBody,
-                            onValueChange = { proposed ->
-                                val hasTypingStyle = editBold || editItalic || editUnderline || editStrike ||
-                                    editFont != null || editTextColor != Color.Unspecified
-                                val typingStyle = if (hasTypingStyle) {
-                                    SpanStyle(
-                                            fontWeight = FontWeight.Bold.takeIf { editBold },
-                                            fontStyle = FontStyle.Italic.takeIf { editItalic },
-                                            textDecoration = when {
-                                                editUnderline && editStrike -> TextDecoration.combine(listOf(TextDecoration.Underline, TextDecoration.LineThrough))
-                                                editUnderline -> TextDecoration.Underline
-                                                editStrike -> TextDecoration.LineThrough
-                                                else -> null
-                                            },
-                                            fontFamily = editFont,
-                                            color = editTextColor
-                                        )
-                                } else null
-                                var next = TopicRichText.reconcileEdit(editBody, proposed, typingStyle)
-                                next = TopicRichText.continueBullets(editBody, next, editBullets)
-                                editBody = next
-                            },
-                            label = { Text(if (item.type == TopicLibraryRepository.TYPE_TEXT) "Text" else "Additional text") },
-                            modifier = Modifier.fillMaxWidth()
+                            onValueChange = { editBody = it },
+                            label = if (item.type == TopicLibraryRepository.TYPE_TEXT) "Text" else "Additional text"
                         )
                         if (item.type == TopicLibraryRepository.TYPE_ATTACHMENT) {
                             OutlinedButton(
@@ -403,9 +309,49 @@ fun TopicLibraryScreen(
         if (inputTitle.isNotBlank()) TopicLibraryRepository.createGroup(context, inputTitle, currentGroupId)
         resetInput(); refresh()
     }
-    if (dialog == "text") TwoInputDialog("New text point", "Title", "Text", inputTitle, inputBody, { inputTitle = it }, { inputBody = it }, ::resetInput) {
-        currentGroupId?.let { TopicLibraryRepository.addText(context, it, inputTitle, inputBody, insertionIndex.takeIf { value -> value >= 0 }) }
-        resetInput(); refresh()
+    if (dialog == "text") {
+        AlertDialog(
+            onDismissRequest = ::resetInput,
+            title = { Text("New text point") },
+            text = {
+                Column(
+                    modifier = Modifier.heightIn(max = 620.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    OutlinedTextField(
+                        value = inputTitle,
+                        onValueChange = { inputTitle = it },
+                        label = { Text("Heading") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    MobileRichTextField(
+                        value = editBody,
+                        onValueChange = { editBody = it },
+                        label = "Text"
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = editBody.text.isNotBlank(),
+                    onClick = {
+                        currentGroupId?.let {
+                            TopicLibraryRepository.addText(
+                                context = context,
+                                groupId = it,
+                                title = inputTitle,
+                                text = editBody.text,
+                                index = insertionIndex.takeIf { value -> value >= 0 },
+                                richText = TopicRichText.encode(editBody)
+                            )
+                        }
+                        resetInput()
+                        refresh()
+                    }
+                ) { Text("Add") }
+            },
+            dismissButton = { TextButton(onClick = ::resetInput) { Text("Cancel") } }
+        )
     }
     if (dialog == "link") ThreeInputDialog(
         "New web link", "Title", "https://…", "Notes about this link (optional)",
@@ -511,7 +457,7 @@ fun TopicLibraryScreen(
                 TextButton(onClick = { colorPlacement = placement; actionPlacement = null }) { Text("Set colour") }
                 TextButton(onClick = { TopicLibraryRepository.move(context, placement.id, -1); actionPlacement = null; refresh() }) { Text("Move up") }
                 TextButton(onClick = { TopicLibraryRepository.move(context, placement.id, 1); actionPlacement = null; refresh() }) { Text("Move down") }
-                TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "text"; actionPlacement = null }) { Text("Insert text after this point") }
+                TextButton(onClick = { insertionIndex = pointIndex + 1; editBody = TextFieldValue(""); dialog = "text"; actionPlacement = null }) { Text("Insert text after this point") }
                 TextButton(onClick = { insertionIndex = pointIndex + 1; dialog = "link"; actionPlacement = null }) { Text("Insert web link after this point") }
                 TextButton(onClick = {
                     insertionIndex = pointIndex + 1
@@ -534,7 +480,7 @@ fun TopicLibraryScreen(
                     val body = if (editable.type == TopicLibraryRepository.TYPE_TEXT) editable.text.orEmpty()
                     else editable.additionalNotes ?: editable.text.orEmpty()
                     editBody = TopicRichText.decode(body, editable.richText)
-                    editBold = false; editItalic = false; editUnderline = false
+                    editBold = false; editItalic = false; editUnderline = false; editStrike = false
                     editBullets = false; editFont = null; editTextColor = Color.Unspecified
                     actionPlacement = null
                 }) {
@@ -923,7 +869,7 @@ fun TopicLibraryScreen(
             title = { Text("Add point") },
             text = {
                 Column {
-                    TextButton(onClick = { addMenuExpanded = false; dialog = "text" }) { Text("Text") }
+                    TextButton(onClick = { addMenuExpanded = false; editBody = TextFieldValue(""); dialog = "text" }) { Text("Text") }
                     TextButton(onClick = { addMenuExpanded = false; dialog = "link" }) { Text("Web link") }
                     TextButton(onClick = {
                         addMenuExpanded = false
@@ -970,6 +916,128 @@ private fun topicCardColor(color: String): Color = when (color) {
     "BLUE" -> Color(0xFFE2EEFF)
     "PURPLE" -> Color(0xFFF0E5FF)
     else -> MaterialTheme.colorScheme.surface
+}
+
+
+@Composable
+private fun MobileRichTextField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    label: String
+) {
+    var bold by remember { mutableStateOf(false) }
+    var italic by remember { mutableStateOf(false) }
+    var underline by remember { mutableStateOf(false) }
+    var strike by remember { mutableStateOf(false) }
+    var bullets by remember { mutableStateOf(false) }
+    var font by remember { mutableStateOf<FontFamily?>(null) }
+    var textColor by remember { mutableStateOf(Color.Unspecified) }
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = { proposed ->
+            val hasTypingStyle = bold || italic || underline || strike ||
+                font != null || textColor != Color.Unspecified
+            val decoration = when {
+                underline && strike -> TextDecoration.combine(
+                    listOf(TextDecoration.Underline, TextDecoration.LineThrough)
+                )
+                underline -> TextDecoration.Underline
+                strike -> TextDecoration.LineThrough
+                else -> null
+            }
+            val typingStyle = if (hasTypingStyle) {
+                SpanStyle(
+                    fontWeight = FontWeight.Bold.takeIf { bold },
+                    fontStyle = FontStyle.Italic.takeIf { italic },
+                    textDecoration = decoration,
+                    fontFamily = font,
+                    color = textColor
+                )
+            } else null
+            var next = TopicRichText.reconcileEdit(value, proposed, typingStyle)
+            next = TopicRichText.continueBullets(value, next, bullets)
+            onValueChange(next)
+        },
+        label = { Text(label) },
+        modifier = Modifier.fillMaxWidth()
+    )
+    Text("Select text, then format:", style = MaterialTheme.typography.labelSmall)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !bold else !TopicRichText.selectionIsBold(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setBold(value, enabled))
+            bold = enabled
+        }) { Text(if (bold) "✓B" else "B", fontWeight = FontWeight.Bold) }
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !italic else !TopicRichText.selectionIsItalic(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setItalic(value, enabled))
+            italic = enabled
+        }) { Text(if (italic) "✓I" else "I", fontStyle = FontStyle.Italic) }
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !underline else !TopicRichText.selectionIsUnderlined(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setUnderline(value, enabled))
+            underline = enabled
+        }) { Text(if (underline) "✓U" else "U", textDecoration = TextDecoration.Underline) }
+        TextButton(onClick = {
+            val enabled = if (value.selection.collapsed) !strike else !TopicRichText.selectionIsStruck(value)
+            if (!value.selection.collapsed) onValueChange(TopicRichText.setStrike(value, enabled))
+            strike = enabled
+        }) { Text(if (strike) "✓S" else "S", textDecoration = TextDecoration.LineThrough) }
+        TextButton(onClick = {
+            bullets = !bullets
+            if (bullets) onValueChange(TopicRichText.bullets(value))
+        }) { Text(if (bullets) "✓•" else "•") }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly
+    ) {
+        TextButton(onClick = {
+            font = FontFamily.Serif
+            onValueChange(TopicRichText.apply(value, SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Serif) "✓S" else "S", fontFamily = FontFamily.Serif) }
+        TextButton(onClick = {
+            font = FontFamily.Monospace
+            onValueChange(TopicRichText.apply(value, SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Monospace) "✓M" else "M", fontFamily = FontFamily.Monospace) }
+        TextButton(onClick = {
+            font = FontFamily.Cursive
+            onValueChange(TopicRichText.apply(value, SpanStyle(fontFamily = font)))
+        }) { Text(if (font == FontFamily.Cursive) "✓𝒮" else "𝒮", fontFamily = FontFamily.Cursive) }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        listOf(
+            Color.Black,
+            Color(0xFFC62828),
+            Color(0xFF1565C0),
+            Color(0xFF2E7D32),
+            Color(0xFF6A1B9A)
+        ).forEach { color ->
+            Surface(
+                onClick = {
+                    textColor = color
+                    onValueChange(TopicRichText.apply(value, SpanStyle(color = color)))
+                },
+                modifier = Modifier.size(32.dp),
+                shape = CircleShape,
+                color = color,
+                border = BorderStroke(2.dp, Color.White)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    if (textColor == color) Text("✓", color = Color.White)
+                }
+            }
+        }
+    }
 }
 
 @Composable private fun InputDialog(title: String, label: String, value: String, onChange: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =

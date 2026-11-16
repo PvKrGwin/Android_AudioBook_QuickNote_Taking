@@ -159,13 +159,17 @@ object BackupEditor {
         snapshot: BackupSnapshot,
         groupId: String,
         title: String,
-        text: String
+        text: String,
+        richText: String? = null
     ): BackupSnapshot {
         DesktopUndoStore.capture(snapshot)
         return addPoint(
             snapshot,
             groupId,
-            DesktopTopicItem(id(), "TEXT", title.ifBlank { "Text note" }, text, null, now())
+            DesktopTopicItem(
+                id(), "TEXT", title.ifBlank { "Text note" }, text, null, now(),
+                richText = richText
+            )
         )
     }
 

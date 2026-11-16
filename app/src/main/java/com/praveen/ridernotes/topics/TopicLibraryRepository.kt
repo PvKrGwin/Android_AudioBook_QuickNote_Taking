@@ -71,8 +71,19 @@ object TopicLibraryRepository {
         )))
     }
 
-    @Synchronized fun addText(context: Context, groupId: String, title: String, text: String, index: Int? = null) =
-        addNewItem(context, groupId, TopicItem(id(), TYPE_TEXT, title.ifBlank { "Text note" }, text, null, now()), index)
+    @Synchronized fun addText(
+        context: Context,
+        groupId: String,
+        title: String,
+        text: String,
+        index: Int? = null,
+        richText: String? = null
+    ) = addNewItem(
+        context,
+        groupId,
+        TopicItem(id(), TYPE_TEXT, title.ifBlank { "Text note" }, text, null, now(), richText = richText),
+        index
+    )
 
     @Synchronized fun addLink(
         context: Context,
