@@ -367,8 +367,8 @@ class BackupEditingTest {
             snapshot, groupId, attachment, "Diagram from the experiment"
         )
 
-        assertEquals("Read section four", snapshot.items.first { it.type == "LINK" }.text)
-        assertEquals("Diagram from the experiment", snapshot.items.first { it.type == "ATTACHMENT" }.text)
+        assertEquals("Read section four", snapshot.items.first { it.type == "LINK" }.additionalNotes)
+        assertEquals("Diagram from the experiment", snapshot.items.first { it.type == "ATTACHMENT" }.additionalNotes)
     }
 
     private fun ZipOutputStream.entry(path: String, content: String) {
