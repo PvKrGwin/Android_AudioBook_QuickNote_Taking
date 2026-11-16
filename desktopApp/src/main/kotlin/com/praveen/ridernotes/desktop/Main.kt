@@ -1787,16 +1787,22 @@ private fun TopicPointCard(
                     Text("Select text, then apply formatting:", fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         TextButton(onClick = {
-                            editBold = !editBold
-                            if (editBold) editBody = TopicRichText.apply(editBody, SpanStyle(fontWeight = FontWeight.Bold))
+                            val enabled = if (editBody.selection.collapsed) !editBold
+                                else !TopicRichText.selectionIsBold(editBody)
+                            if (!editBody.selection.collapsed) editBody = TopicRichText.setBold(editBody, enabled)
+                            editBold = enabled
                         }) { Text(if (editBold) "✓ B" else "B", fontWeight = FontWeight.Bold) }
                         TextButton(onClick = {
-                            editItalic = !editItalic
-                            if (editItalic) editBody = TopicRichText.apply(editBody, SpanStyle(fontStyle = FontStyle.Italic))
+                            val enabled = if (editBody.selection.collapsed) !editItalic
+                                else !TopicRichText.selectionIsItalic(editBody)
+                            if (!editBody.selection.collapsed) editBody = TopicRichText.setItalic(editBody, enabled)
+                            editItalic = enabled
                         }) { Text(if (editItalic) "✓ I" else "I", fontStyle = FontStyle.Italic) }
                         TextButton(onClick = {
-                            editUnderline = !editUnderline
-                            if (editUnderline) editBody = TopicRichText.apply(editBody, SpanStyle(textDecoration = TextDecoration.Underline))
+                            val enabled = if (editBody.selection.collapsed) !editUnderline
+                                else !TopicRichText.selectionIsUnderlined(editBody)
+                            if (!editBody.selection.collapsed) editBody = TopicRichText.setUnderline(editBody, enabled)
+                            editUnderline = enabled
                         }) { Text(if (editUnderline) "✓ U" else "U", textDecoration = TextDecoration.Underline) }
                         TextButton(onClick = {
                             editBullets = !editBullets
@@ -1827,20 +1833,19 @@ private fun TopicPointCard(
                     OutlinedTextField(
                         value = editBody,
                         onValueChange = { proposed ->
-                            var next = TopicRichText.continueBullets(editBody, proposed, editBullets)
-                            if (editBold || editItalic || editUnderline || editFont != null || editTextColor != Color.Unspecified) {
-                                next = TopicRichText.styleInserted(
-                                    editBody,
-                                    next,
-                                    SpanStyle(
+                            val hasTypingStyle = editBold || editItalic || editUnderline ||
+                                editFont != null || editTextColor != Color.Unspecified
+                            val typingStyle = if (hasTypingStyle) {
+                                SpanStyle(
                                         fontWeight = FontWeight.Bold.takeIf { editBold },
                                         fontStyle = FontStyle.Italic.takeIf { editItalic },
                                         textDecoration = TextDecoration.Underline.takeIf { editUnderline },
                                         fontFamily = editFont,
                                         color = editTextColor
                                     )
-                                )
-                            }
+                            } else null
+                            var next = TopicRichText.reconcileEdit(editBody, proposed, typingStyle)
+                            next = TopicRichText.continueBullets(editBody, next, editBullets)
                             editBody = next
                         },
                         label = { Text(if (item.type == "TEXT") "Text" else "Additional text") },
