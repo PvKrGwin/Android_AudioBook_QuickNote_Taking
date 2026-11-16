@@ -197,8 +197,33 @@ object CloudSyncManager {
     internal fun updateSyncState(context: Context, state: SyncState, message: String) {
         preferences(context).edit()
             .putString(KEY_SYNC_STATE, state.name)
+            .putLong(KEY_SYNC_STATE_AT, System.currentTimeMillis())
             .putString(KEY_STATUS, message)
             .apply()
+    }
+
+    /**
+     * Keeps the green completion acknowledgement visible briefly, then returns the idle
+     * control to the ordinary up-to-date state. A new local edit always wins and prevents
+     * this transition from hiding the recommended/offline state.
+     *
+     * @return milliseconds remaining before the completion state can settle, or 0 when
+     * no delayed refresh is needed.
+     */
+    fun settleCompletedIfReady(context: Context): Long {
+        val prefs = preferences(context)
+        val state = runCatching {
+            SyncState.valueOf(prefs.getString(KEY_SYNC_STATE, SyncState.DISABLED.name)!!)
+        }.getOrDefault(SyncState.DISABLED)
+        if (state != SyncState.COMPLETED || SyncRevisionStore.isDirty(context)) return 0L
+        val elapsed = System.currentTimeMillis() - prefs.getLong(
+            KEY_SYNC_STATE_AT,
+            System.currentTimeMillis()
+        )
+        val remaining = COMPLETION_CONFIRMATION_MS - elapsed
+        if (remaining > 0L) return remaining
+        updateSyncState(context, SyncState.UP_TO_DATE, "Up to date with cloud folder")
+        return 0L
     }
 
     internal fun prepareCompleteRetry(context: Context) {
@@ -320,10 +345,12 @@ object CloudSyncManager {
     private const val KEY_MODE = "mode"
     private const val KEY_STATUS = "status"
     private const val KEY_SYNC_STATE = "sync_state"
+    private const val KEY_SYNC_STATE_AT = "sync_state_at"
     private const val KEY_WEB_URL = "web_url"
     private const val MARKER_PREFIX = "uploaded:"
     private const val PERIODIC_WORK = "rider-notes-cloud-periodic"
     private const val IMMEDIATE_WORK = "rider-notes-cloud-now"
     private const val FULL_BACKUP_NAME = "RiderNotes_Full_Backup.zip"
+    private const val COMPLETION_CONFIRMATION_MS = 5_000L
     private val SYNCED_EXTENSIONS = setOf("m4a", "json", "txt", "vtt", "srt")
 }

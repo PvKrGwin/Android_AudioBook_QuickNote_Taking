@@ -123,9 +123,29 @@ class MainActivity : ComponentActivity() {
         CloudSyncManager.Status(null, CloudSyncManager.Mode.OFF, "")
     )
     private val cloudConflict = mutableStateOf<CloudRevision?>(null)
+    private val cloudSyncCompletionHandler = Handler(Looper.getMainLooper())
+    private val settleCloudSyncCompletion = Runnable {
+        CloudSyncManager.settleCompletedIfReady(this)
+        cloudSyncStatus.value = CloudSyncManager.status(this)
+    }
     private val cloudStatusPreferenceListener =
         SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-            runOnUiThread { cloudSyncStatus.value = CloudSyncManager.status(this) }
+            runOnUiThread {
+                val status = CloudSyncManager.status(this)
+                cloudSyncStatus.value = status
+                cloudSyncCompletionHandler.removeCallbacks(settleCloudSyncCompletion)
+                if (status.syncState == CloudSyncManager.SyncState.COMPLETED) {
+                    val remaining = CloudSyncManager.settleCompletedIfReady(this)
+                    if (remaining > 0L) {
+                        cloudSyncCompletionHandler.postDelayed(
+                            settleCloudSyncCompletion,
+                            remaining
+                        )
+                    } else {
+                        cloudSyncStatus.value = CloudSyncManager.status(this)
+                    }
+                }
+            }
         }
     private val cloudNetworkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -351,6 +371,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        val completionRemaining = CloudSyncManager.settleCompletedIfReady(this)
+        cloudSyncCompletionHandler.removeCallbacks(settleCloudSyncCompletion)
+        if (completionRemaining > 0L) {
+            cloudSyncCompletionHandler.postDelayed(
+                settleCloudSyncCompletion,
+                completionRemaining
+            )
+        }
         detectorEnabled.value = isDetectorEnabled()
         microphoneEnabled.value = hasMicrophonePermission()
         scribStatus.value = ScribTranscriber.status(this)
@@ -455,6 +483,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         stopNotePlayback()
         remoteSetupHandler.removeCallbacks(remoteTrainingTimeout)
+        cloudSyncCompletionHandler.removeCallbacks(settleCloudSyncCompletion)
         if (remoteTraining) RemoteButtonConfig.setTraining(this, false)
         diagnosticMediaSession.release()
         runCatching { unregisterReceiver(topicRecordingReceiver) }
