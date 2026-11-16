@@ -321,6 +321,7 @@ class MainActivity : ComponentActivity() {
                     onRemoveCloudFolder = ::removeCloudFolder,
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
+                    onCheckCloud = { checkCloudRevision(manual = true) },
                     onCreateFreshBackup = ::createFreshBackup,
                     onStartTopicRecording = ::startTopicRecording,
                     onStopTopicRecording = ::stopTopicRecording,
@@ -395,12 +396,36 @@ class MainActivity : ComponentActivity() {
         diagnosticMediaSession.isActive = true
     }
 
-    private fun checkCloudRevision() {
+    private fun checkCloudRevision(manual: Boolean = false) {
         if (CloudSyncManager.destinationUri(this) == null) return
+        if (manual) backupStatus.value = "Checking cloud revision…"
         Thread {
+            val remote = CloudSyncManager.remoteRevision(this)
             val conflict = CloudSyncManager.inspectRemote(this)
+            val local = SyncRevisionStore.revisionForDisplay(this)
+            val formatter = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
             runOnUiThread {
                 cloudConflict.value = conflict
+                if (manual) {
+                    backupStatus.value = when {
+                        remote == null ->
+                            "Cloud check could not find RiderNotes_Sync_State.json. " +
+                                "Please wait for Drive to finish uploading, then check again."
+                        conflict != null ->
+                            "Newer cloud version: ${conflict.deviceName}, " +
+                                "${formatter.format(Date(conflict.modifiedAtEpochMs))}. " +
+                                (local?.let {
+                                    "Phone version: ${formatter.format(Date(it.modifiedAtEpochMs))}."
+                                } ?: "Phone version time is not available yet.")
+                        SyncRevisionStore.isDirty(this) ->
+                            "Cloud checked: ${formatter.format(Date(remote.modifiedAtEpochMs))}. " +
+                                "This phone also has unsynced local changes; upload is recommended."
+                        else ->
+                            "Cloud checked and this phone is up to date. Latest version: " +
+                                "${formatter.format(Date(remote.modifiedAtEpochMs))}, " +
+                                "from ${remote.deviceName}."
+                    }
+                }
                 cloudSyncStatus.value = CloudSyncManager.status(this)
             }
         }.start()
@@ -436,7 +461,7 @@ class MainActivity : ComponentActivity() {
         TopicLibraryRepository.createFreshBackup(this)
             .onSuccess {
                 cloudConflict.value = null
-                backupStatus.value = "Local phone version kept; Sync now is recommended"
+                backupStatus.value = "Local phone version kept; upload local changes is recommended"
                 CloudSyncManager.enqueueNow(this)
             }
             .onFailure { error ->
@@ -465,7 +490,7 @@ class MainActivity : ComponentActivity() {
             }
             remote?.delete()
             runOnUiThread {
-                backupStatus.value = if (succeeded) "$result; Sync now is recommended" else result
+                backupStatus.value = if (succeeded) "$result; upload local changes is recommended" else result
                 if (succeeded) {
                     cloudConflict.value = null
                     refreshSavedNotes()
@@ -754,9 +779,9 @@ class MainActivity : ComponentActivity() {
                             status.destinationName != null &&
                             status.mode != CloudSyncManager.Mode.OFF
                         ) {
-                            "Fresh full backup ready (${backup.length() / 1024} KB). Press Sync now to upload it to ${status.destinationName}."
+                            "Fresh full backup ready (${backup.length() / 1024} KB). Press Upload local changes to send it to ${status.destinationName}."
                         } else {
-                            "Fresh full backup ready locally (${backup.length() / 1024} KB). Choose a cloud folder and enable sync before pressing Sync now."
+                            "Fresh full backup ready locally (${backup.length() / 1024} KB). Choose a cloud folder and enable sync before uploading local changes."
                         }
                         cloudSyncStatus.value = CloudSyncManager.status(this)
                     }
@@ -1212,6 +1237,7 @@ private fun DetectorScreen(
     onRemoveCloudFolder: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
+    onCheckCloud: () -> Unit,
     onCreateFreshBackup: () -> Unit,
     onStartTopicRecording: (String, Int?) -> Unit,
     onStopTopicRecording: () -> Unit,
@@ -1953,15 +1979,15 @@ private fun DetectorScreen(
                                         else -> Color(0xFF9E9E9E)
                                     }
                                     val syncLabel = when (syncState) {
-                                        CloudSyncManager.SyncState.UP_TO_DATE -> "Up to date with cloud folder"
-                                        CloudSyncManager.SyncState.RECOMMENDED -> "Sync now — recommended"
-                                        CloudSyncManager.SyncState.OFFLINE_PENDING -> "Sync now — offline"
-                                        CloudSyncManager.SyncState.QUEUED -> "Sync queued…"
-                                        CloudSyncManager.SyncState.SYNCING -> "Syncing…"
-                                        CloudSyncManager.SyncState.FAILED -> "Sync failed — retry"
-                                        CloudSyncManager.SyncState.COMPLETED -> "Sync completed"
+                                        CloudSyncManager.SyncState.UP_TO_DATE -> "Local changes uploaded — up to date"
+                                        CloudSyncManager.SyncState.RECOMMENDED -> "Upload local changes — recommended"
+                                        CloudSyncManager.SyncState.OFFLINE_PENDING -> "Upload local changes — offline"
+                                        CloudSyncManager.SyncState.QUEUED -> "Upload queued…"
+                                        CloudSyncManager.SyncState.SYNCING -> "Uploading local changes…"
+                                        CloudSyncManager.SyncState.FAILED -> "Upload failed — retry"
+                                        CloudSyncManager.SyncState.COMPLETED -> "Upload completed"
                                         CloudSyncManager.SyncState.CLOUD_UPDATE_AVAILABLE -> "Cloud update available"
-                                        CloudSyncManager.SyncState.DISABLED -> "Sync now"
+                                        CloudSyncManager.SyncState.DISABLED -> "Upload local changes"
                                     }
                                     Button(
                                         onClick = onSyncNow,
@@ -1979,6 +2005,25 @@ private fun DetectorScreen(
                                         Text(syncLabel)
                                     }
                                     OutlinedButton(
+                                        onClick = onCheckCloud,
+                                        enabled = cloudSyncStatus.value.destinationName != null,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text(
+                                            if (syncState == CloudSyncManager.SyncState.CLOUD_UPDATE_AVAILABLE) {
+                                                "Review cloud update"
+                                            } else {
+                                                "Check cloud for updates"
+                                            }
+                                        )
+                                    }
+                                    Text(
+                                        "Checks whether Rider Notes PC or another phone uploaded a newer " +
+                                            "version. If found, you can merge it, use the cloud copy, or keep " +
+                                            "this phone as the base.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    OutlinedButton(
                                         onClick = onCreateFreshBackup,
                                         enabled = !backupStatus.value.startsWith("Creating fresh full backup"),
                                         modifier = Modifier.fillMaxWidth()
@@ -1994,7 +2039,7 @@ private fun DetectorScreen(
                                     Text(
                                         "Creates RiderNotes_Full_Backup.zip with every note, transcript, " +
                                             "recording, Topic folder, and attachment. When it is ready, " +
-                                            "press Sync now to upload it. This ZIP can be opened by Rider Notes PC.",
+                                            "press Upload local changes to send it. This ZIP can be opened by Rider Notes PC.",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     if (cloudSyncStatus.value.message.isNotBlank()) {
