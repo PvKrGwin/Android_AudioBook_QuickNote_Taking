@@ -100,6 +100,7 @@ fun TopicLibraryScreen(
     var filterStarred by remember { mutableStateOf(false) }
     var showFilterColorDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var toolsExpanded by remember { mutableStateOf(false) }
     var selectedPlacementIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var editingItemId by remember { mutableStateOf<String?>(null) }
@@ -582,73 +583,128 @@ fun TopicLibraryScreen(
     }
 
     Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            label = { Text("Search Topics (* wildcard)") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (currentGroup != null) OutlinedButton(onClick = { currentGroupId = currentGroup.parentId }) { Text("← Back", fontSize = 11.sp) }
             Text(
                 currentGroup?.let { groupPath(library, it) } ?: "Topic groups",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(top = 12.dp).weight(1f)
-            )
-            if (currentGroup != null) TextButton(onClick = { legendExpanded = true }) { Text("🎨 Legend", fontSize = 11.sp) }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Button(onClick = { inputTitle = ""; dialog = "group" }) { Text(if (currentGroup == null) "+ Group" else "+ Subgroup", fontSize = 11.sp) }
-            OutlinedButton(onClick = { onRefreshNotes(); refresh() }) { Text("Refresh", fontSize = 11.sp) }
-            if (currentGroup == null) OutlinedButton(onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) { Text("Restore backup", fontSize = 11.sp) }
-            if (currentGroup != null) {
-                OutlinedButton(onClick = { addMenuExpanded = true }) { Text("＋ Add point", fontSize = 11.sp) }
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(onClick = { showFilterColorDialog = true }) {
-                Text(filterColor?.let { "🎨 ${it.lowercase().replaceFirstChar { value -> value.uppercase() }}" } ?: "🎨 Filter colour", fontSize = 11.sp)
-            }
-            OutlinedButton(onClick = {
-                filterStarred = !filterStarred
-                currentGroupId = null
-            }) { Text(if (filterStarred) "★ Starred only" else "☆ Filter starred", fontSize = 11.sp) }
-            if (filtering) {
-                TextButton(onClick = {
-                    filterColor = null
-                    filterStarred = false
-                    currentGroupId = null
-                }) { Text("Clear filters", fontSize = 11.sp) }
-            }
-        }
-        if (filtering) {
-            Text(
-                "Filtered view: folders show only matching points. Open folders normally; edits apply immediately and non-matching points disappear.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary
+                modifier = Modifier.weight(1f)
             )
         }
-        if (currentGroup != null) {
-            Row(
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(onClick = { toolsExpanded = !toolsExpanded }) {
+                Text(if (toolsExpanded) "Hide topic tools ▲" else "Topic tools ▼", fontSize = 11.sp)
+            }
+            if (!toolsExpanded && selectedPlacementIds.isNotEmpty()) {
+                Text(
+                    "${selectedPlacementIds.size} selected",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (!toolsExpanded && filtering) {
+                Text(
+                    "Filter active",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        if (toolsExpanded) {
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                Text("Selected: ${selectedPlacementIds.size}", modifier = Modifier.weight(1f), fontSize = 11.sp)
-                OutlinedButton(
-                    enabled = placements.isNotEmpty() && selectedPlacementIds.size != placements.size,
-                    onClick = { selectedPlacementIds = placements.mapTo(mutableSetOf()) { it.id } }
-                ) { Text("Select all", fontSize = 11.sp) }
-                OutlinedButton(
-                    enabled = selectedPlacementIds.isNotEmpty(),
-                    onClick = { selectedPlacementIds = emptySet() }
-                ) { Text("Clear", fontSize = 11.sp) }
-                Button(
-                    enabled = selectedPlacementIds.isNotEmpty(),
-                    onClick = { pendingPointDeleteIds = selectedPlacementIds }
-                ) { Text("Delete selected", fontSize = 11.sp) }
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = { Text("Search Topics (* wildcard)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(onClick = { inputTitle = ""; dialog = "group" }) {
+                            Text(if (currentGroup == null) "+ Group" else "+ Subgroup", fontSize = 11.sp)
+                        }
+                        OutlinedButton(onClick = { onRefreshNotes(); refresh() }) {
+                            Text("Refresh", fontSize = 11.sp)
+                        }
+                        if (currentGroup == null) {
+                            OutlinedButton(onClick = { restorePicker.launch(arrayOf("application/zip", "application/octet-stream")) }) {
+                                Text("Restore backup", fontSize = 11.sp)
+                            }
+                        } else {
+                            OutlinedButton(onClick = { addMenuExpanded = true }) {
+                                Text("＋ Add point", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                    if (currentGroup != null) {
+                        TextButton(onClick = { legendExpanded = true }) {
+                            Text("🎨 Legend", fontSize = 11.sp)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { showFilterColorDialog = true }) {
+                            Text(
+                                filterColor?.let { "🎨 ${it.lowercase().replaceFirstChar { value -> value.uppercase() }}" }
+                                    ?: "🎨 Filter colour",
+                                fontSize = 11.sp
+                            )
+                        }
+                        OutlinedButton(onClick = {
+                            filterStarred = !filterStarred
+                            currentGroupId = null
+                        }) {
+                            Text(if (filterStarred) "★ Starred only" else "☆ Filter starred", fontSize = 11.sp)
+                        }
+                    }
+                    if (filtering) {
+                        TextButton(onClick = {
+                            filterColor = null
+                            filterStarred = false
+                            currentGroupId = null
+                        }) { Text("Clear filters", fontSize = 11.sp) }
+                        Text(
+                            "Filtered view: folders show only matching points. Edits apply immediately.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    if (currentGroup != null) {
+                        Text(
+                            "Selected: ${selectedPlacementIds.size}",
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton(
+                                enabled = placements.isNotEmpty() && selectedPlacementIds.size != placements.size,
+                                onClick = { selectedPlacementIds = placements.mapTo(mutableSetOf()) { it.id } }
+                            ) { Text("Select all", fontSize = 11.sp) }
+                            OutlinedButton(
+                                enabled = selectedPlacementIds.isNotEmpty(),
+                                onClick = { selectedPlacementIds = emptySet() }
+                            ) { Text("Clear", fontSize = 11.sp) }
+                            Button(
+                                enabled = selectedPlacementIds.isNotEmpty(),
+                                onClick = { pendingPointDeleteIds = selectedPlacementIds }
+                            ) { Text("Delete selected", fontSize = 11.sp) }
+                        }
+                    }
+                }
             }
         }
         if (currentGroup != null && isRecording) {
