@@ -19,7 +19,6 @@ import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.praveen.ridernotes.MainActivity
-import com.praveen.ridernotes.cloud.CloudSyncManager
 import com.praveen.ridernotes.input.ButtonEvent
 import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
@@ -330,7 +329,6 @@ class VoiceRecordingService : Service() {
                 } else file.nameWithoutExtension
             )
             if (!topicOnly) ScribTranscriber.enqueue(this, file)
-            CloudSyncManager.enqueueNow(this)
         } else {
             TopicLibraryRepository.clearPendingRecordingGroup(this)
         }
