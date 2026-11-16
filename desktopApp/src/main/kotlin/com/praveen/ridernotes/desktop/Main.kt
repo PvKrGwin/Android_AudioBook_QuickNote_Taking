@@ -717,8 +717,12 @@ private fun NotesScreen(
             highlightedNoteId = target.id
         }
         onRequestedNoteShown()
+    }
+
+    LaunchedEffect(highlightedNoteId) {
+        val noteId = highlightedNoteId ?: return@LaunchedEffect
         delay(3_000)
-        if (highlightedNoteId == target.id) highlightedNoteId = null
+        if (highlightedNoteId == noteId) highlightedNoteId = null
     }
 
     fun requestDelete(ids: Set<String>, label: String) {
