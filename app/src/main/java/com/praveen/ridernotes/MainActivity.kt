@@ -331,16 +331,25 @@ class MainActivity : ComponentActivity() {
                     onAddQuickTile = ::addQuickSettingsTile
                 )
                 cloudConflict.value?.let { revision ->
+                    val formatter = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
+                    val local = SyncRevisionStore.localRevisionForDisplay(this)
                     AlertDialog(
                         onDismissRequest = { },
                         title = { Text("Newer cloud version found") },
                         text = {
-                            Text(
-                                "The cloud backup was updated by ${revision.deviceName} at " +
-                                    SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
-                                        .format(Date(revision.modifiedAtEpochMs)) +
-                                ". Merge both is recommended when both devices contain changes."
-                            )
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(
+                                    local?.let {
+                                        "Phone copy: ${it.deviceName} · ${formatter.format(Date(it.modifiedAtEpochMs))}"
+                                    } ?: "Phone copy: timestamp not available"
+                                )
+                                Text(
+                                    "Cloud copy: ${revision.deviceName} · " +
+                                        formatter.format(Date(revision.modifiedAtEpochMs)),
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text("Merge both is recommended when both devices contain changes.")
+                            }
                         },
                         confirmButton = {
                             TextButton(onClick = { mergeCloudRevision(revision) }) {
@@ -402,7 +411,7 @@ class MainActivity : ComponentActivity() {
         Thread {
             val remote = CloudSyncManager.remoteRevision(this)
             val conflict = CloudSyncManager.inspectRemote(this)
-            val local = SyncRevisionStore.revisionForDisplay(this)
+            val local = SyncRevisionStore.localRevisionForDisplay(this)
             val formatter = SimpleDateFormat("dd MMM yyyy, h:mm a", Locale.getDefault())
             runOnUiThread {
                 cloudConflict.value = conflict
@@ -462,7 +471,6 @@ class MainActivity : ComponentActivity() {
             .onSuccess {
                 cloudConflict.value = null
                 backupStatus.value = "Local phone version kept; upload local changes is recommended"
-                CloudSyncManager.enqueueNow(this)
             }
             .onFailure { error ->
                 backupStatus.value = "Could not prepare local base: ${error.javaClass.simpleName}"
@@ -486,7 +494,6 @@ class MainActivity : ComponentActivity() {
             if (succeeded) {
                 SyncRevisionStore.keepLocalOver(this, revision)
                 TopicLibraryRepository.createFreshBackup(this)
-                CloudSyncManager.enqueueNow(this)
             }
             remote?.delete()
             runOnUiThread {
@@ -992,7 +999,6 @@ class MainActivity : ComponentActivity() {
             }
             refreshSavedNotes()
             SyncRevisionStore.markLocalModified(this)
-            CloudSyncManager.enqueueNow(this)
             backupStatus.value =
                 "Backup restored: $importedNotes note(s), $importedFiles file(s). " +
                     "Expand its source heading to view it."
@@ -1079,7 +1085,6 @@ class MainActivity : ComponentActivity() {
         }
         refreshSavedNotes()
         if (updated > 0) SyncRevisionStore.markLocalModified(this)
-        CloudSyncManager.enqueueNow(this)
         backupStatus.value = if (updated > 0) {
             "Link saved to $updated ${note.sourceApp} recording(s) with the same title and channel."
         } else {
@@ -1382,7 +1387,7 @@ private fun DetectorScreen(
             text = {
                 Column {
                     Text(
-                        "Paste the browser link for the same folder used by automatic sync " +
+                        "Paste the browser link for the same folder used by cloud backup " +
                             "(Google Drive, OneDrive, Dropbox, or another provider)."
                     )
                     OutlinedTextField(
@@ -1663,6 +1668,27 @@ private fun DetectorScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            val topSyncState = cloudSyncStatus.value.syncState
+            if (cloudSyncStatus.value.syncRecommended) {
+                val offline = topSyncState == CloudSyncManager.SyncState.OFFLINE_PENDING
+                Button(
+                    onClick = { selectedTab.value = 0 },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (offline) Color(0xFFFFC107) else Color(0xFFC62828),
+                        contentColor = if (offline) Color(0xFF1F1F1F) else Color.White
+                    )
+                ) {
+                    Text(
+                        if (offline) {
+                            "⚠ Phone changes not uploaded · offline · tap for sync"
+                        } else {
+                            "⚠ Phone changes need upload · tap for sync"
+                        }
+                    )
+                }
+            }
+
             Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -1897,12 +1923,30 @@ private fun DetectorScreen(
                                     modifier = Modifier.padding(14.dp),
                                     verticalArrangement = Arrangement.spacedBy(7.dp)
                                 ) {
-                                    Text("Automatic cloud sync", fontWeight = FontWeight.Bold)
+                                    Text("Cloud backup and manual upload", fontWeight = FontWeight.Bold)
                                     Text(
                                         cloudSyncStatus.value.destinationName?.let {
                                             "Cloud folder: $it"
                                         } ?: "No cloud folder selected"
                                     )
+                                    val revisionFormatter = SimpleDateFormat(
+                                        "dd MMM yyyy, h:mm a",
+                                        Locale.getDefault()
+                                    )
+                                    cloudSyncStatus.value.localRevision?.let { revision ->
+                                        Text(
+                                            "Phone copy: ${revision.deviceName} · " +
+                                                revisionFormatter.format(Date(revision.modifiedAtEpochMs)),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    cloudSyncStatus.value.cloudRevision?.let { revision ->
+                                        Text(
+                                            "Cloud copy: ${revision.deviceName} · " +
+                                                revisionFormatter.format(Date(revision.modifiedAtEpochMs)),
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
                                     cloudSyncStatus.value.destinationWebUrl?.let { webUrl ->
                                         TextButton(onClick = onOpenCloudFolder) {
                                             Text(
@@ -2059,9 +2103,9 @@ private fun DetectorScreen(
                                         )
                                     }
                                     Text(
-                                        "New and locally changed recordings, metadata, and transcripts " +
-                                            "are uploaded automatically. Cloud copies are not deleted " +
-                                            "when a local note is deleted."
+                                        "New and locally changed recordings, metadata, transcripts, and " +
+                                            "Topics remain pending on this phone until you press Upload local " +
+                                            "changes. Background checks only look for newer cloud versions."
                                     )
                                 }
                             }
