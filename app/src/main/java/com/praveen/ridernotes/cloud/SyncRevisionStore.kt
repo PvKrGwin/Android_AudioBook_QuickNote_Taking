@@ -39,10 +39,12 @@ object SyncRevisionStore {
 
     fun markLocalModified(context: Context) {
         val prefs = preferences(context)
-        if (!prefs.getBoolean(KEY_DIRTY, false)) {
-            prefs.edit().putLong(KEY_DIRTY_AT, System.currentTimeMillis()).apply()
-        }
-        prefs.edit().putBoolean(KEY_DIRTY, true).apply()
+        prefs.edit()
+            .putLong(KEY_DIRTY_AT, System.currentTimeMillis())
+            .putBoolean(KEY_DIRTY, true)
+            // Any already-prepared manifest predates this edit and must not be reused.
+            .remove(KEY_PENDING_LOCAL)
+            .apply()
         CloudSyncManager.markLocalChange(context)
     }
 
@@ -60,6 +62,36 @@ object SyncRevisionStore {
             ?: prefs.getString(KEY_LAST_KNOWN_REVISION, null)?.let(::parse)
     }
 
+    fun localRevisionForDisplay(context: Context): CloudRevision? {
+        val prefs = preferences(context)
+        return prefs.getString(KEY_PENDING_LOCAL, null)?.let(::parse)
+            ?: if (prefs.getBoolean(KEY_DIRTY, false)) {
+                CloudRevision(
+                    revisionId = "pending-local",
+                    parentRevisionId = lastSyncedRevision(context),
+                    modifiedAtEpochMs = prefs.getLong(KEY_DIRTY_AT, System.currentTimeMillis()),
+                    deviceId = deviceId(context),
+                    deviceName = deviceName(),
+                    deviceType = "ANDROID"
+                )
+            } else {
+                prefs.getString(KEY_LAST_KNOWN_REVISION, null)?.let(::parse)
+            }
+    }
+
+    fun cloudRevisionForDisplay(context: Context): CloudRevision? {
+        val prefs = preferences(context)
+        return pendingRemote(context)
+            ?: prefs.getString(KEY_LAST_SEEN_CLOUD, null)?.let(::parse)
+            ?: prefs.getString(KEY_LAST_KNOWN_REVISION, null)?.let(::parse)
+    }
+
+    fun rememberCloudRevision(context: Context, revision: CloudRevision) {
+        preferences(context).edit()
+            .putString(KEY_LAST_SEEN_CLOUD, toJson(revision).toString())
+            .apply()
+    }
+
     fun pendingRemote(context: Context): CloudRevision? =
         preferences(context).getString(KEY_PENDING_REMOTE, null)
             ?.let(::parse)
@@ -67,7 +99,10 @@ object SyncRevisionStore {
     fun setPendingRemote(context: Context, revision: CloudRevision?) {
         preferences(context).edit().apply {
             if (revision == null) remove(KEY_PENDING_REMOTE)
-            else putString(KEY_PENDING_REMOTE, toJson(revision).toString())
+            else {
+                putString(KEY_PENDING_REMOTE, toJson(revision).toString())
+                putString(KEY_LAST_SEEN_CLOUD, toJson(revision).toString())
+            }
         }.apply()
     }
 
@@ -98,6 +133,7 @@ object SyncRevisionStore {
         preferences(context).edit()
             .putString(KEY_LAST_SYNCED_REVISION, revision.revisionId)
             .putString(KEY_LAST_KNOWN_REVISION, toJson(revision).toString())
+            .putString(KEY_LAST_SEEN_CLOUD, toJson(revision).toString())
             .putBoolean(KEY_DIRTY, false)
             .remove(KEY_DIRTY_AT)
             .remove(KEY_PENDING_LOCAL)
@@ -109,6 +145,7 @@ object SyncRevisionStore {
         preferences(context).edit()
             .putString(KEY_LAST_SYNCED_REVISION, revision.revisionId)
             .putString(KEY_LAST_KNOWN_REVISION, toJson(revision).toString())
+            .putString(KEY_LAST_SEEN_CLOUD, toJson(revision).toString())
             .putBoolean(KEY_DIRTY, false)
             .remove(KEY_DIRTY_AT)
             .remove(KEY_PENDING_LOCAL)
@@ -172,4 +209,5 @@ object SyncRevisionStore {
     private const val KEY_LAST_KNOWN_REVISION = "last_known_revision"
     private const val KEY_PENDING_LOCAL = "pending_local_revision"
     private const val KEY_PENDING_REMOTE = "pending_remote_revision"
+    private const val KEY_LAST_SEEN_CLOUD = "last_seen_cloud_revision"
 }
