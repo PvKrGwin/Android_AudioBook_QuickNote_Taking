@@ -13,6 +13,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -43,6 +44,8 @@ object CloudSyncManager {
         val destinationWebUrl: String? = null,
         val syncRecommended: Boolean = false,
         val pendingRemote: CloudRevision? = null,
+        val localRevision: CloudRevision? = null,
+        val cloudRevision: CloudRevision? = null,
         val syncState: SyncState = SyncState.DISABLED
     )
 
@@ -89,6 +92,8 @@ object CloudSyncManager {
                 ?.takeIf(String::isNotBlank),
             syncRecommended = dirty,
             pendingRemote = SyncRevisionStore.pendingRemote(context),
+            localRevision = SyncRevisionStore.localRevisionForDisplay(context),
+            cloudRevision = SyncRevisionStore.cloudRevisionForDisplay(context),
             syncState = effectiveState
         )
     }
@@ -141,7 +146,6 @@ object CloudSyncManager {
             )
             .apply()
         schedule(context)
-        if (mode != Mode.OFF) enqueueNow(context)
     }
 
     fun enqueueNow(context: Context) {
@@ -240,7 +244,7 @@ object CloudSyncManager {
             if (isNetworkReady(context, selectedMode)) {
                 "Local changes are ready — upload is recommended"
             } else {
-                "Local changes are waiting for internet — sync will resume when online"
+                "Local changes are waiting — upload will be available when internet returns"
             }
         )
     }
@@ -272,7 +276,7 @@ object CloudSyncManager {
             context.contentResolver.openInputStream(state.uri)?.bufferedReader()?.use { reader ->
                 SyncRevisionStore.parse(reader.readText())
             }
-        }.getOrNull()
+        }.getOrNull()?.also { SyncRevisionStore.rememberCloudRevision(context, it) }
     }
 
     fun inspectRemote(context: Context): CloudRevision? {
@@ -312,6 +316,7 @@ object CloudSyncManager {
         }
         val request = PeriodicWorkRequestBuilder<CloudSyncWorker>(15, TimeUnit.MINUTES)
             .setConstraints(constraints(selectedMode))
+            .setInputData(workDataOf(CloudSyncWorker.KEY_CHECK_ONLY to true))
             .build()
         manager.enqueueUniquePeriodicWork(
             PERIODIC_WORK,
