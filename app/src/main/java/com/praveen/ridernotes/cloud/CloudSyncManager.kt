@@ -153,6 +153,7 @@ object CloudSyncManager {
         if (destinationUri(context) == null || selectedMode == Mode.OFF) return
         val request = OneTimeWorkRequestBuilder<CloudSyncWorker>()
             .setConstraints(constraints(selectedMode))
+            .setInputData(workDataOf(CloudSyncWorker.KEY_MANUAL_UPLOAD to true))
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(
             IMMEDIATE_WORK,
