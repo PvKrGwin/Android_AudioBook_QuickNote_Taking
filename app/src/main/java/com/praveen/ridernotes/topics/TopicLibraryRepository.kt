@@ -3,7 +3,6 @@ package com.praveen.ridernotes.topics
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.praveen.ridernotes.cloud.CloudSyncManager
 import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -317,7 +316,6 @@ object TopicLibraryRepository {
         manifest(context).apply { parentFile?.mkdirs(); writeText(root.toString(2)) }
         SyncRevisionStore.markLocalModified(context)
         rebuildBackup(context, library)
-        CloudSyncManager.enqueueNow(context)
     }
 
     private fun rebuildBackup(
