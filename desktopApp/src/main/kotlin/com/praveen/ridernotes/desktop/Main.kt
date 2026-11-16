@@ -138,6 +138,7 @@ private fun RiderNotesDesktopApp(
     var showBackupStatus by remember { mutableStateOf(false) }
     var showCloudSyncReminder by remember { mutableStateOf(true) }
     var dirty by remember { mutableStateOf(false) }
+    var localChangedAt by remember { mutableStateOf<Long?>(null) }
     var syncSucceeded by remember { mutableStateOf(false) }
     var undoReturnsDirty by remember { mutableStateOf(false) }
     var showSyncPrompt by remember { mutableStateOf(false) }
@@ -169,6 +170,7 @@ private fun RiderNotesDesktopApp(
                 baseSnapshot = runCatching { BackupImporter.import(zip) }.getOrDefault(it)
                 selectedTab = 0
                 dirty = false
+                localChangedAt = null
                 syncSucceeded = false
                 undoReturnsDirty = false
                 DesktopUndoStore.clear()
@@ -195,6 +197,7 @@ private fun RiderNotesDesktopApp(
         if (immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION) {
             snapshot = updated
             dirty = true
+            localChangedAt = System.currentTimeMillis()
             showCloudChangeDialog = true
             status = "A newer Drive version was found before this edit was synchronized"
             return
@@ -209,6 +212,7 @@ private fun RiderNotesDesktopApp(
         }
         snapshot = updated
         dirty = true
+        localChangedAt = System.currentTimeMillis()
         status = "Local changes are ready — Sync now is recommended"
         showSyncPrompt = true
     }
@@ -220,6 +224,7 @@ private fun RiderNotesDesktopApp(
                 snapshot = it
                 baseSnapshot = runCatching { BackupImporter.import(it.sourceZip) }.getOrDefault(it)
                 dirty = false
+                localChangedAt = null
                 syncSucceeded = true
                 undoReturnsDirty = false
                 DesktopUndoStore.clear()
@@ -294,6 +299,7 @@ private fun RiderNotesDesktopApp(
                     snapshot = pendingOfflineSnapshot
                     pendingOfflineSnapshot = null
                     dirty = true
+                    localChangedAt = System.currentTimeMillis()
                     showOfflineEditWarning = false
                     status = "Offline changes are pending — verify Drive before syncing"
                 }) { Text("Continue editing") }
@@ -310,6 +316,11 @@ private fun RiderNotesDesktopApp(
 
     if (showCloudChangeDialog) {
         val observation = syncObservation
+        val localRevision = snapshot?.syncManifest
+        val localDevice = if (dirty) DesktopDeviceIdentity.name()
+            else localRevision?.deviceName ?: DesktopDeviceIdentity.name()
+        val localTime = localChangedAt ?: localRevision?.modifiedAtEpochMs
+        val cloudRevision = observation?.remoteRevision
         AlertDialog(
             onDismissRequest = {
                 dismissedCloudRevision = observation?.remoteRevision?.revisionId
@@ -317,13 +328,25 @@ private fun RiderNotesDesktopApp(
             },
             title = { Text("A newer cloud version is available") },
             text = {
-                Text(
-                    if (dirty) {
-                        "This PC and the cloud both contain changes. Merge both is recommended and keeps independently created notes and Topic points."
-                    } else {
-                        "${observation?.message.orEmpty()}. Reload it before continuing so this PC shows the latest notes."
-                    }
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "PC copy: $localDevice · " +
+                            (localTime?.let(::formatTime) ?: "timestamp unavailable")
+                    )
+                    Text(
+                        cloudRevision?.let {
+                            "Cloud copy: ${it.deviceName} · ${formatTime(it.modifiedAtEpochMs)}"
+                        } ?: "Cloud copy: timestamp unavailable",
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (dirty) {
+                            "This PC and the cloud both contain changes. Merge both is recommended and keeps independently created notes and Topic points."
+                        } else {
+                            "${observation?.message.orEmpty()}. Reload it before continuing so this PC shows the latest notes."
+                        }
+                    )
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -572,6 +595,21 @@ private fun RiderNotesDesktopApp(
                                 },
                                 fontSize = 12.sp
                             )
+                            val openedRevision = snapshot?.syncManifest
+                            val displayedLocalDevice = if (dirty) DesktopDeviceIdentity.name()
+                                else openedRevision?.deviceName ?: DesktopDeviceIdentity.name()
+                            val displayedLocalTime = localChangedAt ?: openedRevision?.modifiedAtEpochMs
+                            Text(
+                                "PC copy: $displayedLocalDevice · " +
+                                    (displayedLocalTime?.let(::formatTime) ?: "timestamp unavailable"),
+                                fontSize = 12.sp
+                            )
+                            observation.remoteRevision?.let { remote ->
+                                Text(
+                                    "Cloud copy: ${remote.deviceName} · ${formatTime(remote.modifiedAtEpochMs)}",
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
                     }
                 }
