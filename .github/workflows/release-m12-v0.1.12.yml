@@ -1,0 +1,83 @@
+name: Publish Rider Notes M12 v0.1.12
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/release-m12-v0.1.12.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
+
+      - name: Test Android and PC apps
+        run: gradle :app:testDebugUnitTest :desktopApp:test
+
+      - name: Build Rider Notes Android APK
+        run: gradle :app:assembleDebug
+
+      - name: Build and verify portable PC app
+        shell: pwsh
+        run: |
+          gradle :desktopApp:createDistributable
+          $jvm = "desktopApp/build/compose/binaries/main/app/RiderNotesPC/runtime/bin/server/jvm.dll"
+          $exe = "desktopApp/build/compose/binaries/main/app/RiderNotesPC/RiderNotesPC.exe"
+          if (-not (Test-Path $jvm)) { throw "Bundled JVM is missing: $jvm" }
+          if (-not (Test-Path $exe)) { throw "PC executable is missing: $exe" }
+          $stdout = Join-Path $env:RUNNER_TEMP "rider-notes-stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "rider-notes-stderr.log"
+          $process = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          Start-Sleep -Seconds 12
+          if ($process.HasExited) {
+            if (Test-Path $stdout) { Get-Content $stdout }
+            if (Test-Path $stderr) { Get-Content $stderr }
+            throw "Rider Notes PC exited during startup verification with code $($process.ExitCode)"
+          }
+          Stop-Process -Id $process.Id -Force
+          Compress-Archive -Path desktopApp/build/compose/binaries/main/app/RiderNotesPC -DestinationPath RiderNotesPC-Portable-v0.1.12.zip
+
+      - name: Prepare Android downloads
+        shell: pwsh
+        run: |
+          Copy-Item app/build/outputs/apk/debug/app-debug.apk RiderNotes-Android-M12-v0.1.12.apk
+          Invoke-WebRequest -Uri "https://github.com/PvKrGwin/Android_AudioBook_QuickNote_Taking/releases/download/RiderNotes-M12-v0.1.10/Scrib-0.26-arm64-v8a.apk" -OutFile "Scrib-0.26-arm64-v8a.apk"
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          @"
+          ## Rider Notes Milestone 12
+
+          A complete ready-to-use package for new users.
+
+          ### Downloads
+          - **RiderNotes-Android-M12-v0.1.12.apk** — Rider Notes Android app
+          - **Scrib-0.26-arm64-v8a.apk** — offline transcription companion for supported ARM64 Android phones
+          - **RiderNotesPC-Portable-v0.1.12.zip** — portable Windows 10/11 companion with its Java runtime included
+
+          ### First-time setup
+          1. Install Rider Notes on Android.
+          2. Install Scrib if offline transcription is required.
+          3. Follow **Show demo** in Rider Notes to configure permissions, Quick Settings, cloud folder, gestures, language, and Bluetooth key.
+          4. On Windows, extract the complete portable ZIP and run **RiderNotesPC.exe**. Do not run the EXE from inside the ZIP.
+
+          This release includes the tested mobile/PC sync, Notes and Topics workflows, rich-text topic points, media-note linking, cloud revision checks, and exact original-note navigation.
+          "@ | Set-Content release-notes.md
+          gh release create "RiderNotes-M12-v0.1.12" "RiderNotes-Android-M12-v0.1.12.apk" "Scrib-0.26-arm64-v8a.apk" "RiderNotesPC-Portable-v0.1.12.zip" --target "${{ github.sha }}" --title "Rider Notes Milestone 12 v0.1.12" --notes-file release-notes.md
