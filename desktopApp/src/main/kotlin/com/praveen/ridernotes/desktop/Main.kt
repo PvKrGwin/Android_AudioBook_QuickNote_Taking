@@ -1140,6 +1140,7 @@ private fun TopicsScreen(
     var showBulkColorDialog by remember { mutableStateOf(false) }
     var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingGroupDeleteId by remember { mutableStateOf<String?>(null) }
+    var folderActionGroupId by remember { mutableStateOf<String?>(null) }
     var renameGroupId by remember { mutableStateOf<String?>(null) }
     var renameGroupName by remember { mutableStateOf("") }
     var linkPlacementId by remember { mutableStateOf<String?>(null) }
@@ -1314,6 +1315,34 @@ private fun TopicsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingGroupDeleteId = null }) { Text("No") }
+            }
+        )
+    }
+
+    folderActionGroupId?.let { groupId ->
+        val group = snapshot.groups.firstOrNull { it.id == groupId }
+        AlertDialog(
+            onDismissRequest = { folderActionGroupId = null },
+            title = { Text(group?.name ?: "Topic folder") },
+            text = { Text("Choose a folder action") },
+            confirmButton = {
+                TextButton(
+                    enabled = group != null,
+                    onClick = {
+                        folderActionGroupId = null
+                        renameGroupId = groupId
+                        renameGroupName = group?.name.orEmpty()
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        folderActionGroupId = null
+                        pendingGroupDeleteId = groupId
+                    }) { Text("Delete", color = Color(0xFFC62828)) }
+                    TextButton(onClick = { folderActionGroupId = null }) { Text("Cancel") }
+                }
             }
         )
     }
@@ -1604,6 +1633,11 @@ private fun TopicsScreen(
                                     contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)
                                 ) { Text(label, fontSize = 12.sp) }
                             }
+                            TextButton(
+                                onClick = { folderActionGroupId = group.id },
+                                modifier = Modifier.width(30.dp).heightIn(min = 28.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) { Text("⋮", fontSize = 16.sp) }
                         }
                     }
                 }
