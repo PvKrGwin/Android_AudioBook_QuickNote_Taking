@@ -93,6 +93,7 @@ fun TopicLibraryScreen(
     var linkItemId by remember { mutableStateOf<String?>(null) }
     var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     var deleteGroupTarget by remember { mutableStateOf<TopicGroup?>(null) }
+    var groupActionTarget by remember { mutableStateOf<TopicGroup?>(null) }
     var renameGroupTarget by remember { mutableStateOf<TopicGroup?>(null) }
     var renameGroupName by remember { mutableStateOf("") }
     var expandedPlacements by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -548,6 +549,29 @@ fun TopicLibraryScreen(
             dismissButton = { TextButton(onClick = { deleteGroupTarget = null }) { Text("Cancel") } }
         )
     }
+    groupActionTarget?.let { group ->
+        AlertDialog(
+            onDismissRequest = { groupActionTarget = null },
+            title = { Text(group.name) },
+            text = { Text("Choose a folder action") },
+            confirmButton = {
+                TextButton(onClick = {
+                    groupActionTarget = null
+                    renameGroupTarget = group
+                    renameGroupName = group.name
+                }) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        groupActionTarget = null
+                        deleteGroupTarget = group
+                    }) { Text("Delete", color = Color(0xFFB00020)) }
+                    TextButton(onClick = { groupActionTarget = null }) { Text("Cancel") }
+                }
+            }
+        )
+    }
     renameGroupTarget?.let { group ->
         AlertDialog(
             onDismissRequest = { renameGroupTarget = null; renameGroupName = "" },
@@ -765,7 +789,7 @@ fun TopicLibraryScreen(
         restoreStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
             items(childGroups, key = { "group-${it.id}" }) { group ->
-                Card(Modifier.fillMaxWidth().combinedClickable(onClick = { currentGroupId = group.id }, onLongClick = { deleteGroupTarget = group })) {
+                Card(Modifier.fillMaxWidth().combinedClickable(onClick = { currentGroupId = group.id }, onLongClick = { groupActionTarget = group })) {
                     Text("📁 ${group.name}", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
                 }
             }
