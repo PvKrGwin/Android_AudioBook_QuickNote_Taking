@@ -1061,13 +1061,16 @@ private fun TopicFolderPickerDialog(
                     ) { Text("Add as the last point in this folder") }
                 }
                 if (creatingFolder) {
+                    val folderNameAvailable = BackupEditor.isGroupNameAvailable(
+                        workingSnapshot, newFolderName, current?.id
+                    )
                     OutlinedTextField(
                         newFolderName,
                         { newFolderName = it },
                         label = { Text(if (current == null) "New main folder" else "New subfolder") }
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(enabled = newFolderName.isNotBlank(), onClick = {
+                        Button(enabled = folderNameAvailable, onClick = {
                             val updated = BackupEditor.createGroup(
                                 workingSnapshot,
                                 newFolderName,
@@ -1080,6 +1083,9 @@ private fun TopicFolderPickerDialog(
                             creatingFolder = false
                         }) { Text("Create") }
                         TextButton(onClick = { creatingFolder = false }) { Text("Cancel") }
+                    }
+                    if (newFolderName.isNotBlank() && !folderNameAvailable) {
+                        Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error)
                     }
                 } else {
                     TextButton(onClick = { creatingFolder = true }) {
@@ -1140,6 +1146,9 @@ private fun TopicsScreen(
     var showBulkColorDialog by remember { mutableStateOf(false) }
     var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingGroupDeleteId by remember { mutableStateOf<String?>(null) }
+    var folderActionGroupId by remember { mutableStateOf<String?>(null) }
+    var renameGroupId by remember { mutableStateOf<String?>(null) }
+    var renameGroupName by remember { mutableStateOf("") }
     var linkPlacementId by remember { mutableStateOf<String?>(null) }
     var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     var filterColor by remember { mutableStateOf<String?>(null) }
@@ -1316,6 +1325,74 @@ private fun TopicsScreen(
         )
     }
 
+    folderActionGroupId?.let { groupId ->
+        val group = snapshot.groups.firstOrNull { it.id == groupId }
+        AlertDialog(
+            onDismissRequest = { folderActionGroupId = null },
+            title = { Text(group?.name ?: "Topic folder") },
+            text = { Text("Choose a folder action") },
+            confirmButton = {
+                TextButton(
+                    enabled = group != null,
+                    onClick = {
+                        folderActionGroupId = null
+                        renameGroupId = groupId
+                        renameGroupName = group?.name.orEmpty()
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        folderActionGroupId = null
+                        pendingGroupDeleteId = groupId
+                    }) { Text("Delete", color = Color(0xFFC62828)) }
+                    TextButton(onClick = { folderActionGroupId = null }) { Text("Cancel") }
+                }
+            }
+        )
+    }
+
+    renameGroupId?.let { groupId ->
+        val group = snapshot.groups.firstOrNull { it.id == groupId }
+        val renameAvailable = group != null && BackupEditor.isGroupNameAvailable(
+            snapshot, renameGroupName, group.parentId, groupId
+        )
+        AlertDialog(
+            onDismissRequest = { renameGroupId = null; renameGroupName = "" },
+            title = { Text("Rename Topic folder") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = renameGroupName,
+                        onValueChange = { renameGroupName = it },
+                        label = { Text("Folder name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (renameGroupName.isNotBlank() && !renameAvailable) {
+                        Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = renameAvailable,
+                    onClick = {
+                        onChanged(BackupEditor.renameGroup(snapshot, groupId, renameGroupName))
+                        renameGroupId = null
+                        renameGroupName = ""
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameGroupId = null; renameGroupName = "" }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     if (showBulkColorDialog) {
         AlertDialog(
             onDismissRequest = { showBulkColorDialog = false },
@@ -1353,12 +1430,13 @@ private fun TopicsScreen(
     }
 
     if (showGroupDialog) {
+        val groupNameAvailable = BackupEditor.isGroupNameAvailable(snapshot, groupName, groupDialogParent)
         AlertDialog(
             onDismissRequest = { showGroupDialog = false },
             title = { Text(if (groupDialogParent == null) "New topic folder" else "New subfolder") },
-            text = { OutlinedTextField(groupName, { groupName = it }, label = { Text("Folder name") }) },
+            text = { Column { OutlinedTextField(groupName, { groupName = it }, label = { Text("Folder name") }); if (groupName.isNotBlank() && !groupNameAvailable) Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error) } },
             confirmButton = {
-                TextButton(enabled = groupName.isNotBlank(), onClick = {
+                TextButton(enabled = groupNameAvailable, onClick = {
                     val updated = BackupEditor.createGroup(snapshot, groupName, groupDialogParent)
                     onChanged(updated)
                     groupDialogParent?.let { expandedGroupIds = expandedGroupIds + it }
@@ -1570,6 +1648,11 @@ private fun TopicsScreen(
                                     contentPadding = PaddingValues(horizontal = 7.dp, vertical = 2.dp)
                                 ) { Text(label, fontSize = 12.sp) }
                             }
+                            TextButton(
+                                onClick = { folderActionGroupId = group.id },
+                                modifier = Modifier.width(30.dp).heightIn(min = 28.dp),
+                                contentPadding = PaddingValues(0.dp)
+                            ) { Text("⋮", fontSize = 16.sp) }
                         }
                     }
                 }
@@ -1611,6 +1694,10 @@ private fun TopicsScreen(
                         }) { Text("■ Stop recording") }
                     }
                     if (showTopicTools && !searchMode) {
+                    TextButton(onClick = {
+                        renameGroupId = group.id
+                        renameGroupName = group.name
+                    }) { Text("Rename folder") }
                     TextButton(onClick = {
                         groupDialogParent = group.id
                         showGroupDialog = true
