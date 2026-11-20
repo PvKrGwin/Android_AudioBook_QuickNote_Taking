@@ -137,6 +137,19 @@ object BackupEditor {
         return saveLibrary(snapshot, groups = updated)
     }
 
+    fun renameGroup(snapshot: BackupSnapshot, groupId: String, name: String): BackupSnapshot {
+        val trimmedName = name.trim()
+        require(trimmedName.isNotBlank()) { "Folder name is empty" }
+        if (snapshot.groups.none { it.id == groupId }) return snapshot
+        DesktopUndoStore.capture(snapshot)
+        return saveLibrary(
+            snapshot,
+            groups = snapshot.groups.map { group ->
+                if (group.id == groupId) group.copy(name = trimmedName) else group
+            }
+        )
+    }
+
     fun deleteGroup(snapshot: BackupSnapshot, groupId: String): BackupSnapshot {
         DesktopUndoStore.capture(snapshot)
         val ids = mutableSetOf(groupId)
