@@ -1061,13 +1061,16 @@ private fun TopicFolderPickerDialog(
                     ) { Text("Add as the last point in this folder") }
                 }
                 if (creatingFolder) {
+                    val folderNameAvailable = BackupEditor.isGroupNameAvailable(
+                        workingSnapshot, newFolderName, current?.id
+                    )
                     OutlinedTextField(
                         newFolderName,
                         { newFolderName = it },
                         label = { Text(if (current == null) "New main folder" else "New subfolder") }
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(enabled = newFolderName.isNotBlank(), onClick = {
+                        Button(enabled = folderNameAvailable, onClick = {
                             val updated = BackupEditor.createGroup(
                                 workingSnapshot,
                                 newFolderName,
@@ -1080,6 +1083,9 @@ private fun TopicFolderPickerDialog(
                             creatingFolder = false
                         }) { Text("Create") }
                         TextButton(onClick = { creatingFolder = false }) { Text("Cancel") }
+                    }
+                    if (newFolderName.isNotBlank() && !folderNameAvailable) {
+                        Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error)
                     }
                 } else {
                     TextButton(onClick = { creatingFolder = true }) {
@@ -1349,21 +1355,29 @@ private fun TopicsScreen(
 
     renameGroupId?.let { groupId ->
         val group = snapshot.groups.firstOrNull { it.id == groupId }
+        val renameAvailable = group != null && BackupEditor.isGroupNameAvailable(
+            snapshot, renameGroupName, group.parentId, groupId
+        )
         AlertDialog(
             onDismissRequest = { renameGroupId = null; renameGroupName = "" },
             title = { Text("Rename Topic folder") },
             text = {
-                OutlinedTextField(
-                    value = renameGroupName,
-                    onValueChange = { renameGroupName = it },
-                    label = { Text("Folder name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    OutlinedTextField(
+                        value = renameGroupName,
+                        onValueChange = { renameGroupName = it },
+                        label = { Text("Folder name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (renameGroupName.isNotBlank() && !renameAvailable) {
+                        Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error)
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
-                    enabled = group != null && renameGroupName.isNotBlank(),
+                    enabled = renameAvailable,
                     onClick = {
                         onChanged(BackupEditor.renameGroup(snapshot, groupId, renameGroupName))
                         renameGroupId = null
@@ -1416,12 +1430,13 @@ private fun TopicsScreen(
     }
 
     if (showGroupDialog) {
+        val groupNameAvailable = BackupEditor.isGroupNameAvailable(snapshot, groupName, groupDialogParent)
         AlertDialog(
             onDismissRequest = { showGroupDialog = false },
             title = { Text(if (groupDialogParent == null) "New topic folder" else "New subfolder") },
-            text = { OutlinedTextField(groupName, { groupName = it }, label = { Text("Folder name") }) },
+            text = { Column { OutlinedTextField(groupName, { groupName = it }, label = { Text("Folder name") }); if (groupName.isNotBlank() && !groupNameAvailable) Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error) } },
             confirmButton = {
-                TextButton(enabled = groupName.isNotBlank(), onClick = {
+                TextButton(enabled = groupNameAvailable, onClick = {
                     val updated = BackupEditor.createGroup(snapshot, groupName, groupDialogParent)
                     onChanged(updated)
                     groupDialogParent?.let { expandedGroupIds = expandedGroupIds + it }
