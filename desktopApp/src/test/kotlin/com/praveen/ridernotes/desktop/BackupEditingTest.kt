@@ -12,6 +12,35 @@ import kotlin.io.path.createTempDirectory
 
 class BackupEditingTest {
     @Test
+    fun renamingFolderPreservesIdsPlacementsAndNestedLinks() {
+        val temp = createTempDirectory("rider-notes-folder-rename-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Biology", null)
+        val parent = snapshot.groups.single()
+        snapshot = BackupEditor.createGroup(snapshot, "Cells", parent.id)
+        val child = snapshot.groups.first { it.parentId == parent.id }
+        snapshot = BackupEditor.addTextPoint(snapshot, child.id, "Mitochondria", "Powerhouse")
+        val placement = snapshot.placements.single()
+
+        snapshot = BackupEditor.renameGroup(snapshot, parent.id, "Life sciences")
+        snapshot = BackupEditor.renameGroup(snapshot, child.id, "Cell biology")
+
+        assertEquals(parent.id, snapshot.groups.first { it.name == "Life sciences" }.id)
+        assertEquals(parent.id, snapshot.groups.first { it.name == "Cell biology" }.parentId)
+        assertEquals(child.id, snapshot.placements.single().groupId)
+        assertEquals(placement.itemId, snapshot.placements.single().itemId)
+    }
+
+    @Test
     fun editsTopicsAddsTypedNoteAndPublishesRevision() {
         val temp = createTempDirectory("rider-notes-pc-edit-").toFile()
         val zip = File(temp, "RiderNotes_Full_Backup.zip")
