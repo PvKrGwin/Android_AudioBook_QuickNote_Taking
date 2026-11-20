@@ -93,6 +93,8 @@ fun TopicLibraryScreen(
     var linkItemId by remember { mutableStateOf<String?>(null) }
     var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     var deleteGroupTarget by remember { mutableStateOf<TopicGroup?>(null) }
+    var renameGroupTarget by remember { mutableStateOf<TopicGroup?>(null) }
+    var renameGroupName by remember { mutableStateOf("") }
     var expandedPlacements by remember { mutableStateOf<Set<String>>(emptySet()) }
     var colorPlacement by remember { mutableStateOf<TopicPlacement?>(null) }
     var legendExpanded by remember { mutableStateOf(false) }
@@ -546,6 +548,37 @@ fun TopicLibraryScreen(
             dismissButton = { TextButton(onClick = { deleteGroupTarget = null }) { Text("Cancel") } }
         )
     }
+    renameGroupTarget?.let { group ->
+        AlertDialog(
+            onDismissRequest = { renameGroupTarget = null; renameGroupName = "" },
+            title = { Text("Rename folder") },
+            text = {
+                OutlinedTextField(
+                    value = renameGroupName,
+                    onValueChange = { renameGroupName = it },
+                    label = { Text("Folder name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = renameGroupName.isNotBlank(),
+                    onClick = {
+                        TopicLibraryRepository.renameGroup(context, group.id, renameGroupName)
+                        renameGroupTarget = null
+                        renameGroupName = ""
+                        refresh()
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameGroupTarget = null; renameGroupName = "" }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     if (showFilterColorDialog) {
         AlertDialog(
@@ -639,6 +672,12 @@ fun TopicLibraryScreen(
                         }
                     }
                     if (currentGroup != null) {
+                        OutlinedButton(onClick = {
+                            renameGroupTarget = currentGroup
+                            renameGroupName = currentGroup.name
+                        }) {
+                            Text("Rename folder", fontSize = 11.sp)
+                        }
                         TextButton(onClick = { legendExpanded = true }) {
                             Text("🎨 Legend", fontSize = 11.sp)
                         }
