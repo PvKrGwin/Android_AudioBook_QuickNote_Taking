@@ -53,8 +53,13 @@ object TopicLibraryRepository {
 
     @Synchronized fun createGroup(context: Context, name: String, parentId: String?): TopicGroup {
         val current = load(context)
+        val trimmedName = name.trim()
+        require(trimmedName.isNotBlank()) { "Group name is empty" }
+        require(isGroupNameAvailable(current, trimmedName, parentId)) {
+            "A folder with this name already exists here"
+        }
         val siblings = current.groups.filter { it.parentId == parentId }
-        val group = TopicGroup(UUID.randomUUID().toString(), name.trim(), parentId, siblings.size)
+        val group = TopicGroup(UUID.randomUUID().toString(), trimmedName, parentId, siblings.size)
         save(context, current.copy(groups = current.groups + group))
         return group
     }
@@ -63,7 +68,10 @@ object TopicLibraryRepository {
         val trimmedName = name.trim()
         require(trimmedName.isNotBlank()) { "Group name is empty" }
         val current = load(context)
-        if (current.groups.none { it.id == groupId }) return
+        val existing = current.groups.firstOrNull { it.id == groupId } ?: return
+        require(isGroupNameAvailable(current, trimmedName, existing.parentId, groupId)) {
+            "A folder with this name already exists here"
+        }
         save(
             context,
             current.copy(
@@ -72,6 +80,21 @@ object TopicLibraryRepository {
                 }
             )
         )
+    }
+
+    fun isGroupNameAvailable(
+        library: TopicLibrary,
+        name: String,
+        parentId: String?,
+        excludingGroupId: String? = null
+    ): Boolean {
+        val normalized = name.trim()
+        if (normalized.isBlank()) return false
+        return library.groups.none { group ->
+            group.id != excludingGroupId &&
+                group.parentId == parentId &&
+                group.name.trim().equals(normalized, ignoreCase = true)
+        }
     }
 
     @Synchronized fun deleteGroup(context: Context, groupId: String) {
