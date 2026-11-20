@@ -308,7 +308,11 @@ fun TopicLibraryScreen(
         )
     }
 
-    if (dialog == "group") InputDialog("New group", "Group name", inputTitle, { inputTitle = it }, ::resetInput) {
+    if (dialog == "group") InputDialog(
+        "New group", "Group name", inputTitle, { inputTitle = it }, ::resetInput,
+        enabled = TopicLibraryRepository.isGroupNameAvailable(library, inputTitle, currentGroupId),
+        error = if (inputTitle.isNotBlank() && !TopicLibraryRepository.isGroupNameAvailable(library, inputTitle, currentGroupId)) "A folder with this name already exists here" else null
+    ) {
         if (inputTitle.isNotBlank()) TopicLibraryRepository.createGroup(context, inputTitle, currentGroupId)
         resetInput(); refresh()
     }
@@ -573,21 +577,29 @@ fun TopicLibraryScreen(
         )
     }
     renameGroupTarget?.let { group ->
+        val renameAvailable = TopicLibraryRepository.isGroupNameAvailable(
+            library, renameGroupName, group.parentId, group.id
+        )
         AlertDialog(
             onDismissRequest = { renameGroupTarget = null; renameGroupName = "" },
             title = { Text("Rename folder") },
             text = {
-                OutlinedTextField(
-                    value = renameGroupName,
-                    onValueChange = { renameGroupName = it },
-                    label = { Text("Folder name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                Column {
+                    OutlinedTextField(
+                        value = renameGroupName,
+                        onValueChange = { renameGroupName = it },
+                        label = { Text("Folder name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (renameGroupName.isNotBlank() && !renameAvailable) {
+                        Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error)
+                    }
+                }
             },
             confirmButton = {
                 TextButton(
-                    enabled = renameGroupName.isNotBlank(),
+                    enabled = renameAvailable,
                     onClick = {
                         TopicLibraryRepository.renameGroup(context, group.id, renameGroupName)
                         renameGroupTarget = null
@@ -1105,8 +1117,8 @@ private fun MobileRichTextField(
     }
 }
 
-@Composable private fun InputDialog(title: String, label: String, value: String, onChange: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =
-    AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { OutlinedTextField(value, onChange, label = { Text(label) }) }, confirmButton = { TextButton(onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
+@Composable private fun InputDialog(title: String, label: String, value: String, onChange: (String) -> Unit, onCancel: () -> Unit, enabled: Boolean = true, error: String? = null, onSave: () -> Unit) =
+    AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { Column { OutlinedTextField(value, onChange, label = { Text(label) }); error?.let { Text(it, color = MaterialTheme.colorScheme.error) } } }, confirmButton = { TextButton(enabled = enabled, onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
 
 @Composable private fun TwoInputDialog(title: String, firstLabel: String, secondLabel: String, first: String, second: String, onFirst: (String) -> Unit, onSecond: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =
     AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { Column { OutlinedTextField(first, onFirst, label = { Text(firstLabel) }); Spacer(Modifier.height(8.dp)); OutlinedTextField(second, onSecond, label = { Text(secondLabel) }) } }, confirmButton = { TextButton(onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
