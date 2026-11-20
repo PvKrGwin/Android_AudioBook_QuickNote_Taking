@@ -1677,23 +1677,52 @@ private fun DetectorScreen(
             )
 
             val topSyncState = cloudSyncStatus.value.syncState
-            if (cloudSyncStatus.value.syncRecommended) {
-                val offline = topSyncState == CloudSyncManager.SyncState.OFFLINE_PENDING
+            val showTopSyncAction = topSyncState in setOf(
+                CloudSyncManager.SyncState.RECOMMENDED,
+                CloudSyncManager.SyncState.OFFLINE_PENDING,
+                CloudSyncManager.SyncState.QUEUED,
+                CloudSyncManager.SyncState.SYNCING,
+                CloudSyncManager.SyncState.FAILED,
+                CloudSyncManager.SyncState.COMPLETED
+            )
+            if (showTopSyncAction) {
+                val topSyncEnabled = topSyncState in setOf(
+                    CloudSyncManager.SyncState.RECOMMENDED,
+                    CloudSyncManager.SyncState.OFFLINE_PENDING,
+                    CloudSyncManager.SyncState.FAILED
+                )
+                val topSyncColor = when (topSyncState) {
+                    CloudSyncManager.SyncState.OFFLINE_PENDING -> Color(0xFFFFC107)
+                    CloudSyncManager.SyncState.QUEUED,
+                    CloudSyncManager.SyncState.SYNCING -> Color(0xFFD81B60)
+                    CloudSyncManager.SyncState.COMPLETED -> Color(0xFF2E7D32)
+                    else -> Color(0xFFC62828)
+                }
+                val topSyncLabel = when (topSyncState) {
+                    CloudSyncManager.SyncState.RECOMMENDED ->
+                        "⚠ Phone changes need upload · tap to upload"
+                    CloudSyncManager.SyncState.OFFLINE_PENDING ->
+                        "⚠ Phone changes not uploaded · offline · tap to retry"
+                    CloudSyncManager.SyncState.QUEUED -> "Upload queued…"
+                    CloudSyncManager.SyncState.SYNCING -> "Uploading local changes…"
+                    CloudSyncManager.SyncState.FAILED -> "Upload failed · tap to retry"
+                    CloudSyncManager.SyncState.COMPLETED -> "✓ Upload completed"
+                    else -> ""
+                }
                 Button(
-                    onClick = { selectedTab.value = 0 },
+                    onClick = onSyncNow,
+                    enabled = topSyncEnabled,
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (offline) Color(0xFFFFC107) else Color(0xFFC62828),
-                        contentColor = if (offline) Color(0xFF1F1F1F) else Color.White
+                        containerColor = topSyncColor,
+                        contentColor = if (topSyncState == CloudSyncManager.SyncState.OFFLINE_PENDING) {
+                            Color(0xFF1F1F1F)
+                        } else Color.White,
+                        disabledContainerColor = topSyncColor,
+                        disabledContentColor = Color.White
                     )
                 ) {
-                    Text(
-                        if (offline) {
-                            "⚠ Phone changes not uploaded · offline · tap for sync"
-                        } else {
-                            "⚠ Phone changes need upload · tap for sync"
-                        }
-                    )
+                    Text(topSyncLabel)
                 }
             }
 
