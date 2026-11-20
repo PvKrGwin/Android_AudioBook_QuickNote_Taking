@@ -1140,6 +1140,8 @@ private fun TopicsScreen(
     var showBulkColorDialog by remember { mutableStateOf(false) }
     var pendingPointDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var pendingGroupDeleteId by remember { mutableStateOf<String?>(null) }
+    var renameGroupId by remember { mutableStateOf<String?>(null) }
+    var renameGroupName by remember { mutableStateOf("") }
     var linkPlacementId by remember { mutableStateOf<String?>(null) }
     var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     var filterColor by remember { mutableStateOf<String?>(null) }
@@ -1312,6 +1314,38 @@ private fun TopicsScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingGroupDeleteId = null }) { Text("No") }
+            }
+        )
+    }
+
+    renameGroupId?.let { groupId ->
+        val group = snapshot.groups.firstOrNull { it.id == groupId }
+        AlertDialog(
+            onDismissRequest = { renameGroupId = null; renameGroupName = "" },
+            title = { Text("Rename Topic folder") },
+            text = {
+                OutlinedTextField(
+                    value = renameGroupName,
+                    onValueChange = { renameGroupName = it },
+                    label = { Text("Folder name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = group != null && renameGroupName.isNotBlank(),
+                    onClick = {
+                        onChanged(BackupEditor.renameGroup(snapshot, groupId, renameGroupName))
+                        renameGroupId = null
+                        renameGroupName = ""
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameGroupId = null; renameGroupName = "" }) {
+                    Text("Cancel")
+                }
             }
         )
     }
@@ -1611,6 +1645,10 @@ private fun TopicsScreen(
                         }) { Text("■ Stop recording") }
                     }
                     if (showTopicTools && !searchMode) {
+                    TextButton(onClick = {
+                        renameGroupId = group.id
+                        renameGroupName = group.name
+                    }) { Text("Rename folder") }
                     TextButton(onClick = {
                         groupDialogParent = group.id
                         showGroupDialog = true
