@@ -59,6 +59,21 @@ object TopicLibraryRepository {
         return group
     }
 
+    @Synchronized fun renameGroup(context: Context, groupId: String, name: String) {
+        val trimmedName = name.trim()
+        require(trimmedName.isNotBlank()) { "Group name is empty" }
+        val current = load(context)
+        if (current.groups.none { it.id == groupId }) return
+        save(
+            context,
+            current.copy(
+                groups = current.groups.map { group ->
+                    if (group.id == groupId) group.copy(name = trimmedName) else group
+                }
+            )
+        )
+    }
+
     @Synchronized fun deleteGroup(context: Context, groupId: String) {
         val current = load(context)
         val ids = mutableSetOf(groupId)
