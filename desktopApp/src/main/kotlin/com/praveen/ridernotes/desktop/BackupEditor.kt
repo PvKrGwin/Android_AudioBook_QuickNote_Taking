@@ -125,12 +125,16 @@ object BackupEditor {
     }
 
     fun createGroup(snapshot: BackupSnapshot, name: String, parentId: String?): BackupSnapshot {
-        require(name.isNotBlank()) { "Folder name is empty" }
+        val trimmedName = name.trim()
+        require(trimmedName.isNotBlank()) { "Folder name is empty" }
+        require(isGroupNameAvailable(snapshot, trimmedName, parentId)) {
+            "A folder with this name already exists here"
+        }
         DesktopUndoStore.capture(snapshot)
         val siblings = snapshot.groups.filter { it.parentId == parentId }
         val updated = snapshot.groups + DesktopTopicGroup(
             id = id(),
-            name = name.trim(),
+            name = trimmedName,
             parentId = parentId,
             order = siblings.size
         )
@@ -140,7 +144,10 @@ object BackupEditor {
     fun renameGroup(snapshot: BackupSnapshot, groupId: String, name: String): BackupSnapshot {
         val trimmedName = name.trim()
         require(trimmedName.isNotBlank()) { "Folder name is empty" }
-        if (snapshot.groups.none { it.id == groupId }) return snapshot
+        val existing = snapshot.groups.firstOrNull { it.id == groupId } ?: return snapshot
+        require(isGroupNameAvailable(snapshot, trimmedName, existing.parentId, groupId)) {
+            "A folder with this name already exists here"
+        }
         DesktopUndoStore.capture(snapshot)
         return saveLibrary(
             snapshot,
@@ -148,6 +155,21 @@ object BackupEditor {
                 if (group.id == groupId) group.copy(name = trimmedName) else group
             }
         )
+    }
+
+    fun isGroupNameAvailable(
+        snapshot: BackupSnapshot,
+        name: String,
+        parentId: String?,
+        excludingGroupId: String? = null
+    ): Boolean {
+        val normalized = name.trim()
+        if (normalized.isBlank()) return false
+        return snapshot.groups.none { group ->
+            group.id != excludingGroupId &&
+                group.parentId == parentId &&
+                group.name.trim().equals(normalized, ignoreCase = true)
+        }
     }
 
     fun deleteGroup(snapshot: BackupSnapshot, groupId: String): BackupSnapshot {
