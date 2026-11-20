@@ -1486,13 +1486,18 @@ private fun DetectorScreen(
                         ) { Text("Save in this folder") }
                     }
                     if (topicPickerCreatingFolder.value) {
+                        val folderNameAvailable = TopicLibraryRepository.isGroupNameAvailable(
+                            library,
+                            topicPickerNewFolderName.value,
+                            currentFolder?.id
+                        )
                         OutlinedTextField(
                             value = topicPickerNewFolderName.value,
                             onValueChange = { topicPickerNewFolderName.value = it },
                             label = { Text(if (currentFolder == null) "New main folder" else "New subfolder") }
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = {
+                            Button(enabled = folderNameAvailable, onClick = {
                                 if (topicPickerNewFolderName.value.isNotBlank()) {
                                     val created = TopicLibraryRepository.createGroup(
                                         context,
@@ -1508,6 +1513,12 @@ private fun DetectorScreen(
                             TextButton(onClick = { topicPickerCreatingFolder.value = false }) {
                                 Text("Cancel")
                             }
+                        }
+                        if (topicPickerNewFolderName.value.isNotBlank() && !folderNameAvailable) {
+                            Text(
+                                "A folder with this name already exists here",
+                                color = MaterialTheme.colorScheme.error
+                            )
                         }
                     } else {
                         TextButton(onClick = { topicPickerCreatingFolder.value = true }) {
