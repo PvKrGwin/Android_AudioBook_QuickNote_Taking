@@ -6,7 +6,6 @@ on:
     branches:
       - milestone-11-windows-companion
       - milestone-12-bidirectional-companion-sync
-      - milestone-12-folder-rename
     paths:
       - "app/**"
       - "desktopApp/**"
