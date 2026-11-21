@@ -7,10 +7,68 @@ import java.util.zip.ZipOutputStream
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.io.path.createTempDirectory
 
 class BackupEditingTest {
+    @Test
+    fun duplicateFolderNamesAreRejectedOnlyAmongSiblings() {
+        val temp = createTempDirectory("rider-notes-folder-duplicates-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry("library.json", """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}""")
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Biology", null)
+        val biology = snapshot.groups.single()
+        snapshot = BackupEditor.createGroup(snapshot, "Cells", biology.id)
+        snapshot = BackupEditor.createGroup(snapshot, "Plants", biology.id)
+        val plants = snapshot.groups.first { it.name == "Plants" }
+
+        assertFailsWith<IllegalArgumentException> {
+            BackupEditor.createGroup(snapshot, "  biology  ", null)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            BackupEditor.renameGroup(snapshot, plants.id, "CELLS")
+        }
+
+        snapshot = BackupEditor.createGroup(snapshot, "Research", null)
+        val research = snapshot.groups.first { it.name == "Research" }
+        snapshot = BackupEditor.createGroup(snapshot, "Cells", research.id)
+        assertEquals(2, snapshot.groups.count { it.name == "Cells" })
+    }
+
+    @Test
+    fun renamingFolderPreservesIdsPlacementsAndNestedLinks() {
+        val temp = createTempDirectory("rider-notes-folder-rename-").toFile()
+        val zip = File(temp, "RiderNotes_Full_Backup.zip")
+        ZipOutputStream(zip.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+
+        var snapshot = BackupImporter.import(zip)
+        snapshot = BackupEditor.createGroup(snapshot, "Biology", null)
+        val parent = snapshot.groups.single()
+        snapshot = BackupEditor.createGroup(snapshot, "Cells", parent.id)
+        val child = snapshot.groups.first { it.parentId == parent.id }
+        snapshot = BackupEditor.addTextPoint(snapshot, child.id, "Mitochondria", "Powerhouse")
+        val placement = snapshot.placements.single()
+
+        snapshot = BackupEditor.renameGroup(snapshot, parent.id, "Life sciences")
+        snapshot = BackupEditor.renameGroup(snapshot, child.id, "Cell biology")
+
+        assertEquals(parent.id, snapshot.groups.first { it.name == "Life sciences" }.id)
+        assertEquals(parent.id, snapshot.groups.first { it.name == "Cell biology" }.parentId)
+        assertEquals(child.id, snapshot.placements.single().groupId)
+        assertEquals(placement.itemId, snapshot.placements.single().itemId)
+    }
+
     @Test
     fun editsTopicsAddsTypedNoteAndPublishesRevision() {
         val temp = createTempDirectory("rider-notes-pc-edit-").toFile()

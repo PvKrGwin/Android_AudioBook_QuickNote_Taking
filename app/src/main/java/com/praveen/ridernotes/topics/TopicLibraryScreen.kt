@@ -93,6 +93,9 @@ fun TopicLibraryScreen(
     var linkItemId by remember { mutableStateOf<String?>(null) }
     var linkPickerGroupId by remember { mutableStateOf<String?>(null) }
     var deleteGroupTarget by remember { mutableStateOf<TopicGroup?>(null) }
+    var groupActionTarget by remember { mutableStateOf<TopicGroup?>(null) }
+    var renameGroupTarget by remember { mutableStateOf<TopicGroup?>(null) }
+    var renameGroupName by remember { mutableStateOf("") }
     var expandedPlacements by remember { mutableStateOf<Set<String>>(emptySet()) }
     var colorPlacement by remember { mutableStateOf<TopicPlacement?>(null) }
     var legendExpanded by remember { mutableStateOf(false) }
@@ -305,7 +308,11 @@ fun TopicLibraryScreen(
         )
     }
 
-    if (dialog == "group") InputDialog("New group", "Group name", inputTitle, { inputTitle = it }, ::resetInput) {
+    if (dialog == "group") InputDialog(
+        "New group", "Group name", inputTitle, { inputTitle = it }, ::resetInput,
+        enabled = TopicLibraryRepository.isGroupNameAvailable(library, inputTitle, currentGroupId),
+        error = if (inputTitle.isNotBlank() && !TopicLibraryRepository.isGroupNameAvailable(library, inputTitle, currentGroupId)) "A folder with this name already exists here" else null
+    ) {
         if (inputTitle.isNotBlank()) TopicLibraryRepository.createGroup(context, inputTitle, currentGroupId)
         resetInput(); refresh()
     }
@@ -546,6 +553,68 @@ fun TopicLibraryScreen(
             dismissButton = { TextButton(onClick = { deleteGroupTarget = null }) { Text("Cancel") } }
         )
     }
+    groupActionTarget?.let { group ->
+        AlertDialog(
+            onDismissRequest = { groupActionTarget = null },
+            title = { Text(group.name) },
+            text = { Text("Choose a folder action") },
+            confirmButton = {
+                TextButton(onClick = {
+                    groupActionTarget = null
+                    renameGroupTarget = group
+                    renameGroupName = group.name
+                }) { Text("Rename") }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        groupActionTarget = null
+                        deleteGroupTarget = group
+                    }) { Text("Delete", color = Color(0xFFB00020)) }
+                    TextButton(onClick = { groupActionTarget = null }) { Text("Cancel") }
+                }
+            }
+        )
+    }
+    renameGroupTarget?.let { group ->
+        val renameAvailable = TopicLibraryRepository.isGroupNameAvailable(
+            library, renameGroupName, group.parentId, group.id
+        )
+        AlertDialog(
+            onDismissRequest = { renameGroupTarget = null; renameGroupName = "" },
+            title = { Text("Rename folder") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = renameGroupName,
+                        onValueChange = { renameGroupName = it },
+                        label = { Text("Folder name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (renameGroupName.isNotBlank() && !renameAvailable) {
+                        Text("A folder with this name already exists here", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = renameAvailable,
+                    onClick = {
+                        TopicLibraryRepository.renameGroup(context, group.id, renameGroupName)
+                        renameGroupTarget = null
+                        renameGroupName = ""
+                        refresh()
+                    }
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameGroupTarget = null; renameGroupName = "" }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 
     if (showFilterColorDialog) {
         AlertDialog(
@@ -639,6 +708,12 @@ fun TopicLibraryScreen(
                         }
                     }
                     if (currentGroup != null) {
+                        OutlinedButton(onClick = {
+                            renameGroupTarget = currentGroup
+                            renameGroupName = currentGroup.name
+                        }) {
+                            Text("Rename folder", fontSize = 11.sp)
+                        }
                         TextButton(onClick = { legendExpanded = true }) {
                             Text("🎨 Legend", fontSize = 11.sp)
                         }
@@ -726,7 +801,7 @@ fun TopicLibraryScreen(
         restoreStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxSize()) {
             items(childGroups, key = { "group-${it.id}" }) { group ->
-                Card(Modifier.fillMaxWidth().combinedClickable(onClick = { currentGroupId = group.id }, onLongClick = { deleteGroupTarget = group })) {
+                Card(Modifier.fillMaxWidth().combinedClickable(onClick = { currentGroupId = group.id }, onLongClick = { groupActionTarget = group })) {
                     Text("📁 ${group.name}", fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
                 }
             }
@@ -1042,8 +1117,8 @@ private fun MobileRichTextField(
     }
 }
 
-@Composable private fun InputDialog(title: String, label: String, value: String, onChange: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =
-    AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { OutlinedTextField(value, onChange, label = { Text(label) }) }, confirmButton = { TextButton(onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
+@Composable private fun InputDialog(title: String, label: String, value: String, onChange: (String) -> Unit, onCancel: () -> Unit, enabled: Boolean = true, error: String? = null, onSave: () -> Unit) =
+    AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { Column { OutlinedTextField(value, onChange, label = { Text(label) }); error?.let { Text(it, color = MaterialTheme.colorScheme.error) } } }, confirmButton = { TextButton(enabled = enabled, onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
 
 @Composable private fun TwoInputDialog(title: String, firstLabel: String, secondLabel: String, first: String, second: String, onFirst: (String) -> Unit, onSecond: (String) -> Unit, onCancel: () -> Unit, onSave: () -> Unit) =
     AlertDialog(onDismissRequest = onCancel, title = { Text(title) }, text = { Column { OutlinedTextField(first, onFirst, label = { Text(firstLabel) }); Spacer(Modifier.height(8.dp)); OutlinedTextField(second, onSecond, label = { Text(secondLabel) }) } }, confirmButton = { TextButton(onClick = onSave) { Text("Save") } }, dismissButton = { TextButton(onClick = onCancel) { Text("Cancel") } })
