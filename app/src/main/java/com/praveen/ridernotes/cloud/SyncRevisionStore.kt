@@ -129,17 +129,50 @@ object SyncRevisionStore {
         return revision
     }
 
-    fun markSynced(context: Context, revision: CloudRevision) {
-        preferences(context).edit()
+    /**
+     * Records the revision that reached cloud storage, but only clears the dirty flag when
+     * that exact prepared revision is still current. A transcription (or any other edit)
+     * can finish while the worker is uploading; markLocalModified then removes the prepared
+     * revision, and the newer change must remain pending for the next upload.
+     *
+     * @return true when no newer local change was observed and the phone is fully synced.
+     */
+    fun markSynced(context: Context, revision: CloudRevision): Boolean {
+        val prefs = preferences(context)
+        val pendingRevisionId = prefs.getString(KEY_PENDING_LOCAL, null)
+            ?.let(::parse)
+            ?.revisionId
+        val fullySynced = shouldClearDirtyAfterUpload(
+            dirty = prefs.getBoolean(KEY_DIRTY, false),
+            pendingRevisionId = pendingRevisionId,
+            uploadedRevisionId = revision.revisionId
+        )
+        prefs.edit()
             .putString(KEY_LAST_SYNCED_REVISION, revision.revisionId)
             .putString(KEY_LAST_KNOWN_REVISION, toJson(revision).toString())
             .putString(KEY_LAST_SEEN_CLOUD, toJson(revision).toString())
-            .putBoolean(KEY_DIRTY, false)
-            .remove(KEY_DIRTY_AT)
-            .remove(KEY_PENDING_LOCAL)
-            .remove(KEY_PENDING_REMOTE)
+            .apply {
+                if (fullySynced) {
+                    putBoolean(KEY_DIRTY, false)
+                    remove(KEY_DIRTY_AT)
+                    remove(KEY_PENDING_LOCAL)
+                    remove(KEY_PENDING_REMOTE)
+                } else {
+                    // A newer prepared revision may still point to the pre-upload parent.
+                    // Recreate it on the next upload so it correctly descends from the
+                    // revision that just reached the cloud.
+                    remove(KEY_PENDING_LOCAL)
+                }
+            }
             .apply()
+        return fullySynced
     }
+
+    internal fun shouldClearDirtyAfterUpload(
+        dirty: Boolean,
+        pendingRevisionId: String?,
+        uploadedRevisionId: String
+    ): Boolean = !dirty || pendingRevisionId == uploadedRevisionId
 
     fun acceptRemote(context: Context, revision: CloudRevision) {
         preferences(context).edit()
