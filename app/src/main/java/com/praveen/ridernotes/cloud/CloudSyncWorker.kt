@@ -73,8 +73,12 @@ class CloudSyncWorker(
                 return Result.success()
             }
 
-            TopicLibraryRepository.createFreshBackup(applicationContext).getOrThrow()
-            val localRevision = SyncRevisionStore.currentOrNextRevision(applicationContext)
+            val backup = TopicLibraryRepository.createFreshBackup(applicationContext).getOrThrow()
+            // Use the revision embedded in the actual ZIP being uploaded. Asking for the
+            // current revision again here could accidentally label an older ZIP with a newer
+            // transcription revision that arrived while the backup was being built.
+            val localRevision = SyncRevisionStore.revisionInside(backup)
+                ?: error("Fresh backup has no sync revision")
             var uploaded = 0
             var unchanged = 0
             val existing = folder.listFiles().associateBy { it.name }
@@ -104,12 +108,16 @@ class CloudSyncWorker(
                 requireNotNull(output)
                 output.write(SyncRevisionStore.toJson(localRevision).toString(2).toByteArray())
             }
-            SyncRevisionStore.markSynced(applicationContext, localRevision)
-            CloudSyncManager.updateSyncState(
-                applicationContext,
-                CloudSyncManager.SyncState.COMPLETED,
-                "Sync complete: $uploaded uploaded, $unchanged unchanged"
-            )
+            val fullySynced = SyncRevisionStore.markSynced(applicationContext, localRevision)
+            if (fullySynced) {
+                CloudSyncManager.updateSyncState(
+                    applicationContext,
+                    CloudSyncManager.SyncState.COMPLETED,
+                    "Sync complete: $uploaded uploaded, $unchanged unchanged"
+                )
+            } else {
+                CloudSyncManager.markLocalChange(applicationContext)
+            }
             Result.success()
         } catch (error: Exception) {
             CloudSyncManager.prepareCompleteRetry(applicationContext)
