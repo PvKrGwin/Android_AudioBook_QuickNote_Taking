@@ -8,7 +8,7 @@ class DeltaSyncProtocolTest {
     @Test
     fun descendantRevisionDownloadsWhenCloudDescendsFromLocal() {
         val local = revision("local", null, 50_000L, "old")
-        val remote = revision("remote", "local", 1L, "new")
+        val remote = revision("remote", "intermediate", 1L, "new", listOf("intermediate", "local"))
 
         assertEquals(DeltaSyncDecision.DOWNLOAD_REMOTE, DeltaSyncPlanner.decide(local, remote))
     }
@@ -27,12 +27,19 @@ class DeltaSyncProtocolTest {
         assertNotEquals(DeltaContentHash.sha256("same"), DeltaContentHash.sha256("diff"))
     }
 
-    private fun revision(id: String, parent: String?, time: Long, hash: String) =
+    private fun revision(
+        id: String,
+        parent: String?,
+        time: Long,
+        hash: String,
+        ancestors: List<String> = parent?.let(::listOf).orEmpty()
+    ) =
         DeltaEntityRevision(
             entityId = "recording-metadata:1",
             kind = DeltaEntityKind.RECORDING_METADATA,
             revisionId = id,
             parentRevisionId = parent,
+            ancestorRevisionIds = ancestors,
             modifiedAtEpochMs = time,
             deviceId = id,
             deviceName = id,
