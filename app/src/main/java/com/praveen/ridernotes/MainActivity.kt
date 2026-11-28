@@ -922,6 +922,7 @@ class MainActivity : ComponentActivity() {
     private fun createFreshBackup() {
         if (backupStatus.value.startsWith("Creating fresh full backup")) return
         backupStatus.value = "Creating fresh full backup… Please keep Rider Notes open."
+        CloudSyncManager.requestFullCheckpointUpload(this)
         SyncRevisionStore.markLocalModified(this)
         Thread {
             TopicLibraryRepository.createFreshBackup(this)
@@ -2410,7 +2411,9 @@ private fun DetectorScreen(
                                     Text(
                                         "Creates RiderNotes_Full_Backup.zip with every note, transcript, " +
                                             "recording, Topic folder, and attachment. When it is ready, " +
-                                            "press Upload local changes to send it. This ZIP can be opened by Rider Notes PC.",
+                                            "press Upload local changes to send it as the recovery checkpoint. " +
+                                            "Ordinary later syncs send only delta changes; Rider Notes PC " +
+                                            "automatically combines the checkpoint and delta folder.",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     OutlinedButton(

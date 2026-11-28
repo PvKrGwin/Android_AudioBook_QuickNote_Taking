@@ -69,6 +69,12 @@ object CloudSyncManager {
             destinationUri(context, destination)?.let { destination to it }
         }
 
+    internal fun destinationDocument(
+        context: Context,
+        destination: Destination = Destination.PRIMARY
+    ): DocumentFile? = destinationUri(context, destination)
+        ?.let { DocumentFile.fromTreeUri(context, it) }
+
     fun status(context: Context): Status {
         val uri = destinationUri(context)
         val secondaryUri = destinationUri(context, Destination.SECONDARY)
@@ -282,6 +288,17 @@ object CloudSyncManager {
         clearUploadMarkers(context)
     }
 
+    fun requestFullCheckpointUpload(context: Context) {
+        preferences(context).edit().putBoolean(KEY_FULL_CHECKPOINT_PENDING, true).apply()
+    }
+
+    internal fun fullCheckpointUploadPending(context: Context): Boolean =
+        preferences(context).getBoolean(KEY_FULL_CHECKPOINT_PENDING, false)
+
+    internal fun markFullCheckpointUploaded(context: Context) {
+        preferences(context).edit().putBoolean(KEY_FULL_CHECKPOINT_PENDING, false).apply()
+    }
+
     fun markLocalChange(context: Context) {
         val selectedMode = mode(context)
         if (destinationUri(context, Destination.PRIMARY) == null || selectedMode == Mode.OFF) return
@@ -380,6 +397,13 @@ object CloudSyncManager {
                     requireNotNull(input)
                     target.outputStream().use(input::copyTo)
                 }
+            }.let { backup ->
+                DeltaCloudTransport.overlayRemoteOnBackup(
+                    context,
+                    destination,
+                    backup,
+                    remoteRevision(context, destination)
+                )
             }
         }.getOrNull()
     }
@@ -446,6 +470,7 @@ object CloudSyncManager {
     private const val KEY_SYNC_STATE_AT = "sync_state_at"
     private const val KEY_WEB_URL = "web_url"
     private const val KEY_SECONDARY_WEB_URL = "secondary_web_url"
+    private const val KEY_FULL_CHECKPOINT_PENDING = "full_checkpoint_pending"
     private const val MARKER_PREFIX = "uploaded:"
     private const val PERIODIC_WORK = "rider-notes-cloud-periodic"
     private const val IMMEDIATE_WORK = "rider-notes-cloud-now"

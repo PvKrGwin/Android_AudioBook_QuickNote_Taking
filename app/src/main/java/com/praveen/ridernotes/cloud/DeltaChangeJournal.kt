@@ -11,7 +11,7 @@ import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 
-/** Durable per-entity history. Upload transport is deliberately introduced separately. */
+/** Durable per-entity state and pending-upload journal shared with the delta transport. */
 object DeltaChangeJournal {
     const val FILE_NAME = "rider_notes_delta_journal.json"
     private const val SCHEMA_VERSION = 1
@@ -85,6 +85,11 @@ object DeltaChangeJournal {
 
     @Synchronized
     fun entries(context: Context): List<Entry> = read(context)
+
+    @Synchronized
+    fun replaceWithRemote(context: Context, revisions: List<DeltaEntityRevision>) {
+        write(context, revisions.map { Entry(it, pendingUpload = false) })
+    }
 
     @Synchronized
     fun pending(context: Context): List<DeltaEntityRevision> = read(context)
@@ -294,10 +299,8 @@ object DeltaChangeJournal {
         return revision
     }
 
-    private fun read(context: Context): List<Entry> = runCatching {
-        val file = journalFile(context)
-        if (!file.exists()) return@runCatching emptyList()
-        val array = JSONObject(file.readText()).optJSONArray("entries") ?: JSONArray()
+    internal fun decode(text: String): List<Entry> = runCatching {
+        val array = JSONObject(text).optJSONArray("entries") ?: JSONArray()
         buildList {
             for (index in 0 until array.length()) {
                 val json = array.optJSONObject(index) ?: continue
@@ -307,16 +310,22 @@ object DeltaChangeJournal {
         }
     }.getOrDefault(emptyList())
 
+    internal fun encode(entries: List<Entry>): String = JSONObject()
+        .put("schemaVersion", SCHEMA_VERSION)
+        .put("entries", JSONArray(entries.map(::entryToJson)))
+        .toString(2)
+
+    private fun read(context: Context): List<Entry> = runCatching {
+        val file = journalFile(context)
+        if (!file.exists()) return@runCatching emptyList()
+        decode(file.readText())
+    }.getOrDefault(emptyList())
+
     private fun write(context: Context, entries: List<Entry>) {
         val file = journalFile(context)
         file.parentFile?.mkdirs()
         val temp = File(file.parentFile, ".${file.name}.tmp")
-        temp.writeText(
-            JSONObject()
-                .put("schemaVersion", SCHEMA_VERSION)
-                .put("entries", JSONArray(entries.map(::entryToJson)))
-                .toString(2)
-        )
+        temp.writeText(encode(entries))
         temp.copyTo(file, overwrite = true)
         temp.delete()
     }

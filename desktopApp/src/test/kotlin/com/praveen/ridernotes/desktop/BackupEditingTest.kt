@@ -13,7 +13,7 @@ import kotlin.io.path.createTempDirectory
 
 class BackupEditingTest {
     @Test
-    fun publishMirrorsFullZipAndRevisionToSecondaryCloud() {
+    fun publishSeedsSecondaryCheckpointAndMirrorsDeltaState() {
         val temp = createTempDirectory("rider-notes-dual-cloud-").toFile()
         val primary = File(temp, "primary/RiderNotes_Full_Backup.zip")
         primary.parentFile.mkdirs()
@@ -34,8 +34,8 @@ class BackupEditingTest {
             assertEquals(null, result.secondaryError)
             assertTrue(secondary.isFile)
             assertTrue(File(secondary.parentFile, SyncManifestCodec.SIBLING_FILE_NAME).isFile)
+            assertTrue(File(secondary.parentFile, DesktopDeltaCloudTransport.INDEX_FILE).isFile)
             ZipFile(secondary).use { archive ->
-                assertNotNull(archive.getEntry(SyncManifestCodec.FILE_NAME))
                 assertNotNull(archive.getEntry("library.json"))
             }
         } finally {
@@ -140,10 +140,14 @@ class BackupEditingTest {
         assertEquals(DesktopDeviceIdentity.name(), published.notes.single().originDeviceName)
         assertNotNull(published.syncManifest)
         assertTrue(File(temp, SyncManifestCodec.SIBLING_FILE_NAME).isFile)
+        assertTrue(File(temp, DesktopDeltaCloudTransport.INDEX_FILE).isFile)
+        assertTrue(
+            File(temp, DesktopDeltaCloudTransport.OBJECT_DIRECTORY)
+                .listFiles().orEmpty().isNotEmpty()
+        )
         ZipFile(zip).use { archive ->
-            assertNotNull(archive.getEntry(SyncManifestCodec.FILE_NAME))
-            assertNotNull(archive.getEntry("recordings/${published.notes.single().id}.json"))
-            assertNotNull(archive.getEntry("recordings/${published.notes.single().id}.m4a"))
+            assertEquals(null, archive.getEntry("recordings/${published.notes.single().id}.json"))
+            assertEquals(null, archive.getEntry("recordings/${published.notes.single().id}.m4a"))
         }
     }
 

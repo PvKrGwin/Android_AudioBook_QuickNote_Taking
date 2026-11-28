@@ -467,6 +467,12 @@ object TopicLibraryRepository {
         output.also { require(it.exists() && it.length() > 0L) }
     }
 
+    /** Refreshes the per-entity delta baseline without rebuilding the large recovery ZIP. */
+    @Synchronized
+    fun reconcileDeltaSnapshot(context: Context) {
+        DeltaChangeJournal.reconcileLocalSnapshot(context, load(context))
+    }
+
     /** Merge a topic backup without replacing any file or entity already on this phone. */
     @Synchronized fun restoreBackup(context: Context, uri: Uri): String = runCatching {
         val tempRoot = File(context.cacheDir, "topic_restore_${System.currentTimeMillis()}").apply { mkdirs() }

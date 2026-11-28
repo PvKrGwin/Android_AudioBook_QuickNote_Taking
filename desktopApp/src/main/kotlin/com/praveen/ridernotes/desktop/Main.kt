@@ -256,7 +256,7 @@ private fun RiderNotesDesktopApp(
                         "Cloud 1 and Cloud 2 updated by ${DesktopDeviceIdentity.name()} at " +
                             formatTime(System.currentTimeMillis())
                     else ->
-                        "Cloud-folder ZIP updated by ${DesktopDeviceIdentity.name()} at " +
+                        "Cloud delta updated by ${DesktopDeviceIdentity.name()} at " +
                             formatTime(System.currentTimeMillis())
                 }
                 syncObservation = DesktopSyncMonitor.inspect(published)
@@ -604,10 +604,9 @@ private fun RiderNotesDesktopApp(
             title = { Text("Before opening a cloud backup") },
             text = {
                 Text(
-                    "Ensure that all recent changes on your phone have been included in a fresh " +
-                        "full backup and successfully synchronized to the cloud. Otherwise, the " +
-                        "ZIP downloaded on this PC may not contain your latest mobile notes, " +
-                        "transcripts, Topics, or attachments."
+                    "Ensure that all recent phone changes have been successfully synchronized. " +
+                        "Rider Notes PC needs the recovery ZIP together with its delta index and " +
+                        "objects; the ZIP alone may be an older checkpoint."
                 )
             },
             confirmButton = {
@@ -624,8 +623,8 @@ private fun RiderNotesDesktopApp(
             title = { Text("Sync these changes?") },
             text = {
                 Text(
-                    "Rider Notes has unsaved cloud changes. Sync now rebuilds the complete ZIP " +
-                        "and replaces it safely in your Google Drive for Desktop folder."
+                    "Rider Notes has local changes. Sync now writes the small delta index and " +
+                        "only new or changed files into your Google Drive for Desktop folder."
                 )
             },
             confirmButton = { TextButton(onClick = { publishNow() }) { Text("Sync now") } },
@@ -739,7 +738,7 @@ private fun RiderNotesDesktopApp(
                     Text(
                         when {
                             dirty -> "Sync now — recommended"
-                            syncSucceeded -> "✓ ZIP rebuilt — verify Drive upload"
+                            syncSucceeded -> "✓ Delta saved — verify Drive upload"
                             else -> "Sync now — no local changes"
                         }
                     )
@@ -2774,18 +2773,19 @@ private fun UserManualScreen() {
             "Recommended synchronization — Google Drive for Desktop",
             "1. Install Google Drive for Desktop and allow the Rider Notes cloud folder to synchronize.\n" +
                 "2. In this app, open RiderNotes_Full_Backup.zip directly from that synchronized folder.\n" +
-                "3. Before an edit, Rider Notes checks the ZIP and RiderNotes_Sync_State.json revision marker.\n" +
-                "4. After an edit, Sync now turns red. Press it to rebuild the ZIP and revision marker.\n" +
+                "3. Before an edit, Rider Notes checks RiderNotes_Sync_State.json for a newer device revision.\n" +
+                "4. After an edit, Sync now turns red. Press it to update the delta index, changed objects, and revision marker.\n" +
                 "5. A green result means the local synchronized-folder files were updated. Drive for Desktop uploads them automatically.\n" +
                 "6. Wait for Google Drive to finish uploading before using Rider Notes on the phone."
         )
         ManualSection(
             "Manual Chrome download and upload",
-            "This method works, but it is manual. First press Sync now on the phone. Download both " +
-                "RiderNotes_Full_Backup.zip and RiderNotes_Sync_State.json into the same PC folder. " +
-                "Open the ZIP, make changes, and press Sync now in the PC app. Then upload and replace " +
-                "both the rebuilt ZIP and RiderNotes_Sync_State.json in the original Drive folder. " +
-                "Do not delete the old files first: use Google Drive's replace option so the folder keeps one current file of each name. " +
+            "This method works, but it is manual. First upload local changes on the phone. Download " +
+                "the complete Rider Notes folder: RiderNotes_Full_Backup.zip, RiderNotes_Sync_State.json, " +
+                "RiderNotes_Delta_Index.json, and RiderNotes_Delta_Objects. Open the ZIP, make changes, " +
+                "and press Sync now in the PC app. Upload the changed index, state file, and newly " +
+                "created delta objects back to the original Drive folder; the recovery ZIP is normally unchanged. " +
+                "Do not delete the old files first: use Google Drive's replace option for files with matching names. " +
                 "Do not use the phone during this transfer, and wait for the upload to finish before reopening it."
         )
         ManualSection(
@@ -2947,6 +2947,26 @@ private fun replacePrimaryBackup(primary: File, secondary: File) {
         )
     } else {
         BackupImporter.import(primary).syncManifest?.let { SyncManifestCodec.write(primaryState, it) }
+    }
+    val secondaryIndex = File(secondary.parentFile, DesktopDeltaCloudTransport.INDEX_FILE)
+    val primaryIndex = File(primary.parentFile, DesktopDeltaCloudTransport.INDEX_FILE)
+    if (secondaryIndex.isFile) {
+        Files.copy(secondaryIndex.toPath(), primaryIndex.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        val secondaryObjects = File(
+            secondary.parentFile,
+            DesktopDeltaCloudTransport.OBJECT_DIRECTORY
+        )
+        val primaryObjects = File(
+            primary.parentFile,
+            DesktopDeltaCloudTransport.OBJECT_DIRECTORY
+        ).apply { mkdirs() }
+        secondaryObjects.walkTopDown().filter(File::isFile).forEach { source ->
+            Files.copy(
+                source.toPath(),
+                File(primaryObjects, source.name).toPath(),
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        }
     }
 }
 

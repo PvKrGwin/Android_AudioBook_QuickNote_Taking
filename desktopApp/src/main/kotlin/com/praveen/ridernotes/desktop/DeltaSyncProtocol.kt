@@ -70,5 +70,16 @@ object DeltaContentHash {
     fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray(Charsets.UTF_8)).toHex()
 
+    fun sha256(input: java.io.InputStream): String = input.use { source ->
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        while (true) {
+            val count = source.read(buffer)
+            if (count < 0) break
+            if (count > 0) digest.update(buffer, 0, count)
+        }
+        digest.digest().toHex()
+    }
+
     private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 }

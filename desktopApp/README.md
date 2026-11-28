@@ -9,14 +9,21 @@ Rider Notes PC is the Windows companion for the Rider Notes Android application.
 3. Open `RiderNotes_Full_Backup.zip` directly from the synchronized Drive folder in Rider Notes PC.
 4. Make changes in **Notes** or **Topics**.
 5. Press **Sync now — recommended** in Rider Notes PC.
-6. Wait for Google Drive to upload the changed ZIP and `RiderNotes_Sync_State.json` before editing on the phone.
+6. Wait for Google Drive to upload the delta index, any new objects, and
+   `RiderNotes_Sync_State.json` before editing on the phone.
 
-An optional **Cloud 2** ZIP can be configured under **Backup & cloud**. Every successful PC
-publish mirrors both the full ZIP and its revision marker to Cloud 2. Cloud 1 remains the only
+An optional **Cloud 2** ZIP can be configured under **Backup & cloud**. The full ZIP is copied
+there once when missing; later publishes mirror only the delta index, missing objects, and
+revision marker. Cloud 1 remains the only
 normal read/update-check source; Cloud 2 is used only when you explicitly choose it for a full
 restore.
 
 The PC checks the local Drive-synchronized revision periodically, immediately before accepting an edit, and again before publishing. A cloud change can be detected only after Google Drive for Desktop downloads it.
+
+Ordinary **Sync now** does not rebuild or replace the large recovery ZIP. It publishes
+`RiderNotes_Delta_Index.json` plus only new content-addressed objects under
+`RiderNotes_Delta_Objects`. The PC overlays those changes automatically whenever the checkpoint
+is opened or reloaded.
 
 When the PC is online and already sees a newer cloud revision, a new media-note request pauses
 the active media but does not create the note yet. Resolve the existing merge/use-cloud/keep-PC
@@ -29,10 +36,12 @@ Manual transfer works if Google Drive for Desktop is not installed:
 
 1. Stop editing on the PC and phone.
 2. Press **Sync now** on the phone and wait for completion.
-3. Download both `RiderNotes_Full_Backup.zip` and `RiderNotes_Sync_State.json` from the same Drive folder into one PC folder.
+3. Download the complete Rider Notes cloud folder, including the full ZIP, sync-state JSON,
+   delta-index JSON, and delta-objects folder, into one PC folder.
 4. Open the downloaded ZIP in Rider Notes PC.
 5. Edit and press **Sync now — recommended**.
-6. Upload and replace both rebuilt files in the original Drive folder.
+6. Upload the changed delta index, sync-state JSON, and newly created delta objects to the
+   original Drive folder. The full ZIP is unchanged during ordinary edits.
 7. Wait for the upload to finish before reopening Rider Notes on the phone.
 
 ## Conflict choices

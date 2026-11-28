@@ -1,8 +1,20 @@
 # Milestone 13: provider-neutral incremental sync
 
 Milestone 13 keeps `RiderNotes_Full_Backup.zip` as the portable recovery and migration
-format. Routine synchronization will move to per-entity deltas so adding one transcript,
+format. Routine synchronization uses per-entity deltas so adding one transcript,
 renaming one folder, or changing one Topic point does not require uploading every recording.
+
+Ordinary synchronization leaves `RiderNotes_Full_Backup.zip` unchanged. The provider folder
+stores `RiderNotes_Delta_Index.json` and immutable, content-addressed files inside
+`RiderNotes_Delta_Objects`. Mobile and PC overlay that index on the checkpoint when loading,
+so only a new/changed recording, transcript, attachment, or small metadata index is transferred.
+**Create fresh full backup** is the explicit checkpoint/compaction action.
+
+The first Milestone 13 upload is a one-time baseline migration. The phone refreshes the full ZIP
+once as the authoritative checkpoint; the PC can reuse an existing checkpoint after verifying
+its contents by hash. Both create the canonical index without duplicating historic files already
+inside the checkpoint. Cloud 2 receives the same checkpoint/index baseline; later syncs transfer
+only missing objects.
 
 ## Safety rules
 
@@ -40,9 +52,9 @@ renaming one folder, or changing one Topic point does not require uploading ever
 
 ## Rollout
 
-1. **Foundation:** mobile and PC create the same durable per-entity journal; full ZIPs carry
+1. **Foundation (complete):** mobile and PC create the same durable per-entity journal; full ZIPs carry
    that journal for backward-compatible migration.
-2. **Delta transport:** upload/download only changed blobs, entity records, and tombstones to
+2. **Delta transport (complete):** upload/download only changed blobs, entity records, and tombstones to
    the selected provider. The current Drive folder remains supported.
 3. **Conflict UI:** show independent edits side by side and offer keep local, keep remote, or
    keep both where appropriate.

@@ -18,6 +18,7 @@ object BackupImporter {
             "${safeName}_${timestamp}_${UUID.randomUUID().toString().take(8)}"
         ).apply { mkdirs() }
         extractSafely(zipFile, root)
+        DesktopDeltaCloudTransport.overlay(zipFile, root)
 
         return readExtracted(zipFile, root)
     }

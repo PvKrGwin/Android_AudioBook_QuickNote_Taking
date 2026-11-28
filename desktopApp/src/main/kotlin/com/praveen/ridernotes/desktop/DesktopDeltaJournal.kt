@@ -212,20 +212,21 @@ object DesktopDeltaJournal {
         kind == other.kind && operation == other.operation && relativePath == other.relativePath &&
             sizeBytes == other.sizeBytes && sha256 == other.sha256 && payloadJson == other.payloadJson
 
-    private fun write(file: File, entries: List<Entry>) {
+    fun write(file: File, entries: List<Entry>) {
+        file.parentFile?.mkdirs()
         val temp = File(file.parentFile, ".${file.name}.tmp")
-        temp.writeText(
-            JSONObject()
-                .put("schemaVersion", SCHEMA_VERSION)
-                .put("entries", JSONArray(entries.map { entry ->
-                    JSONObject().put("pendingUpload", entry.pendingUpload)
-                        .put("revision", toJson(entry.revision))
-                }))
-                .toString(2)
-        )
+        temp.writeText(encode(entries))
         temp.copyTo(file, overwrite = true)
         temp.delete()
     }
+
+    fun encode(entries: List<Entry>): String = JSONObject()
+        .put("schemaVersion", SCHEMA_VERSION)
+        .put("entries", JSONArray(entries.map { entry ->
+            JSONObject().put("pendingUpload", entry.pendingUpload)
+                .put("revision", toJson(entry.revision))
+        }))
+        .toString(2)
 
     private fun toJson(value: DeltaEntityRevision): JSONObject = JSONObject()
         .put("entityId", value.entityId).put("kind", value.kind.name)
