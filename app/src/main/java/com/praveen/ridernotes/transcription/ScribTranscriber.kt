@@ -1,5 +1,7 @@
 package com.praveen.ridernotes.transcription
 
+import com.praveen.ridernotes.cloud.DeltaChangeJournal
+import com.praveen.ridernotes.cloud.DeltaEntityKind
 import com.praveen.ridernotes.cloud.SyncRevisionStore
 
 import android.content.ComponentName
@@ -244,10 +246,20 @@ object ScribTranscriber {
                                     transcript = transcript,
                                     segments = completedSegments
                                 )
-                                File(
+                                val transcriptFile = File(
                                     audioFile.parentFile,
                                     audioFile.nameWithoutExtension + ".txt"
-                                ).writeText(transcript)
+                                )
+                                transcriptFile.writeText(transcript)
+                                revisionContext?.let { context ->
+                                    DeltaChangeJournal.recordFile(
+                                        context,
+                                        "transcript:${audioFile.nameWithoutExtension}",
+                                        DeltaEntityKind.TRANSCRIPT,
+                                        transcriptFile,
+                                        "recordings/${transcriptFile.name}"
+                                    )
+                                }
                             }
                             finishActive(appContext, audioFile, startNext = true)
                         }
@@ -454,7 +466,16 @@ object ScribTranscriber {
                 json.remove("transcriptionError")
             }
             metadataFile.writeText(json.toString(2))
-            revisionContext?.let(SyncRevisionStore::markLocalModified)
+            revisionContext?.let { context ->
+                DeltaChangeJournal.recordFile(
+                    context,
+                    "recording-metadata:${metadataFile.nameWithoutExtension}",
+                    DeltaEntityKind.RECORDING_METADATA,
+                    metadataFile,
+                    "recordings/${metadataFile.name}"
+                )
+                SyncRevisionStore.markLocalModified(context)
+            }
         } catch (_: Exception) {
             // Audio remains available even if transcript metadata cannot update.
         }
