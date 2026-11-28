@@ -23,6 +23,9 @@ object BackupPublisher {
             File(snapshot.extractedRoot, SyncManifestCodec.FILE_NAME),
             nextManifest
         )
+        // Delta metadata must never make the established portable ZIP path unusable.
+        // A later publish retries reconciliation if the journal could not be written.
+        runCatching { DesktopDeltaJournal.reconcile(snapshot) }
 
         val source = snapshot.sourceZip.absoluteFile
         source.parentFile?.mkdirs()
