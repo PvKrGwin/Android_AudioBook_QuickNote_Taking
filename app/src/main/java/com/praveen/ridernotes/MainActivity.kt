@@ -195,22 +195,15 @@ class MainActivity : ComponentActivity() {
     private val cloudFolderLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { destination ->
-        if (destination != null) {
-            val previous = CloudSyncManager.destinationUri(this)
-            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            runCatching {
-                contentResolver.takePersistableUriPermission(destination, flags)
-                CloudSyncManager.setDestination(this, destination)
-                if (previous != null && previous != destination) {
-                    runCatching {
-                        contentResolver.releasePersistableUriPermission(previous, flags)
-                    }
-                }
-                cloudSyncStatus.value = CloudSyncManager.status(this)
-            }.onFailure { error ->
-                backupStatus.value = "Cloud folder failed: ${error.javaClass.simpleName}"
-            }
+        destination?.let {
+            saveCloudFolderSelection(it, CloudSyncManager.Destination.PRIMARY)
+        }
+    }
+    private val secondaryCloudFolderLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { destination ->
+        destination?.let {
+            saveCloudFolderSelection(it, CloudSyncManager.Destination.SECONDARY)
         }
     }
     private val savedNotes = mutableStateOf<List<SavedVoiceNote>>(emptyList())
@@ -319,10 +312,20 @@ class MainActivity : ComponentActivity() {
                     onSetManualSourceLink = ::setManualSourceLink,
                     cloudSyncStatus = cloudSyncStatus,
                     onChooseCloudFolder = ::chooseCloudFolder,
-                    onOpenCloudFolder = ::openCloudFolder,
-                    onCopyCloudFolder = ::copyCloudFolder,
-                    onSetCloudWebLink = ::setCloudWebLink,
-                    onRemoveCloudFolder = ::removeCloudFolder,
+                    onChooseSecondaryCloudFolder = ::chooseSecondaryCloudFolder,
+                    onOpenCloudFolder = { openCloudFolder(CloudSyncManager.Destination.PRIMARY) },
+                    onOpenSecondaryCloudFolder = { openCloudFolder(CloudSyncManager.Destination.SECONDARY) },
+                    onCopyCloudFolder = { copyCloudFolder(CloudSyncManager.Destination.PRIMARY) },
+                    onCopySecondaryCloudFolder = { copyCloudFolder(CloudSyncManager.Destination.SECONDARY) },
+                    onSetCloudWebLink = { value ->
+                        setCloudWebLink(value, CloudSyncManager.Destination.PRIMARY)
+                    },
+                    onSetSecondaryCloudWebLink = { value ->
+                        setCloudWebLink(value, CloudSyncManager.Destination.SECONDARY)
+                    },
+                    onRemoveCloudFolder = { removeCloudFolder(CloudSyncManager.Destination.PRIMARY) },
+                    onRemoveSecondaryCloudFolder = { removeCloudFolder(CloudSyncManager.Destination.SECONDARY) },
+                    onReplaceLocalFromCloud = ::chooseFullCloudRestoreSource,
                     onSetCloudSyncMode = ::setCloudSyncMode,
                     onSyncNow = ::syncCloudNow,
                     onCheckCloud = { checkCloudRevision(manual = true) },
@@ -682,18 +685,81 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun chooseCloudFolder() {
-        cloudFolderLauncher.launch(CloudSyncManager.destinationUri(this))
+        cloudFolderLauncher.launch(
+            CloudSyncManager.destinationUri(this, CloudSyncManager.Destination.PRIMARY)
+        )
     }
 
-    private fun openCloudFolder() {
+    private fun chooseSecondaryCloudFolder() {
+        secondaryCloudFolderLauncher.launch(
+            CloudSyncManager.destinationUri(this, CloudSyncManager.Destination.SECONDARY)
+        )
+    }
+
+    private fun saveCloudFolderSelection(
+        destination: android.net.Uri,
+        cloud: CloudSyncManager.Destination
+    ) {
+        val other = if (cloud == CloudSyncManager.Destination.PRIMARY) {
+            CloudSyncManager.Destination.SECONDARY
+        } else {
+            CloudSyncManager.Destination.PRIMARY
+        }
+        if (CloudSyncManager.destinationUri(this, other) == destination) {
+            backupStatus.value = "Cloud 1 and Cloud 2 must be different folders"
+            return
+        }
+        val previous = CloudSyncManager.destinationUri(this, cloud)
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        runCatching {
+            contentResolver.takePersistableUriPermission(destination, flags)
+            CloudSyncManager.setDestination(this, destination, cloud)
+            if (previous != null && previous != destination) {
+                runCatching { contentResolver.releasePersistableUriPermission(previous, flags) }
+            }
+            cloudSyncStatus.value = CloudSyncManager.status(this)
+            offerExistingCloudBackup(cloud)
+        }.onFailure { error ->
+            backupStatus.value = "${cloud.label} failed: ${error.javaClass.simpleName}"
+        }
+    }
+
+    private fun offerExistingCloudBackup(cloud: CloudSyncManager.Destination) {
+        Thread {
+            val found = CloudSyncManager.hasRemoteFullBackup(this, cloud)
+            runOnUiThread {
+                if (!found) {
+                    backupStatus.value = "${cloud.label} saved; no existing Rider Notes full backup was found"
+                    return@runOnUiThread
+                }
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("Rider Notes backup found")
+                    .setMessage(
+                        "${cloud.label} already contains RiderNotes_Full_Backup.zip. " +
+                            "Download it and use it as this device's starting copy?"
+                    )
+                    .setPositiveButton("Yes, download") { _, _ -> replaceLocalFromCloud(cloud) }
+                    .setNegativeButton("No, keep local", null)
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun openCloudFolder(cloud: CloudSyncManager.Destination) {
         val status = CloudSyncManager.status(this)
-        status.destinationWebUrl?.let { webUrl ->
+        val webUrl = if (cloud == CloudSyncManager.Destination.PRIMARY) {
+            status.destinationWebUrl
+        } else {
+            status.secondaryDestinationWebUrl
+        }
+        webUrl?.let { url ->
             val opened = runCatching {
-                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(webUrl)))
+                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
             }.isSuccess
             if (opened) return
         }
-        val uri = CloudSyncManager.destinationUri(this) ?: return
+        val uri = CloudSyncManager.destinationUri(this, cloud) ?: return
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION
         val opened = runCatching {
@@ -712,35 +778,105 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun copyCloudFolder() {
-        val uri = CloudSyncManager.destinationUri(this) ?: return
+    private fun copyCloudFolder(cloud: CloudSyncManager.Destination) {
+        val uri = CloudSyncManager.destinationUri(this, cloud) ?: return
         val status = CloudSyncManager.status(this)
-        val value = status.destinationWebUrl ?: uri.toString()
+        val value = if (cloud == CloudSyncManager.Destination.PRIMARY) {
+            status.destinationWebUrl
+        } else {
+            status.secondaryDestinationWebUrl
+        } ?: uri.toString()
         getSystemService(ClipboardManager::class.java).setPrimaryClip(
-            ClipData.newPlainText("Rider Notes cloud folder", value)
+            ClipData.newPlainText("Rider Notes ${cloud.label}", value)
         )
-        backupStatus.value = "Cloud folder location copied"
+        backupStatus.value = "${cloud.label} location copied"
     }
 
-    private fun setCloudWebLink(value: String): Boolean {
-        val saved = CloudSyncManager.setDestinationWebUrl(this, value)
+    private fun setCloudWebLink(
+        value: String,
+        cloud: CloudSyncManager.Destination
+    ): Boolean {
+        val saved = CloudSyncManager.setDestinationWebUrl(this, value, cloud)
         if (saved) {
             cloudSyncStatus.value = CloudSyncManager.status(this)
-            backupStatus.value = "Cloud folder web link saved"
+            backupStatus.value = "${cloud.label} web link saved"
         }
         return saved
     }
 
-    private fun removeCloudFolder() {
-        val uri = CloudSyncManager.destinationUri(this)
-        CloudSyncManager.removeDestination(this)
+    private fun removeCloudFolder(cloud: CloudSyncManager.Destination) {
+        val uri = CloudSyncManager.destinationUri(this, cloud)
+        CloudSyncManager.removeDestination(this, cloud)
         if (uri != null) {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                 Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             runCatching { contentResolver.releasePersistableUriPermission(uri, flags) }
         }
         cloudSyncStatus.value = CloudSyncManager.status(this)
-        backupStatus.value = "Cloud folder removed; local notes were kept"
+        backupStatus.value = "${cloud.label} removed; local notes were kept"
+    }
+
+    private fun chooseFullCloudRestoreSource() {
+        val available = CloudSyncManager.configuredDestinations(this)
+        if (available.isEmpty()) {
+            backupStatus.value = "Add Cloud 1 or Cloud 2 before restoring a full backup"
+            return
+        }
+        val choices = available.map { it.first }.toTypedArray()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Replace local Rider Notes data")
+            .setItems(choices.map { it.label }.toTypedArray()) { _, index ->
+                confirmFullCloudRestore(choices[index])
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun confirmFullCloudRestore(cloud: CloudSyncManager.Destination) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Replace all local Rider Notes data?")
+            .setMessage(
+                "Use the complete ZIP from ${cloud.label}? Current local Rider Notes content " +
+                    "will be replaced after a safety backup is created."
+            )
+            .setPositiveButton("Yes, replace local") { _, _ -> replaceLocalFromCloud(cloud) }
+            .setNegativeButton("No", null)
+            .show()
+    }
+
+    private fun replaceLocalFromCloud(cloud: CloudSyncManager.Destination) {
+        backupStatus.value = "Downloading complete backup from ${cloud.label}…"
+        Thread {
+            val remote = CloudSyncManager.downloadRemoteFullBackup(this, cloud)
+            val revision = remote?.let(SyncRevisionStore::revisionInside)
+            val result = if (remote == null) {
+                "Restore failed: RiderNotes_Full_Backup.zip was not found in ${cloud.label}"
+            } else {
+                remote.inputStream().use { TopicLibraryRepository.replaceFromFullBackup(this, it) }
+            }
+            val succeeded = result.startsWith("Cloud snapshot restored")
+            if (succeeded) {
+                if (cloud == CloudSyncManager.Destination.PRIMARY && revision != null) {
+                    SyncRevisionStore.acceptRemote(this, revision)
+                } else {
+                    // A secondary recovery becomes a new local base. Cloud 1 remains the
+                    // only authority for ordinary update checks and must be updated explicitly.
+                    SyncRevisionStore.markLocalModified(this)
+                    TopicLibraryRepository.createFreshBackup(this)
+                }
+            }
+            remote?.delete()
+            runOnUiThread {
+                backupStatus.value = if (succeeded && cloud == CloudSyncManager.Destination.SECONDARY) {
+                    "$result from Cloud 2; upload local changes to update Cloud 1"
+                } else result
+                if (succeeded) {
+                    cloudConflict.value = null
+                    refreshSavedNotes()
+                }
+                cloudSyncStatus.value = CloudSyncManager.status(this)
+            }
+        }.start()
     }
 
     private fun setCloudSyncMode(mode: CloudSyncManager.Mode) {
@@ -1240,10 +1376,16 @@ private fun DetectorScreen(
     onSetManualSourceLink: (SavedVoiceNote, String) -> Boolean,
     cloudSyncStatus: State<CloudSyncManager.Status>,
     onChooseCloudFolder: () -> Unit,
+    onChooseSecondaryCloudFolder: () -> Unit,
     onOpenCloudFolder: () -> Unit,
+    onOpenSecondaryCloudFolder: () -> Unit,
     onCopyCloudFolder: () -> Unit,
+    onCopySecondaryCloudFolder: () -> Unit,
     onSetCloudWebLink: (String) -> Boolean,
+    onSetSecondaryCloudWebLink: (String) -> Boolean,
     onRemoveCloudFolder: () -> Unit,
+    onRemoveSecondaryCloudFolder: () -> Unit,
+    onReplaceLocalFromCloud: () -> Unit,
     onSetCloudSyncMode: (CloudSyncManager.Mode) -> Unit,
     onSyncNow: () -> Unit,
     onCheckCloud: () -> Unit,
@@ -1269,6 +1411,9 @@ private fun DetectorScreen(
     val manualLinkTarget = remember { mutableStateOf<SavedVoiceNote?>(null) }
     val manualLinkText = remember { mutableStateOf("") }
     val showCloudWebLinkDialog = remember { mutableStateOf(false) }
+    val cloudWebLinkDestination = remember {
+        mutableStateOf(CloudSyncManager.Destination.PRIMARY)
+    }
     val cloudWebLinkText = remember { mutableStateOf("") }
     val cloudWebLinkError = remember { mutableStateOf(false) }
     val addToTopicNote = remember { mutableStateOf<SavedVoiceNote?>(null) }
@@ -1390,7 +1535,7 @@ private fun DetectorScreen(
     if (showCloudWebLinkDialog.value) {
         AlertDialog(
             onDismissRequest = { showCloudWebLinkDialog.value = false },
-            title = { Text("Cloud folder browser link") },
+            title = { Text("${cloudWebLinkDestination.value.label} browser link") },
             text = {
                 Column {
                     Text(
@@ -1413,7 +1558,14 @@ private fun DetectorScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (onSetCloudWebLink(cloudWebLinkText.value)) {
+                    val saved = if (
+                        cloudWebLinkDestination.value == CloudSyncManager.Destination.PRIMARY
+                    ) {
+                        onSetCloudWebLink(cloudWebLinkText.value)
+                    } else {
+                        onSetSecondaryCloudWebLink(cloudWebLinkText.value)
+                    }
+                    if (saved) {
                         showCloudWebLinkDialog.value = false
                     } else cloudWebLinkError.value = true
                 }) { Text("Save") }
@@ -1686,6 +1838,27 @@ private fun DetectorScreen(
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+
+            if (cloudSyncStatus.value.destinationName == null) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFE0E0))
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "⚠ Cloud 1 is not configured on this device yet",
+                            color = Color(0xFFC62828),
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedButton(onClick = onChooseCloudFolder) { Text("Add") }
+                    }
+                }
+            }
 
             val topSyncState = cloudSyncStatus.value.syncState
             val showTopSyncAction = topSyncState in setOf(
@@ -1974,8 +2147,8 @@ private fun DetectorScreen(
                                     Text("Cloud backup and manual upload", fontWeight = FontWeight.Bold)
                                     Text(
                                         cloudSyncStatus.value.destinationName?.let {
-                                            "Cloud folder: $it"
-                                        } ?: "No cloud folder selected"
+                                            "Cloud 1 (primary): $it"
+                                        } ?: "Cloud 1 (primary): not selected"
                                     )
                                     val revisionFormatter = SimpleDateFormat(
                                         "dd MMM yyyy, h:mm a",
@@ -2015,6 +2188,8 @@ private fun DetectorScreen(
                                         OutlinedButton(onClick = {
                                             cloudWebLinkText.value =
                                                 cloudSyncStatus.value.destinationWebUrl.orEmpty()
+                                            cloudWebLinkDestination.value =
+                                                CloudSyncManager.Destination.PRIMARY
                                             cloudWebLinkError.value = false
                                             showCloudWebLinkDialog.value = true
                                         }) {
@@ -2041,6 +2216,59 @@ private fun DetectorScreen(
                                             }
                                         }
                                     }
+                                    Text(
+                                        cloudSyncStatus.value.secondaryDestinationName?.let {
+                                            "Cloud 2 (secondary mirror): $it"
+                                        } ?: "Cloud 2 (secondary mirror): not selected",
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    cloudSyncStatus.value.secondaryDestinationWebUrl?.let { webUrl ->
+                                        TextButton(onClick = onOpenSecondaryCloudFolder) {
+                                            Text("📁 $webUrl", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                        OutlinedButton(onClick = onCopySecondaryCloudFolder) {
+                                            Text("Copy Cloud 2 link")
+                                        }
+                                    }
+                                    if (cloudSyncStatus.value.secondaryDestinationName != null) {
+                                        OutlinedButton(onClick = {
+                                            cloudWebLinkText.value =
+                                                cloudSyncStatus.value.secondaryDestinationWebUrl.orEmpty()
+                                            cloudWebLinkDestination.value =
+                                                CloudSyncManager.Destination.SECONDARY
+                                            cloudWebLinkError.value = false
+                                            showCloudWebLinkDialog.value = true
+                                        }) {
+                                            Text(
+                                                if (cloudSyncStatus.value.secondaryDestinationWebUrl == null) {
+                                                    "Add Cloud 2 web link"
+                                                } else {
+                                                    "Edit Cloud 2 web link"
+                                                }
+                                            )
+                                        }
+                                    }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        OutlinedButton(onClick = onChooseSecondaryCloudFolder) {
+                                            Text(
+                                                if (cloudSyncStatus.value.secondaryDestinationName == null) {
+                                                    "Choose Cloud 2"
+                                                } else {
+                                                    "Replace Cloud 2"
+                                                }
+                                            )
+                                        }
+                                        if (cloudSyncStatus.value.secondaryDestinationName != null) {
+                                            OutlinedButton(onClick = onRemoveSecondaryCloudFolder) {
+                                                Text("Remove Cloud 2")
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        "Uploads are mirrored to both folders. Automatic update checks and " +
+                                            "ordinary cloud reading always use Cloud 1.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
                                     CloudSyncManager.Mode.values().forEach { mode ->
                                         val selected = cloudSyncStatus.value.mode == mode
                                         if (selected) {
@@ -2132,6 +2360,19 @@ private fun DetectorScreen(
                                         "Creates RiderNotes_Full_Backup.zip with every note, transcript, " +
                                             "recording, Topic folder, and attachment. When it is ready, " +
                                             "press Upload local changes to send it. This ZIP can be opened by Rider Notes PC.",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    OutlinedButton(
+                                        onClick = onReplaceLocalFromCloud,
+                                        enabled = cloudSyncStatus.value.destinationName != null ||
+                                            cloudSyncStatus.value.secondaryDestinationName != null,
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Text("Replace entire local copy from cloud…")
+                                    }
+                                    Text(
+                                        "You will choose Cloud 1 or Cloud 2 and confirm Yes/No before any " +
+                                            "local replacement. A safety backup is created first.",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                     if (cloudSyncStatus.value.message.isNotBlank()) {

@@ -11,6 +11,11 @@ Rider Notes PC is the Windows companion for the Rider Notes Android application.
 5. Press **Sync now — recommended** in Rider Notes PC.
 6. Wait for Google Drive to upload the changed ZIP and `RiderNotes_Sync_State.json` before editing on the phone.
 
+An optional **Cloud 2** ZIP can be configured under **Backup & cloud**. Every successful PC
+publish mirrors both the full ZIP and its revision marker to Cloud 2. Cloud 1 remains the only
+normal read/update-check source; Cloud 2 is used only when you explicitly choose it for a full
+restore.
+
 The PC checks the local Drive-synchronized revision periodically, immediately before accepting an edit, and again before publishing. A cloud change can be detected only after Google Drive for Desktop downloads it.
 
 ## Manual Chrome download/upload
@@ -30,6 +35,15 @@ Manual transfer works if Google Drive for Desktop is not installed:
 - **Merge both (recommended):** keeps independently created notes, files, Topic groups, and points from both copies.
 - **Use cloud:** reloads the cloud-synchronized ZIP and discards unsynchronized PC working changes.
 - **Keep PC as base:** deliberately publishes the PC copy as the new cloud base.
+
+## Full recovery
+
+Choose **Replace local from cloud…**, select Cloud 1 or Cloud 2, and confirm the Yes/No
+warning. Restoring from Cloud 2 first preserves a timestamped safety copy of the current Cloud
+1 ZIP, then places the recovered ZIP at the Cloud 1 path so normal operation continues with one
+authority. On a fresh installation, Rider Notes clearly warns that Cloud 1 is missing. When a
+selected Cloud 1 or Cloud 2 location already contains a valid Rider Notes full backup, the app
+asks whether to use it as the starting copy.
 
 ## Notes
 

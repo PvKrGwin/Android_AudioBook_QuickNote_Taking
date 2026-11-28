@@ -16,17 +16,33 @@ class CloudSyncWorker(
         if (CloudSyncManager.mode(applicationContext) == CloudSyncManager.Mode.OFF) {
             return Result.success()
         }
-        val treeUri = CloudSyncManager.destinationUri(applicationContext)
-            ?: return Result.success()
-        val folder = DocumentFile.fromTreeUri(applicationContext, treeUri)
-        if (folder == null || !folder.canWrite()) {
+        if (CloudSyncManager.destinationUri(
+                applicationContext,
+                CloudSyncManager.Destination.PRIMARY
+            ) == null
+        ) {
+            return Result.success()
+        }
+        val destinations = CloudSyncManager.configuredDestinations(applicationContext)
+            .map { (destination, uri) ->
+                destination to DocumentFile.fromTreeUri(applicationContext, uri)
+            }
+        if (destinations.isEmpty()) return Result.success()
+        val unavailable = destinations.firstOrNull { (_, folder) ->
+            folder == null || !folder.canWrite()
+        }
+        if (unavailable != null) {
             CloudSyncManager.prepareCompleteRetry(applicationContext)
             CloudSyncManager.updateSyncState(
                 applicationContext,
                 CloudSyncManager.SyncState.FAILED,
-                "Upload failed: cloud folder is unavailable. Press retry to upload everything again."
+                "Upload failed: ${unavailable.first.label} is unavailable. " +
+                    "Press retry to mirror everything again."
             )
             return Result.failure()
+        }
+        val writableDestinations = destinations.map { (destination, folder) ->
+            destination to requireNotNull(folder)
         }
 
         return try {
@@ -63,7 +79,9 @@ class CloudSyncWorker(
                 "Uploading complete Rider Notes backup…"
             )
             if (!dirty && remoteRevision != null && remoteRevision.revisionId == lastSynced &&
-                folder.findFile("RiderNotes_Full_Backup.zip") != null
+                writableDestinations.all { (_, folder) ->
+                    folder.findFile("RiderNotes_Full_Backup.zip") != null
+                }
             ) {
                 CloudSyncManager.updateSyncState(
                     applicationContext,
@@ -81,39 +99,46 @@ class CloudSyncWorker(
                 ?: error("Fresh backup has no sync revision")
             var uploaded = 0
             var unchanged = 0
-            val existing = folder.listFiles().associateBy { it.name }
-            CloudSyncManager.noteFiles(applicationContext).forEach { local ->
-                val remote = existing[local.name]
-                val currentSignature = CloudSyncManager.signature(local)
-                if (remote != null &&
-                    CloudSyncManager.uploadedSignature(applicationContext, local.name) == currentSignature
-                ) {
-                    unchanged += 1
-                    return@forEach
-                }
+            writableDestinations.forEach destinationLoop@{ (destination, folder) ->
+                val existing = folder.listFiles().associateBy { it.name }
+                CloudSyncManager.noteFiles(applicationContext).forEach fileLoop@{ local ->
+                    val remote = existing[local.name]
+                    val currentSignature = CloudSyncManager.signature(local)
+                    if (remote != null &&
+                        CloudSyncManager.uploadedSignature(
+                            applicationContext,
+                            destination,
+                            local.name
+                        ) == currentSignature
+                    ) {
+                        unchanged += 1
+                        return@fileLoop
+                    }
 
-                val target = remote ?: folder.createFile(mimeType(local.extension), local.name)
-                    ?: error("Could not create ${local.name}")
-                applicationContext.contentResolver.openOutputStream(target.uri, "wt").use { output ->
-                    requireNotNull(output) { "Could not open ${local.name}" }
-                    local.inputStream().use { input -> input.copyTo(output) }
+                    val target = remote ?: folder.createFile(mimeType(local.extension), local.name)
+                        ?: error("Could not create ${local.name} in ${destination.label}")
+                    applicationContext.contentResolver.openOutputStream(target.uri, "wt").use { output ->
+                        requireNotNull(output) { "Could not open ${local.name}" }
+                        local.inputStream().use { input -> input.copyTo(output) }
+                    }
+                    CloudSyncManager.markUploaded(applicationContext, destination, local)
+                    uploaded += 1
                 }
-                CloudSyncManager.markUploaded(applicationContext, local)
-                uploaded += 1
-            }
-            val stateTarget = existing[SyncRevisionStore.REMOTE_STATE_FILE]
-                ?: folder.createFile("application/json", SyncRevisionStore.REMOTE_STATE_FILE)
-                ?: error("Could not create sync state")
-            applicationContext.contentResolver.openOutputStream(stateTarget.uri, "wt").use { output ->
-                requireNotNull(output)
-                output.write(SyncRevisionStore.toJson(localRevision).toString(2).toByteArray())
+                val stateTarget = existing[SyncRevisionStore.REMOTE_STATE_FILE]
+                    ?: folder.createFile("application/json", SyncRevisionStore.REMOTE_STATE_FILE)
+                    ?: error("Could not create sync state in ${destination.label}")
+                applicationContext.contentResolver.openOutputStream(stateTarget.uri, "wt").use { output ->
+                    requireNotNull(output)
+                    output.write(SyncRevisionStore.toJson(localRevision).toString(2).toByteArray())
+                }
             }
             val fullySynced = SyncRevisionStore.markSynced(applicationContext, localRevision)
             if (fullySynced) {
                 CloudSyncManager.updateSyncState(
                     applicationContext,
                     CloudSyncManager.SyncState.COMPLETED,
-                    "Sync complete: $uploaded uploaded, $unchanged unchanged"
+                    "Sync complete across ${writableDestinations.size} cloud folder(s): " +
+                        "$uploaded uploaded, $unchanged unchanged"
                 )
             } else {
                 CloudSyncManager.markLocalChange(applicationContext)

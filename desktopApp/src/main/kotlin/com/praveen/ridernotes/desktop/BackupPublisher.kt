@@ -7,10 +7,21 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 object BackupPublisher {
+    data class PublishResult(
+        val snapshot: BackupSnapshot,
+        val secondaryMirrored: Boolean,
+        val secondaryError: String? = null
+    )
+
     fun publish(
         snapshot: BackupSnapshot,
         forceAgainstRemote: SyncManifest? = null
-    ): BackupSnapshot {
+    ): BackupSnapshot = publishDetailed(snapshot, forceAgainstRemote).snapshot
+
+    fun publishDetailed(
+        snapshot: BackupSnapshot,
+        forceAgainstRemote: SyncManifest? = null
+    ): PublishResult {
         val remote = remoteManifestFor(snapshot.sourceZip)
         val openedRevision = snapshot.syncManifest?.revisionId
         val expectedRevision = forceAgainstRemote?.revisionId ?: openedRevision
@@ -56,9 +67,44 @@ object BackupPublisher {
             nextManifest
         )
         DesktopDeviceIdentity.rememberBackupPath(source.absolutePath)
-        return BackupImporter.import(source)
+        val secondary = DesktopDeviceIdentity.secondaryBackupPath()
+            ?.let(::File)
+            ?.absoluteFile
+            ?.takeUnless { target ->
+                runCatching { target.canonicalFile == source.canonicalFile }.getOrDefault(false)
+            }
+        val mirrorResult = secondary?.let { target ->
+            runCatching {
+                atomicCopy(source, target)
+                atomicCopy(
+                    File(source.parentFile, SyncManifestCodec.SIBLING_FILE_NAME),
+                    File(target.parentFile, SyncManifestCodec.SIBLING_FILE_NAME)
+                )
+            }
+        }
+        return PublishResult(
+            snapshot = BackupImporter.import(source),
+            secondaryMirrored = mirrorResult?.isSuccess == true,
+            secondaryError = mirrorResult?.exceptionOrNull()?.message
+        )
     }
 
     fun remoteManifestFor(zipFile: File): SyncManifest? =
         SyncManifestCodec.read(File(zipFile.parentFile, SyncManifestCodec.SIBLING_FILE_NAME))
+
+    private fun atomicCopy(source: File, target: File) {
+        target.parentFile?.mkdirs()
+        val temp = File(target.parentFile, ".${target.name}.rider-notes-mirror.tmp")
+        Files.copy(source.toPath(), temp.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        runCatching {
+            Files.move(
+                temp.toPath(),
+                target.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE
+            )
+        }.getOrElse {
+            Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
 }

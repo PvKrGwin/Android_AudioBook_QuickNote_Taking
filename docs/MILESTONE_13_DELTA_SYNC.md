@@ -16,6 +16,13 @@ renaming one folder, or changing one Topic point does not require uploading ever
 - Two revisions descending independently from the same parent are a conflict. Neither side
   silently overwrites the other.
 - Full ZIP creation remains a deliberate manual/monthly recovery action.
+- Cloud 1 remains the sole authority for routine reading, revision checks, and startup.
+- Cloud 2 is an optional write-through mirror and explicit disaster-recovery source. It never
+  silently supersedes Cloud 1.
+- Replacing local data from either cloud always requires choosing the source and confirming
+  the destructive replacement. Existing local data receives a safety backup first.
+- A newly configured cloud location is inspected for `RiderNotes_Full_Backup.zip`; the app
+  asks before adopting an existing backup as the device's starting copy.
 
 ## Tracked entities
 
