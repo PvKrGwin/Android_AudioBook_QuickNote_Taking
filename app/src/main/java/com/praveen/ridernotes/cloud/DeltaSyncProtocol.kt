@@ -27,6 +27,7 @@ data class DeltaEntityRevision(
     val kind: DeltaEntityKind,
     val revisionId: String,
     val parentRevisionId: String?,
+    val ancestorRevisionIds: List<String> = emptyList(),
     val modifiedAtEpochMs: Long,
     val deviceId: String,
     val deviceName: String,
@@ -57,8 +58,8 @@ object DeltaSyncPlanner {
         return when {
             local.revisionId == remote.revisionId -> DeltaSyncDecision.IDENTICAL
             local.sameResultAs(remote) -> DeltaSyncDecision.IDENTICAL
-            local.parentRevisionId == remote.revisionId -> DeltaSyncDecision.UPLOAD_LOCAL
-            remote.parentRevisionId == local.revisionId -> DeltaSyncDecision.DOWNLOAD_REMOTE
+            remote.revisionId in local.ancestorRevisionIds -> DeltaSyncDecision.UPLOAD_LOCAL
+            local.revisionId in remote.ancestorRevisionIds -> DeltaSyncDecision.DOWNLOAD_REMOTE
             else -> DeltaSyncDecision.CONFLICT
         }
     }
