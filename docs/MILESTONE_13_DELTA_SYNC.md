@@ -11,7 +11,8 @@ renaming one folder, or changing one Topic point does not require uploading ever
 - Every file revision contains a SHA-256 content hash. File time and size are diagnostic
   information only and never decide which copy wins.
 - Deletions are retained as tombstones so an offline device cannot recreate deleted data.
-- A direct parent/child revision establishes which copy is newer.
+- Revision ancestry establishes which copy is newer, including several offline edits made
+  before the next synchronization.
 - Two revisions descending independently from the same parent are a conflict. Neither side
   silently overwrites the other.
 - Full ZIP creation remains a deliberate manual/monthly recovery action.
