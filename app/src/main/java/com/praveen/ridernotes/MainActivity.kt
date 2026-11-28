@@ -676,7 +676,7 @@ class MainActivity : ComponentActivity() {
         if (notes.any { it.audioFile.name == playingFileName.value }) {
             stopNotePlayback()
         }
-        notes.forEach { SavedVoiceNoteRepository.delete(it) }
+        notes.forEach { SavedVoiceNoteRepository.delete(this, it) }
         if (notes.isNotEmpty()) SyncRevisionStore.markLocalModified(this)
         refreshSavedNotes()
     }
