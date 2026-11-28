@@ -8,7 +8,13 @@ class DeltaSyncProtocolTest {
     @Test
     fun descendantRevisionUploadsRegardlessOfClockTime() {
         val remote = revision("remote", parent = null, modifiedAt = 9_999L, hash = "old")
-        val local = revision("local", parent = "remote", modifiedAt = 1L, hash = "new")
+        val local = revision(
+            "local",
+            parent = "intermediate",
+            modifiedAt = 1L,
+            hash = "new",
+            ancestors = listOf("intermediate", "remote")
+        )
 
         assertEquals(
             DeltaSyncDecision.UPLOAD_LOCAL,
@@ -41,12 +47,14 @@ class DeltaSyncProtocolTest {
         id: String,
         parent: String?,
         modifiedAt: Long,
-        hash: String
+        hash: String,
+        ancestors: List<String> = parent?.let(::listOf).orEmpty()
     ) = DeltaEntityRevision(
         entityId = "topic-item:1",
         kind = DeltaEntityKind.TOPIC_ITEM,
         revisionId = id,
         parentRevisionId = parent,
+        ancestorRevisionIds = ancestors,
         modifiedAtEpochMs = modifiedAt,
         deviceId = id,
         deviceName = id,
