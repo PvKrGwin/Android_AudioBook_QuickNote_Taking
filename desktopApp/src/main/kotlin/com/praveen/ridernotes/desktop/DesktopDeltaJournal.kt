@@ -31,6 +31,8 @@ object DesktopDeltaJournal {
                             next = old.revision.copy(
                                 revisionId = "",
                                 parentRevisionId = old.revision.revisionId,
+                                ancestorRevisionIds = listOf(old.revision.revisionId) +
+                                    old.revision.ancestorRevisionIds,
                                 operation = DeltaOperation.DELETE,
                                 sizeBytes = null,
                                 sha256 = null,
@@ -45,7 +47,12 @@ object DesktopDeltaJournal {
                     updated[entityId] = old
                 next != null -> updated[entityId] = Entry(
                     revision = createRevision(
-                        next.copy(parentRevisionId = old?.revision?.revisionId)
+                        next.copy(
+                            parentRevisionId = old?.revision?.revisionId,
+                            ancestorRevisionIds = old?.revision?.let {
+                                listOf(it.revisionId) + it.ancestorRevisionIds
+                            }.orEmpty().distinct()
+                        )
                     ),
                     pendingUpload = true
                 )
@@ -224,6 +231,7 @@ object DesktopDeltaJournal {
         .put("entityId", value.entityId).put("kind", value.kind.name)
         .put("revisionId", value.revisionId)
         .put("parentRevisionId", value.parentRevisionId ?: JSONObject.NULL)
+        .put("ancestorRevisionIds", JSONArray(value.ancestorRevisionIds))
         .put("modifiedAtEpochMs", value.modifiedAtEpochMs)
         .put("deviceId", value.deviceId).put("deviceName", value.deviceName)
         .put("deviceType", value.deviceType).put("operation", value.operation.name)
@@ -238,6 +246,11 @@ object DesktopDeltaJournal {
             kind = DeltaEntityKind.valueOf(json.getString("kind")),
             revisionId = json.getString("revisionId"),
             parentRevisionId = json.nullable("parentRevisionId"),
+            ancestorRevisionIds = json.optJSONArray("ancestorRevisionIds")?.let { array ->
+                (0 until array.length()).mapNotNull { index ->
+                    array.optString(index).takeIf(String::isNotBlank)
+                }
+            }.orEmpty(),
             modifiedAtEpochMs = json.getLong("modifiedAtEpochMs"),
             deviceId = json.getString("deviceId"),
             deviceName = json.optString("deviceName", "Unknown device"),
