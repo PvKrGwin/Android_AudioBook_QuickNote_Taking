@@ -158,6 +158,7 @@ private fun RiderNotesDesktopApp(
     var mediaChapter by remember { mutableStateOf("") }
     var mediaPosition by remember { mutableStateOf("") }
     var mediaSourceUrl by remember { mutableStateOf("") }
+    var deferredMediaNoteRequest by remember { mutableStateOf(false) }
     var syncObservation by remember { mutableStateOf<DesktopSyncObservation?>(null) }
     var showCloudChangeDialog by remember { mutableStateOf(false) }
     var dismissedCloudRevision by remember { mutableStateOf<String?>(null) }
@@ -208,7 +209,9 @@ private fun RiderNotesDesktopApp(
         // for passive viewing, but this closes the small gap between two polling cycles.
         val immediateObservation = snapshot?.let(DesktopSyncMonitor::inspect)
         if (immediateObservation != null) syncObservation = immediateObservation
-        if (immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION) {
+        if (DesktopSyncMonitor.isOnline() &&
+            immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION
+        ) {
             snapshot = updated
             dirty = true
             localChangedAt = System.currentTimeMillis()
@@ -258,6 +261,11 @@ private fun RiderNotesDesktopApp(
                 }
                 syncObservation = DesktopSyncMonitor.inspect(published)
                 tray.notify("Rider Notes synchronized", status)
+                if (deferredMediaNoteRequest) {
+                    deferredMediaNoteRequest = false
+                    showMediaNoteDialog = true
+                    status = "Cloud conflict resolved — continue the note for the paused media"
+                }
             }
             .onFailure { error ->
                 status = "Sync stopped safely: ${error.message ?: error.javaClass.simpleName}"
@@ -319,6 +327,11 @@ private fun RiderNotesDesktopApp(
     }
 
     fun requestMediaNote() {
+        if (deferredMediaNoteRequest) {
+            showCloudChangeDialog = true
+            status = "The paused media-note request is still waiting for cloud resolution"
+            return
+        }
         val captured = WindowsMediaBridge.captureAndPause()?.let {
             DesktopMediaClassifier.resolve(it, snapshot?.notes.orEmpty())
         }
@@ -330,6 +343,16 @@ private fun RiderNotesDesktopApp(
         mediaChapter = captured?.chapter.orEmpty()
         mediaPosition = captured?.playbackPositionMs?.let(::formatPositionInput).orEmpty()
         mediaSourceUrl = captured?.sourceUrl.orEmpty()
+        val immediateObservation = snapshot?.let(DesktopSyncMonitor::inspect)
+        if (DesktopSyncMonitor.isOnline() &&
+            immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION
+        ) {
+            syncObservation = immediateObservation
+            deferredMediaNoteRequest = true
+            showCloudChangeDialog = true
+            status = "Media paused — resolve the newer cloud version, then this note will resume"
+            return
+        }
         showMediaNoteDialog = true
     }
 
@@ -488,8 +511,10 @@ private fun RiderNotesDesktopApp(
         val cloudRevision = observation?.remoteRevision
         AlertDialog(
             onDismissRequest = {
-                dismissedCloudRevision = observation?.remoteRevision?.revisionId
-                showCloudChangeDialog = false
+                if (!deferredMediaNoteRequest) {
+                    dismissedCloudRevision = observation?.remoteRevision?.revisionId
+                    showCloudChangeDialog = false
+                }
             },
             title = { Text("A newer cloud version is available") },
             text = {
@@ -511,6 +536,13 @@ private fun RiderNotesDesktopApp(
                             "${observation?.message.orEmpty()}. Reload it before continuing so this PC shows the latest notes."
                         }
                     )
+                    if (deferredMediaNoteRequest) {
+                        Text(
+                            "The media-note request is paused. It will reopen automatically after " +
+                                "you resolve this cloud version.",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -531,6 +563,11 @@ private fun RiderNotesDesktopApp(
                     } else {
                         current?.sourceZip?.takeIf(File::isFile)?.let(::loadBackup)
                         showCloudChangeDialog = false
+                        if (deferredMediaNoteRequest) {
+                            deferredMediaNoteRequest = false
+                            showMediaNoteDialog = true
+                            status = "Cloud copy loaded — continue the note for the paused media"
+                        }
                     }
                 }) { Text(if (dirty) "Merge both (recommended)" else "Reload cloud version") }
             },
@@ -540,12 +577,17 @@ private fun RiderNotesDesktopApp(
                         TextButton(onClick = {
                             snapshot?.sourceZip?.takeIf(File::isFile)?.let(::loadBackup)
                             showCloudChangeDialog = false
+                            if (deferredMediaNoteRequest) {
+                                deferredMediaNoteRequest = false
+                                showMediaNoteDialog = true
+                                status = "Cloud copy loaded — continue the note for the paused media"
+                            }
                         }) { Text("Use cloud") }
                         TextButton(onClick = {
                             showCloudChangeDialog = false
                             publishNow(observation?.remoteRevision)
                         }) { Text("Keep PC as base") }
-                    } else {
+                    } else if (!deferredMediaNoteRequest) {
                         TextButton(onClick = {
                             dismissedCloudRevision = observation?.remoteRevision?.revisionId
                             showCloudChangeDialog = false

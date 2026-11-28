@@ -18,6 +18,11 @@ restore.
 
 The PC checks the local Drive-synchronized revision periodically, immediately before accepting an edit, and again before publishing. A cloud change can be detected only after Google Drive for Desktop downloads it.
 
+When the PC is online and already sees a newer cloud revision, a new media-note request pauses
+the active media but does not create the note yet. Resolve the existing merge/use-cloud/keep-PC
+dialog first; Rider Notes then reopens the note editor with the preserved media title and
+playback position. Playback-only actions are not gated.
+
 ## Manual Chrome download/upload
 
 Manual transfer works if Google Drive for Desktop is not installed:

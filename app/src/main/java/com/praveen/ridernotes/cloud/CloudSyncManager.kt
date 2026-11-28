@@ -337,8 +337,15 @@ object CloudSyncManager {
     fun inspectRemote(context: Context): CloudRevision? {
         val remote = remoteRevision(context) ?: return null
         val lastSynced = SyncRevisionStore.lastSyncedRevision(context)
-        return if (remote.revisionId != lastSynced &&
-            remote.deviceId != SyncRevisionStore.deviceId(context)
+        return if (SyncRevisionStore.shouldBlockForRemote(
+                remoteRevisionId = remote.revisionId,
+                lastSyncedRevisionId = lastSynced,
+                remoteDeviceId = remote.deviceId,
+                localDeviceId = SyncRevisionStore.deviceId(context),
+                localDirty = SyncRevisionStore.isDirty(context),
+                localParentRevisionId = SyncRevisionStore.revisionForDisplay(context)
+                    ?.parentRevisionId
+            )
         ) {
             SyncRevisionStore.setPendingRemote(context, remote)
             remote

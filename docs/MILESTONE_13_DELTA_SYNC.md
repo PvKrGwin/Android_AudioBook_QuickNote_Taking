@@ -23,6 +23,10 @@ renaming one folder, or changing one Topic point does not require uploading ever
   the destructive replacement. Existing local data receives a safety backup first.
 - A newly configured cloud location is inspected for `RiderNotes_Full_Backup.zip`; the app
   asks before adopting an existing backup as the device's starting copy.
+- While online, a known newer Cloud 1 revision gates every new user write. Media transport
+  actions (play/pause, rewind, and forward) remain immediate. A recording/media-note request
+  preserves the paused media identity and timestamp, opens the existing conflict choices, and
+  resumes automatically only after the cloud-versus-local decision succeeds.
 
 ## Tracked entities
 

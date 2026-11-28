@@ -48,4 +48,32 @@ class SyncRevisionStoreTest {
             )
         )
     }
+
+    @Test
+    fun newerOtherDeviceRevisionBlocksAWrite() {
+        assertTrue(
+            SyncRevisionStore.shouldBlockForRemote(
+                remoteRevisionId = "cloud-new",
+                lastSyncedRevisionId = "cloud-old",
+                remoteDeviceId = "pc",
+                localDeviceId = "phone",
+                localDirty = false,
+                localParentRevisionId = null
+            )
+        )
+    }
+
+    @Test
+    fun resolvedKeepLocalRevisionDoesNotBlockDeferredWriteAgain() {
+        assertFalse(
+            SyncRevisionStore.shouldBlockForRemote(
+                remoteRevisionId = "cloud-new",
+                lastSyncedRevisionId = "cloud-old",
+                remoteDeviceId = "pc",
+                localDeviceId = "phone",
+                localDirty = true,
+                localParentRevisionId = "cloud-new"
+            )
+        )
+    }
 }

@@ -1,8 +1,10 @@
 package com.praveen.ridernotes.recording
 
+import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.SystemClock
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
@@ -42,6 +44,25 @@ class RiderRecordTileService : TileService() {
             else -> RecordingController.start(this)
         }
         Toast.makeText(this, result, Toast.LENGTH_SHORT).show()
+        if (result.contains("cloud", ignoreCase = true) &&
+            (result.contains("review", ignoreCase = true) ||
+                result.contains("waiting", ignoreCase = true))
+        ) {
+            val reviewIntent = RecordingController.cloudReviewIntent(this)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startActivityAndCollapse(
+                    PendingIntent.getActivity(
+                        this,
+                        CLOUD_REVIEW_REQUEST,
+                        reviewIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                startActivityAndCollapse(reviewIntent)
+            }
+        }
         ButtonEventStore.record(
             ButtonEvent.recordingResult(
                 "Quick Settings tile: $result",
@@ -83,6 +104,7 @@ class RiderRecordTileService : TileService() {
             "com.praveen.ridernotes.action.RECORDING_STATE_CHANGED"
 
         private const val DUPLICATE_CLICK_GUARD_MS = 1_500L
+        private const val CLOUD_REVIEW_REQUEST = 7103
 
         @Volatile
         private var lastHandledClickElapsedMs = 0L

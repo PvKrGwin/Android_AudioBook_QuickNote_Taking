@@ -127,6 +127,7 @@ class MainActivity : ComponentActivity() {
         CloudSyncManager.Status(null, CloudSyncManager.Mode.OFF, "")
     )
     private val cloudConflict = mutableStateOf<CloudRevision?>(null)
+    private var pendingTopicRecordingRequest: Pair<String, Int?>? = null
     private val cloudSyncCompletionHandler = Handler(Looper.getMainLooper())
     private val settleCloudSyncCompletion = Runnable {
         CloudSyncManager.settleCompletedIfReady(this)
@@ -377,12 +378,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        handleDeferredCloudWriteIntent(intent)
         handleSharedMediaIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleDeferredCloudWriteIntent(intent)
         handleSharedMediaIntent(intent)
     }
 
@@ -466,6 +469,7 @@ class MainActivity : ComponentActivity() {
                 if (succeeded) {
                     cloudConflict.value = null
                     refreshSavedNotes()
+                    resumeDeferredWriteOperation()
                 }
                 cloudSyncStatus.value = CloudSyncManager.status(this)
             }
@@ -478,6 +482,7 @@ class MainActivity : ComponentActivity() {
             .onSuccess {
                 cloudConflict.value = null
                 backupStatus.value = "Local phone version kept; upload local changes is recommended"
+                resumeDeferredWriteOperation()
             }
             .onFailure { error ->
                 backupStatus.value = "Could not prepare local base: ${error.javaClass.simpleName}"
@@ -508,6 +513,7 @@ class MainActivity : ComponentActivity() {
                 if (succeeded) {
                     cloudConflict.value = null
                     refreshSavedNotes()
+                    resumeDeferredWriteOperation()
                 }
                 cloudSyncStatus.value = CloudSyncManager.status(this)
             }
@@ -944,6 +950,13 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startTopicRecording(groupId: String, index: Int?) {
+        RecordingController.blockingCloudRevision(this)?.let { revision ->
+            pendingTopicRecordingRequest = groupId to index
+            cloudConflict.value = revision
+            backupStatus.value =
+                "Cloud update from ${revision.deviceName} must be resolved before recording"
+            return
+        }
         TopicLibraryRepository.setPendingRecordingGroup(this, groupId, index)
         val result = RecordingController.startTopic(this)
         if (!result.contains("requested", ignoreCase = true)) {
@@ -954,6 +967,44 @@ class MainActivity : ComponentActivity() {
             topicRecordingActive.value = true
         }
         backupStatus.value = result
+    }
+
+    private fun handleDeferredCloudWriteIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra(
+                RecordingController.EXTRA_REVIEW_CLOUD_BEFORE_RECORDING,
+                false
+            ) != true
+        ) return
+        intent.removeExtra(RecordingController.EXTRA_REVIEW_CLOUD_BEFORE_RECORDING)
+        val revision = SyncRevisionStore.pendingRemote(this)
+        if (revision != null) {
+            cloudConflict.value = revision
+            backupStatus.value =
+                "Recording is paused until the newer cloud version is resolved"
+        } else {
+            resumeDeferredWriteOperation()
+        }
+    }
+
+    private fun resumeDeferredWriteOperation() {
+        RecordingController.resumeDeferredStart(this)?.let { result ->
+            backupStatus.value = result
+            val successful = result.endsWith("recording start requested")
+            ButtonEventStore.record(
+                ButtonEvent.recordingResult(
+                    message = "Resumed after cloud review: $result",
+                    successful = successful
+                )
+            )
+            if (!successful && result.contains("no longer available", ignoreCase = true)) {
+                MediaControlGateway.finishVoiceNote(this, delayMs = 0L)
+            }
+            return
+        }
+        pendingTopicRecordingRequest?.let { (groupId, index) ->
+            pendingTopicRecordingRequest = null
+            startTopicRecording(groupId, index)
+        }
     }
 
     private fun stopTopicRecording() {
