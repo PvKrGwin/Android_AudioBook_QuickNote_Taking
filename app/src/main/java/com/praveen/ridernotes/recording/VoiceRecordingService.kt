@@ -24,6 +24,8 @@ import com.praveen.ridernotes.input.ButtonEventStore
 import com.praveen.ridernotes.media.MediaControlGateway
 import com.praveen.ridernotes.transcription.ScribTranscriber
 import com.praveen.ridernotes.topics.TopicLibraryRepository
+import com.praveen.ridernotes.cloud.DeltaChangeJournal
+import com.praveen.ridernotes.cloud.DeltaEntityKind
 import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONObject
 import java.io.File
@@ -615,8 +617,26 @@ class VoiceRecordingService : Service() {
                 .put("originDeviceType", "ANDROID")
                 .put("transcriptionStatus", if (topicOnly) "NOT_REQUESTED" else "PENDING")
 
-            File(audioFile.parentFile, audioFile.nameWithoutExtension + ".json")
-                .writeText(json.toString(2))
+            val metadataFile = File(
+                audioFile.parentFile,
+                audioFile.nameWithoutExtension + ".json"
+            )
+            metadataFile.writeText(json.toString(2))
+            val baseName = audioFile.nameWithoutExtension
+            DeltaChangeJournal.recordFile(
+                this,
+                "recording-audio:$baseName",
+                DeltaEntityKind.RECORDING_AUDIO,
+                audioFile,
+                "recordings/${audioFile.name}"
+            )
+            DeltaChangeJournal.recordFile(
+                this,
+                "recording-metadata:$baseName",
+                DeltaEntityKind.RECORDING_METADATA,
+                metadataFile,
+                "recordings/${metadataFile.name}"
+            )
             SyncRevisionStore.markLocalModified(this)
         } catch (error: Exception) {
             ButtonEventStore.record(
