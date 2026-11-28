@@ -35,15 +35,17 @@ data class DeltaEntityRevision(
 enum class DeltaSyncDecision { NONE, IDENTICAL, UPLOAD_LOCAL, DOWNLOAD_REMOTE, CONFLICT }
 
 object DeltaSyncPlanner {
-    fun decide(local: DeltaEntityRevision?, remote: DeltaEntityRevision?): DeltaSyncDecision = when {
-        local == null && remote == null -> DeltaSyncDecision.NONE
-        local != null && remote == null -> DeltaSyncDecision.UPLOAD_LOCAL
-        local == null -> DeltaSyncDecision.DOWNLOAD_REMOTE
-        local!!.revisionId == remote!!.revisionId -> DeltaSyncDecision.IDENTICAL
-        local.sameResultAs(remote) -> DeltaSyncDecision.IDENTICAL
-        local.parentRevisionId == remote.revisionId -> DeltaSyncDecision.UPLOAD_LOCAL
-        remote.parentRevisionId == local.revisionId -> DeltaSyncDecision.DOWNLOAD_REMOTE
-        else -> DeltaSyncDecision.CONFLICT
+    fun decide(local: DeltaEntityRevision?, remote: DeltaEntityRevision?): DeltaSyncDecision {
+        if (local == null && remote == null) return DeltaSyncDecision.NONE
+        if (local == null) return DeltaSyncDecision.DOWNLOAD_REMOTE
+        if (remote == null) return DeltaSyncDecision.UPLOAD_LOCAL
+        return when {
+            local.revisionId == remote.revisionId -> DeltaSyncDecision.IDENTICAL
+            local.sameResultAs(remote) -> DeltaSyncDecision.IDENTICAL
+            local.parentRevisionId == remote.revisionId -> DeltaSyncDecision.UPLOAD_LOCAL
+            remote.parentRevisionId == local.revisionId -> DeltaSyncDecision.DOWNLOAD_REMOTE
+            else -> DeltaSyncDecision.CONFLICT
+        }
     }
 
     private fun DeltaEntityRevision.sameResultAs(other: DeltaEntityRevision): Boolean =
