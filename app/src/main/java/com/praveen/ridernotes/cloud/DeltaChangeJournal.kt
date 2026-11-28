@@ -275,6 +275,9 @@ object DeltaChangeJournal {
             kind = kind,
             revisionId = UUID.randomUUID().toString(),
             parentRevisionId = previous?.revisionId,
+            ancestorRevisionIds = previous?.let {
+                listOf(it.revisionId) + it.ancestorRevisionIds
+            }.orEmpty().distinct(),
             modifiedAtEpochMs = System.currentTimeMillis(),
             deviceId = SyncRevisionStore.deviceId(context),
             deviceName = SyncRevisionStore.deviceName(),
@@ -329,6 +332,7 @@ object DeltaChangeJournal {
         .put("kind", value.kind.name)
         .put("revisionId", value.revisionId)
         .put("parentRevisionId", value.parentRevisionId ?: JSONObject.NULL)
+        .put("ancestorRevisionIds", JSONArray(value.ancestorRevisionIds))
         .put("modifiedAtEpochMs", value.modifiedAtEpochMs)
         .put("deviceId", value.deviceId)
         .put("deviceName", value.deviceName)
@@ -345,6 +349,11 @@ object DeltaChangeJournal {
             kind = DeltaEntityKind.valueOf(json.getString("kind")),
             revisionId = json.getString("revisionId"),
             parentRevisionId = json.nullableString("parentRevisionId"),
+            ancestorRevisionIds = json.optJSONArray("ancestorRevisionIds")?.let { array ->
+                (0 until array.length()).mapNotNull { index ->
+                    array.optString(index).takeIf(String::isNotBlank)
+                }
+            }.orEmpty(),
             modifiedAtEpochMs = json.getLong("modifiedAtEpochMs"),
             deviceId = json.getString("deviceId"),
             deviceName = json.optString("deviceName", "Unknown device"),
