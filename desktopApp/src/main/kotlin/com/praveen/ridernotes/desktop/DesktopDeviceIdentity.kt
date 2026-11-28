@@ -30,7 +30,19 @@ object DesktopDeviceIdentity {
         preferences.flush()
     }
 
+    fun secondaryBackupPath(): String? = preferences.get(KEY_SECONDARY_BACKUP_PATH, null)
+
+    fun rememberSecondaryBackupPath(path: String?) {
+        if (path.isNullOrBlank()) {
+            preferences.remove(KEY_SECONDARY_BACKUP_PATH)
+        } else {
+            preferences.put(KEY_SECONDARY_BACKUP_PATH, path)
+        }
+        preferences.flush()
+    }
+
     private const val KEY_DEVICE_ID = "device_id"
     private const val KEY_DEVICE_NAME = "device_name"
     private const val KEY_BACKUP_PATH = "backup_path"
+    private const val KEY_SECONDARY_BACKUP_PATH = "secondary_backup_path"
 }

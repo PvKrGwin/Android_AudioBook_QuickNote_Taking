@@ -233,7 +233,8 @@ class BleButtonAccessibilityService : AccessibilityService() {
                     ButtonEventStore.record(
                         ButtonEvent.recordingResult(
                             message = message,
-                            successful = message.endsWith("recording start requested")
+                            successful = message.endsWith("recording start requested") ||
+                                message.contains("needs review before recording")
                         )
                     )
                 }, gesturePressCount(gesture) * ACK_BEEP_INTERVAL_MS)

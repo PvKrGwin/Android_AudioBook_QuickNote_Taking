@@ -174,6 +174,17 @@ object SyncRevisionStore {
         uploadedRevisionId: String
     ): Boolean = !dirty || pendingRevisionId == uploadedRevisionId
 
+    internal fun shouldBlockForRemote(
+        remoteRevisionId: String,
+        lastSyncedRevisionId: String?,
+        remoteDeviceId: String,
+        localDeviceId: String,
+        localDirty: Boolean,
+        localParentRevisionId: String?
+    ): Boolean = remoteRevisionId != lastSyncedRevisionId &&
+        remoteDeviceId != localDeviceId &&
+        !(localDirty && localParentRevisionId == remoteRevisionId)
+
     fun acceptRemote(context: Context, revision: CloudRevision) {
         preferences(context).edit()
             .putString(KEY_LAST_SYNCED_REVISION, revision.revisionId)
@@ -195,6 +206,10 @@ object SyncRevisionStore {
         setPendingRemote(context, remote)
         markLocalModified(context)
         currentOrNextRevision(context, forceNew = true)
+        // The prepared local revision now permanently records the remote revision as
+        // its parent. The conflict itself is resolved, so keeping it pending would
+        // reopen the same dialog and block the deferred user operation indefinitely.
+        setPendingRemote(context, null)
     }
 
     fun parse(text: String): CloudRevision? = runCatching {

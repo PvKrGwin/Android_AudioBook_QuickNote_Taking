@@ -26,18 +26,56 @@ object RecordingController {
     @Volatile
     private var recordingRequestedAtElapsedMs: Long = 0L
 
+    @Volatile
+    private var deferredMediaRecordingStart: Boolean = false
+
     fun start(context: Context): String {
-        pendingCloudRevision(context)?.let {
-            return "Cloud update from ${it.deviceName} needs review in Rider Notes"
-        }
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
             return "Microphone permission required"
         }
         if (isRecordingOrStarting) return "Recording is already active"
+        if (deferredMediaRecordingStart) {
+            openRiderNotesForCloudReview(context)
+            return "Recording is waiting for the cloud-version review"
+        }
 
         val mediaContext = MediaControlGateway.prepareForVoiceNote(context)
+        pendingCloudRevision(context)?.let { revision ->
+            deferredMediaRecordingStart = true
+            openRiderNotesForCloudReview(context)
+            return if (mediaContext.isStandalone) {
+                "Cloud update from ${revision.deviceName} needs review before recording"
+            } else {
+                "Paused ${mediaContext.appName}; cloud update from ${revision.deviceName} " +
+                    "needs review before recording"
+            }
+        }
+        return startPrepared(context, mediaContext)
+    }
+
+    fun resumeDeferredStart(context: Context): String? {
+        if (!deferredMediaRecordingStart) return null
+        if (SyncRevisionStore.pendingRemote(context) != null) {
+            return "Resolve the newer cloud version before recording"
+        }
+        val mediaContext = MediaControlGateway.currentVoiceNoteContext()
+            ?: return "Deferred recording context is no longer available".also {
+                deferredMediaRecordingStart = false
+            }
+        deferredMediaRecordingStart = false
+        return startPrepared(context, mediaContext)
+    }
+
+    fun hasDeferredStart(): Boolean = deferredMediaRecordingStart
+
+    fun blockingCloudRevision(context: Context) = pendingCloudRevision(context)
+
+    private fun startPrepared(
+        context: Context,
+        mediaContext: MediaControlGateway.VoiceNoteMediaContext
+    ): String {
         isRecordingOrStarting = true
         recordingRequestedAtElapsedMs = SystemClock.elapsedRealtime()
         RiderRecordTileService.refresh(context)
@@ -149,9 +187,30 @@ object RecordingController {
         recordingRequestedAtElapsedMs = 0L
     }
 
-    private fun pendingCloudRevision(context: Context) =
-        SyncRevisionStore.pendingRemote(context)
+    private fun pendingCloudRevision(context: Context): com.praveen.ridernotes.cloud.CloudRevision? {
+        if (!CloudSyncManager.isNetworkReady(context, CloudSyncManager.Mode.ANY_NETWORK)) {
+            return null
+        }
+        return SyncRevisionStore.pendingRemote(context)
             ?: runCatching { CloudSyncManager.inspectRemote(context) }.getOrNull()
+    }
+
+    private fun openRiderNotesForCloudReview(context: Context) {
+        runCatching {
+            context.startActivity(cloudReviewIntent(context))
+        }
+    }
+
+    fun cloudReviewIntent(context: Context): Intent = Intent()
+        .setClassName(context.packageName, "${context.packageName}.MainActivity")
+        .putExtra(EXTRA_REVIEW_CLOUD_BEFORE_RECORDING, true)
+        .addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+        )
 
     private const val STARTUP_STOP_GUARD_MS = 2_000L
+    const val EXTRA_REVIEW_CLOUD_BEFORE_RECORDING =
+        "com.praveen.ridernotes.extra.REVIEW_CLOUD_BEFORE_RECORDING"
 }

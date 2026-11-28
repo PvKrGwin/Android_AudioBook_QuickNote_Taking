@@ -16,6 +16,8 @@ data class DesktopSyncObservation(
 )
 
 object DesktopSyncMonitor {
+    fun isOnline(): Boolean = hasActiveNetwork()
+
     fun inspect(snapshot: BackupSnapshot): DesktopSyncObservation {
         val online = hasActiveNetwork()
         val remote = BackupPublisher.remoteManifestFor(snapshot.sourceZip)

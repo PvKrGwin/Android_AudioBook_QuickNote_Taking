@@ -13,6 +13,37 @@ import kotlin.io.path.createTempDirectory
 
 class BackupEditingTest {
     @Test
+    fun publishSeedsSecondaryCheckpointAndMirrorsDeltaState() {
+        val temp = createTempDirectory("rider-notes-dual-cloud-").toFile()
+        val primary = File(temp, "primary/RiderNotes_Full_Backup.zip")
+        primary.parentFile.mkdirs()
+        ZipOutputStream(primary.outputStream()).use { output ->
+            output.entry(
+                "library.json",
+                """{"version":2,"groups":[],"items":[],"placements":[],"colorLegend":{}}"""
+            )
+            output.entry("rider_notes_backup.json", """{"formatVersion":1,"backupType":"FULL"}""")
+        }
+        val secondary = File(temp, "secondary/RiderNotes_Full_Backup.zip")
+        val previousSecondary = DesktopDeviceIdentity.secondaryBackupPath()
+        try {
+            DesktopDeviceIdentity.rememberSecondaryBackupPath(secondary.absolutePath)
+            val result = BackupPublisher.publishDetailed(BackupImporter.import(primary))
+
+            assertTrue(result.secondaryMirrored)
+            assertEquals(null, result.secondaryError)
+            assertTrue(secondary.isFile)
+            assertTrue(File(secondary.parentFile, SyncManifestCodec.SIBLING_FILE_NAME).isFile)
+            assertTrue(File(secondary.parentFile, DesktopDeltaCloudTransport.INDEX_FILE).isFile)
+            ZipFile(secondary).use { archive ->
+                assertNotNull(archive.getEntry("library.json"))
+            }
+        } finally {
+            DesktopDeviceIdentity.rememberSecondaryBackupPath(previousSecondary)
+        }
+    }
+
+    @Test
     fun duplicateFolderNamesAreRejectedOnlyAmongSiblings() {
         val temp = createTempDirectory("rider-notes-folder-duplicates-").toFile()
         val zip = File(temp, "RiderNotes_Full_Backup.zip")
@@ -109,10 +140,14 @@ class BackupEditingTest {
         assertEquals(DesktopDeviceIdentity.name(), published.notes.single().originDeviceName)
         assertNotNull(published.syncManifest)
         assertTrue(File(temp, SyncManifestCodec.SIBLING_FILE_NAME).isFile)
+        assertTrue(File(temp, DesktopDeltaCloudTransport.INDEX_FILE).isFile)
+        assertTrue(
+            File(temp, DesktopDeltaCloudTransport.OBJECT_DIRECTORY)
+                .listFiles().orEmpty().isNotEmpty()
+        )
         ZipFile(zip).use { archive ->
-            assertNotNull(archive.getEntry(SyncManifestCodec.FILE_NAME))
-            assertNotNull(archive.getEntry("recordings/${published.notes.single().id}.json"))
-            assertNotNull(archive.getEntry("recordings/${published.notes.single().id}.m4a"))
+            assertEquals(null, archive.getEntry("recordings/${published.notes.single().id}.json"))
+            assertEquals(null, archive.getEntry("recordings/${published.notes.single().id}.m4a"))
         }
     }
 

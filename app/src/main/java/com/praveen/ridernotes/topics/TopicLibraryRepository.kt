@@ -3,6 +3,7 @@ package com.praveen.ridernotes.topics
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import com.praveen.ridernotes.cloud.DeltaChangeJournal
 import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -338,6 +339,20 @@ object TopicLibraryRepository {
                     val voiceFolder = File(context.filesDir, "voice_notes")
                     val baseName = audioName.substringBeforeLast('.')
                     listOf("m4a", "json", "txt", "vtt", "srt").forEach { extension ->
+                        val tracked = when (extension) {
+                            "m4a" -> "recording-audio" to com.praveen.ridernotes.cloud.DeltaEntityKind.RECORDING_AUDIO
+                            "json" -> "recording-metadata" to com.praveen.ridernotes.cloud.DeltaEntityKind.RECORDING_METADATA
+                            "txt" -> "transcript" to com.praveen.ridernotes.cloud.DeltaEntityKind.TRANSCRIPT
+                            else -> null
+                        }
+                        tracked?.let { (prefix, kind) ->
+                            DeltaChangeJournal.recordDelete(
+                                context,
+                                "$prefix:$baseName",
+                                kind,
+                                "recordings/$baseName.$extension"
+                            )
+                        }
                         File(voiceFolder, "$baseName.$extension").delete()
                     }
                 }
@@ -357,12 +372,16 @@ object TopicLibraryRepository {
     }
 
     private fun save(context: Context, library: TopicLibrary) {
+        val previous = manifest(context).takeIf(File::exists)
+            ?.let { runCatching { readLibrary(it) }.getOrNull() }
+            ?: TopicLibrary()
         val root = JSONObject().put("version", 2)
             .put("groups", JSONArray(library.groups.map { JSONObject().put("id", it.id).put("name", it.name).put("parentId", it.parentId ?: JSONObject.NULL).put("order", it.order) }))
             .put("items", JSONArray(library.items.map { JSONObject().put("id", it.id).put("type", it.type).put("title", it.title).put("text", it.text ?: JSONObject.NULL).put("target", it.target ?: JSONObject.NULL).put("createdAt", it.createdAt).put("additionalNotes", it.additionalNotes ?: JSONObject.NULL).put("richText", it.richText ?: JSONObject.NULL) }))
             .put("placements", JSONArray(library.placements.map { JSONObject().put("id", it.id).put("groupId", it.groupId).put("itemId", it.itemId).put("order", it.order).put("important", it.important).put("color", it.color) }))
             .put("colorLegend", JSONObject(library.colorLegend))
         manifest(context).apply { parentFile?.mkdirs(); writeText(root.toString(2)) }
+        DeltaChangeJournal.recordTopicLibraryDiff(context, previous, library)
         SyncRevisionStore.markLocalModified(context)
         rebuildBackup(context, library)
     }
@@ -393,6 +412,12 @@ object TopicLibraryRepository {
                 val revisionFile = File(base, SyncRevisionStore.MANIFEST_FILE)
                 zip.putNextEntry(ZipEntry(SyncRevisionStore.MANIFEST_FILE))
                 revisionFile.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+            val deltaJournal = File(context.filesDir, "sync/${DeltaChangeJournal.FILE_NAME}")
+            if (deltaJournal.isFile) {
+                zip.putNextEntry(ZipEntry(DeltaChangeJournal.FILE_NAME))
+                deltaJournal.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
             }
             base.walkTopDown().filter {
@@ -430,14 +455,22 @@ object TopicLibraryRepository {
     /** Rebuild the complete Topics archive from the phone's current local state. */
     @Synchronized
     fun createFreshBackup(context: Context): Result<File> = runCatching {
+        val currentLibrary = load(context)
+        DeltaChangeJournal.reconcileLocalSnapshot(context, currentLibrary)
         val output = fullBackup(context)
         rebuildBackup(
             context = context,
-            library = load(context),
+            library = currentLibrary,
             target = output,
             includeAllRecordings = true
         )
         output.also { require(it.exists() && it.length() > 0L) }
+    }
+
+    /** Refreshes the per-entity delta baseline without rebuilding the large recovery ZIP. */
+    @Synchronized
+    fun reconcileDeltaSnapshot(context: Context) {
+        DeltaChangeJournal.reconcileLocalSnapshot(context, load(context))
     }
 
     /** Merge a topic backup without replacing any file or entity already on this phone. */
@@ -461,7 +494,11 @@ object TopicLibraryRepository {
         val cloudManifest = File(tempRoot, "library.json")
         require(cloudManifest.exists()) { "Topic manifest is missing" }
         val cloudFolder = folder(context)
-        tempRoot.walkTopDown().filter { it.isFile && it != cloudManifest && !it.relativeTo(tempRoot).invariantSeparatorsPath.startsWith("recordings/") }.forEach { source ->
+        tempRoot.walkTopDown().filter {
+            it.isFile && it != cloudManifest &&
+                it.name != DeltaChangeJournal.FILE_NAME &&
+                !it.relativeTo(tempRoot).invariantSeparatorsPath.startsWith("recordings/")
+        }.forEach { source ->
             val destination = File(cloudFolder, source.relativeTo(tempRoot).invariantSeparatorsPath)
             if (!destination.exists()) { destination.parentFile?.mkdirs(); source.copyTo(destination) }
         }
@@ -517,7 +554,8 @@ object TopicLibraryRepository {
                 relative !in setOf(
                     "library.json",
                     "rider_notes_backup.json",
-                    SyncRevisionStore.MANIFEST_FILE
+                    SyncRevisionStore.MANIFEST_FILE,
+                    DeltaChangeJournal.FILE_NAME
                 ) -> {
                     val target = File(localFolder, relative)
                     if (!target.exists()) {
@@ -593,13 +631,23 @@ object TopicLibraryRepository {
         val voiceFolder = File(context.filesDir, "voice_notes").apply { mkdirs() }
         voiceFolder.listFiles().orEmpty().forEach { it.deleteRecursively() }
 
+        File(tempRoot, DeltaChangeJournal.FILE_NAME).takeIf(File::isFile)?.let { source ->
+            val destination = File(context.filesDir, "sync/${DeltaChangeJournal.FILE_NAME}")
+            destination.parentFile?.mkdirs()
+            source.copyTo(destination, overwrite = true)
+        }
+
         tempRoot.walkTopDown().filter(File::isFile).forEach { source ->
             val relative = source.relativeTo(tempRoot).invariantSeparatorsPath
             when {
                 relative.startsWith("recordings/") -> {
                     source.copyTo(File(voiceFolder, source.name), overwrite = true)
                 }
-                relative !in setOf("rider_notes_backup.json", SyncRevisionStore.MANIFEST_FILE) -> {
+                relative !in setOf(
+                    "rider_notes_backup.json",
+                    SyncRevisionStore.MANIFEST_FILE,
+                    DeltaChangeJournal.FILE_NAME
+                ) -> {
                     val target = File(localFolder, relative)
                     target.parentFile?.mkdirs()
                     source.copyTo(target, overwrite = true)

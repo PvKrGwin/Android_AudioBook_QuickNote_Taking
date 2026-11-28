@@ -18,6 +18,11 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 object CloudSyncManager {
+    enum class Destination(val label: String, internal val key: String) {
+        PRIMARY("Cloud 1 (primary)", "primary"),
+        SECONDARY("Cloud 2 (secondary mirror)", "secondary")
+    }
+
     enum class Mode(val label: String) {
         OFF("Off"),
         WIFI_ONLY("Wi-Fi only"),
@@ -42,6 +47,9 @@ object CloudSyncManager {
         val message: String,
         val destinationPath: String? = null,
         val destinationWebUrl: String? = null,
+        val secondaryDestinationName: String? = null,
+        val secondaryDestinationPath: String? = null,
+        val secondaryDestinationWebUrl: String? = null,
         val syncRecommended: Boolean = false,
         val pendingRemote: CloudRevision? = null,
         val localRevision: CloudRevision? = null,
@@ -49,13 +57,31 @@ object CloudSyncManager {
         val syncState: SyncState = SyncState.DISABLED
     )
 
-    fun destinationUri(context: Context): Uri? = preferences(context)
-        .getString(KEY_TREE_URI, null)
+    fun destinationUri(
+        context: Context,
+        destination: Destination = Destination.PRIMARY
+    ): Uri? = preferences(context)
+        .getString(treeUriKey(destination), null)
         ?.let(Uri::parse)
+
+    fun configuredDestinations(context: Context): List<Pair<Destination, Uri>> =
+        Destination.values().mapNotNull { destination ->
+            destinationUri(context, destination)?.let { destination to it }
+        }
+
+    internal fun destinationDocument(
+        context: Context,
+        destination: Destination = Destination.PRIMARY
+    ): DocumentFile? = destinationUri(context, destination)
+        ?.let { DocumentFile.fromTreeUri(context, it) }
 
     fun status(context: Context): Status {
         val uri = destinationUri(context)
+        val secondaryUri = destinationUri(context, Destination.SECONDARY)
         val name = uri?.let {
+            runCatching { DocumentFile.fromTreeUri(context, it)?.name }.getOrNull()
+        }
+        val secondaryName = secondaryUri?.let {
             runCatching { DocumentFile.fromTreeUri(context, it)?.name }.getOrNull()
         }
         val selectedMode = mode(context)
@@ -88,7 +114,12 @@ object CloudSyncManager {
             message = preferences(context).getString(KEY_STATUS, "").orEmpty(),
             destinationPath = name,
             destinationWebUrl = preferences(context)
-                .getString(KEY_WEB_URL, null)
+                .getString(webUrlKey(Destination.PRIMARY), null)
+                ?.takeIf(String::isNotBlank),
+            secondaryDestinationName = secondaryName ?: secondaryUri?.lastPathSegment,
+            secondaryDestinationPath = secondaryName,
+            secondaryDestinationWebUrl = preferences(context)
+                .getString(webUrlKey(Destination.SECONDARY), null)
                 ?.takeIf(String::isNotBlank),
             syncRecommended = dirty,
             pendingRemote = SyncRevisionStore.pendingRemote(context),
@@ -98,37 +129,56 @@ object CloudSyncManager {
         )
     }
 
-    fun setDestinationWebUrl(context: Context, value: String): Boolean {
+    fun setDestinationWebUrl(
+        context: Context,
+        value: String,
+        destination: Destination = Destination.PRIMARY
+    ): Boolean {
         val normalized = value.trim()
         val valid = runCatching {
             val uri = Uri.parse(normalized)
             uri.scheme in setOf("https", "http") && !uri.host.isNullOrBlank()
         }.getOrDefault(false)
         if (!valid) return false
-        preferences(context).edit().putString(KEY_WEB_URL, normalized).apply()
+        preferences(context).edit().putString(webUrlKey(destination), normalized).apply()
         return true
     }
 
-    fun setDestination(context: Context, uri: Uri) {
-        val previous = destinationUri(context)
+    fun setDestination(
+        context: Context,
+        uri: Uri,
+        destination: Destination = Destination.PRIMARY
+    ) {
+        val previous = destinationUri(context, destination)
         preferences(context).edit()
-            .putString(KEY_TREE_URI, uri.toString())
-            .putString(KEY_STATUS, "Cloud folder selected")
+            .putString(treeUriKey(destination), uri.toString())
+            .putString(KEY_STATUS, "${destination.label} folder selected")
             .putString(KEY_SYNC_STATE, SyncState.UP_TO_DATE.name)
             .apply()
         if (previous != uri) {
-            preferences(context).edit().remove(KEY_WEB_URL).apply()
-            clearUploadMarkers(context)
+            preferences(context).edit().remove(webUrlKey(destination)).apply()
+            clearUploadMarkers(context, destination)
         }
         schedule(context)
     }
 
-    fun removeDestination(context: Context) {
-        WorkManager.getInstance(context).apply {
-            cancelUniqueWork(PERIODIC_WORK)
-            cancelUniqueWork(IMMEDIATE_WORK)
+    fun removeDestination(
+        context: Context,
+        destination: Destination = Destination.PRIMARY
+    ) {
+        preferences(context).edit()
+            .remove(treeUriKey(destination))
+            .remove(webUrlKey(destination))
+            .apply()
+        clearUploadMarkers(context, destination)
+        if (configuredDestinations(context).isEmpty()) {
+            WorkManager.getInstance(context).apply {
+                cancelUniqueWork(PERIODIC_WORK)
+                cancelUniqueWork(IMMEDIATE_WORK)
+            }
+        } else {
+            schedule(context)
         }
-        preferences(context).edit().clear().apply()
     }
 
     fun mode(context: Context): Mode = runCatching {
@@ -150,7 +200,7 @@ object CloudSyncManager {
 
     fun enqueueNow(context: Context) {
         val selectedMode = mode(context)
-        if (destinationUri(context) == null || selectedMode == Mode.OFF) return
+        if (destinationUri(context, Destination.PRIMARY) == null || selectedMode == Mode.OFF) return
         val request = OneTimeWorkRequestBuilder<CloudSyncWorker>()
             .setConstraints(constraints(selectedMode))
             .setInputData(workDataOf(CloudSyncWorker.KEY_MANUAL_UPLOAD to true))
@@ -186,12 +236,15 @@ object CloudSyncManager {
 
     internal fun signature(file: File): String = "${file.length()}:${file.lastModified()}"
 
-    internal fun uploadedSignature(context: Context, fileName: String): String? =
-        preferences(context).getString(markerKey(fileName), null)
+    internal fun uploadedSignature(
+        context: Context,
+        destination: Destination,
+        fileName: String
+    ): String? = preferences(context).getString(markerKey(destination, fileName), null)
 
-    internal fun markUploaded(context: Context, file: File) {
+    internal fun markUploaded(context: Context, destination: Destination, file: File) {
         preferences(context).edit()
-            .putString(markerKey(file.name), signature(file))
+            .putString(markerKey(destination, file.name), signature(file))
             .apply()
     }
 
@@ -235,9 +288,20 @@ object CloudSyncManager {
         clearUploadMarkers(context)
     }
 
+    fun requestFullCheckpointUpload(context: Context) {
+        preferences(context).edit().putBoolean(KEY_FULL_CHECKPOINT_PENDING, true).apply()
+    }
+
+    internal fun fullCheckpointUploadPending(context: Context): Boolean =
+        preferences(context).getBoolean(KEY_FULL_CHECKPOINT_PENDING, false)
+
+    internal fun markFullCheckpointUploaded(context: Context) {
+        preferences(context).edit().putBoolean(KEY_FULL_CHECKPOINT_PENDING, false).apply()
+    }
+
     fun markLocalChange(context: Context) {
         val selectedMode = mode(context)
-        if (destinationUri(context) == null || selectedMode == Mode.OFF) return
+        if (destinationUri(context, Destination.PRIMARY) == null || selectedMode == Mode.OFF) return
         updateSyncState(
             context,
             if (isNetworkReady(context, selectedMode)) SyncState.RECOMMENDED
@@ -269,22 +333,36 @@ object CloudSyncManager {
             capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
-    fun remoteRevision(context: Context): CloudRevision? {
-        val treeUri = destinationUri(context) ?: return null
+    fun remoteRevision(
+        context: Context,
+        destination: Destination = Destination.PRIMARY
+    ): CloudRevision? {
+        val treeUri = destinationUri(context, destination) ?: return null
         val folder = DocumentFile.fromTreeUri(context, treeUri) ?: return null
         val state = folder.findFile(SyncRevisionStore.REMOTE_STATE_FILE) ?: return null
         return runCatching {
             context.contentResolver.openInputStream(state.uri)?.bufferedReader()?.use { reader ->
                 SyncRevisionStore.parse(reader.readText())
             }
-        }.getOrNull()?.also { SyncRevisionStore.rememberCloudRevision(context, it) }
+        }.getOrNull()?.also {
+            if (destination == Destination.PRIMARY) {
+                SyncRevisionStore.rememberCloudRevision(context, it)
+            }
+        }
     }
 
     fun inspectRemote(context: Context): CloudRevision? {
         val remote = remoteRevision(context) ?: return null
         val lastSynced = SyncRevisionStore.lastSyncedRevision(context)
-        return if (remote.revisionId != lastSynced &&
-            remote.deviceId != SyncRevisionStore.deviceId(context)
+        return if (SyncRevisionStore.shouldBlockForRemote(
+                remoteRevisionId = remote.revisionId,
+                lastSyncedRevisionId = lastSynced,
+                remoteDeviceId = remote.deviceId,
+                localDeviceId = SyncRevisionStore.deviceId(context),
+                localDirty = SyncRevisionStore.isDirty(context),
+                localParentRevisionId = SyncRevisionStore.revisionForDisplay(context)
+                    ?.parentRevisionId
+            )
         ) {
             SyncRevisionStore.setPendingRemote(context, remote)
             remote
@@ -294,16 +372,38 @@ object CloudSyncManager {
         }
     }
 
-    fun downloadRemoteFullBackup(context: Context): File? {
-        val treeUri = destinationUri(context) ?: return null
+    fun hasRemoteFullBackup(
+        context: Context,
+        destination: Destination = Destination.PRIMARY
+    ): Boolean {
+        val treeUri = destinationUri(context, destination) ?: return false
+        val folder = DocumentFile.fromTreeUri(context, treeUri) ?: return false
+        return folder.findFile(FULL_BACKUP_NAME)?.isFile == true
+    }
+
+    fun downloadRemoteFullBackup(
+        context: Context,
+        destination: Destination = Destination.PRIMARY
+    ): File? {
+        val treeUri = destinationUri(context, destination) ?: return null
         val folder = DocumentFile.fromTreeUri(context, treeUri) ?: return null
         val remote = folder.findFile(FULL_BACKUP_NAME) ?: return null
         return runCatching {
-            File(context.cacheDir, "remote_${System.currentTimeMillis()}_$FULL_BACKUP_NAME").also { target ->
+            File(
+                context.cacheDir,
+                "remote_${destination.key}_${System.currentTimeMillis()}_$FULL_BACKUP_NAME"
+            ).also { target ->
                 context.contentResolver.openInputStream(remote.uri).use { input ->
                     requireNotNull(input)
                     target.outputStream().use(input::copyTo)
                 }
+            }.let { backup ->
+                DeltaCloudTransport.overlayRemoteOnBackup(
+                    context,
+                    destination,
+                    backup,
+                    remoteRevision(context, destination)
+                )
             }
         }.getOrNull()
     }
@@ -311,7 +411,7 @@ object CloudSyncManager {
     private fun schedule(context: Context) {
         val manager = WorkManager.getInstance(context)
         val selectedMode = mode(context)
-        if (destinationUri(context) == null || selectedMode == Mode.OFF) {
+        if (destinationUri(context, Destination.PRIMARY) == null || selectedMode == Mode.OFF) {
             manager.cancelUniqueWork(PERIODIC_WORK)
             return
         }
@@ -332,14 +432,29 @@ object CloudSyncManager {
         )
         .build()
 
-    private fun clearUploadMarkers(context: Context) {
+    private fun clearUploadMarkers(
+        context: Context,
+        destination: Destination? = null
+    ) {
         val prefs = preferences(context)
         val editor = prefs.edit()
-        prefs.all.keys.filter { it.startsWith(MARKER_PREFIX) }.forEach(editor::remove)
+        val prefix = destination?.let { "$MARKER_PREFIX${it.key}:" } ?: MARKER_PREFIX
+        prefs.all.keys.filter { it.startsWith(prefix) }.forEach(editor::remove)
         editor.apply()
     }
 
-    private fun markerKey(fileName: String): String = MARKER_PREFIX + fileName
+    private fun markerKey(destination: Destination, fileName: String): String =
+        "$MARKER_PREFIX${destination.key}:$fileName"
+
+    private fun treeUriKey(destination: Destination): String = when (destination) {
+        Destination.PRIMARY -> KEY_TREE_URI
+        Destination.SECONDARY -> KEY_SECONDARY_TREE_URI
+    }
+
+    private fun webUrlKey(destination: Destination): String = when (destination) {
+        Destination.PRIMARY -> KEY_WEB_URL
+        Destination.SECONDARY -> KEY_SECONDARY_WEB_URL
+    }
 
     private fun preferences(context: Context) = context.getSharedPreferences(
         PREFS,
@@ -348,11 +463,14 @@ object CloudSyncManager {
 
     private const val PREFS = "rider_notes_cloud_sync"
     private const val KEY_TREE_URI = "tree_uri"
+    private const val KEY_SECONDARY_TREE_URI = "secondary_tree_uri"
     private const val KEY_MODE = "mode"
     private const val KEY_STATUS = "status"
     private const val KEY_SYNC_STATE = "sync_state"
     private const val KEY_SYNC_STATE_AT = "sync_state_at"
     private const val KEY_WEB_URL = "web_url"
+    private const val KEY_SECONDARY_WEB_URL = "secondary_web_url"
+    private const val KEY_FULL_CHECKPOINT_PENDING = "full_checkpoint_pending"
     private const val MARKER_PREFIX = "uploaded:"
     private const val PERIODIC_WORK = "rider-notes-cloud-periodic"
     private const val IMMEDIATE_WORK = "rider-notes-cloud-now"

@@ -16,24 +16,49 @@ class CloudSyncWorker(
         if (CloudSyncManager.mode(applicationContext) == CloudSyncManager.Mode.OFF) {
             return Result.success()
         }
-        val treeUri = CloudSyncManager.destinationUri(applicationContext)
-            ?: return Result.success()
-        val folder = DocumentFile.fromTreeUri(applicationContext, treeUri)
-        if (folder == null || !folder.canWrite()) {
+        if (CloudSyncManager.destinationUri(
+                applicationContext,
+                CloudSyncManager.Destination.PRIMARY
+            ) == null
+        ) {
+            return Result.success()
+        }
+        val destinations = CloudSyncManager.configuredDestinations(applicationContext)
+            .map { (destination, uri) ->
+                destination to DocumentFile.fromTreeUri(applicationContext, uri)
+            }
+        if (destinations.isEmpty()) return Result.success()
+        val unavailable = destinations.firstOrNull { (_, folder) ->
+            folder == null || !folder.canWrite()
+        }
+        if (unavailable != null) {
             CloudSyncManager.prepareCompleteRetry(applicationContext)
             CloudSyncManager.updateSyncState(
                 applicationContext,
                 CloudSyncManager.SyncState.FAILED,
-                "Upload failed: cloud folder is unavailable. Press retry to upload everything again."
+                "Upload failed: ${unavailable.first.label} is unavailable. " +
+                    "Press retry to mirror everything again."
             )
             return Result.failure()
+        }
+        val writableDestinations = destinations.map { (destination, folder) ->
+            destination to requireNotNull(folder)
         }
 
         return try {
             val remoteRevision = CloudSyncManager.remoteRevision(applicationContext)
             val lastSynced = SyncRevisionStore.lastSyncedRevision(applicationContext)
             val dirty = SyncRevisionStore.isDirty(applicationContext)
-            if (remoteRevision != null && remoteRevision.revisionId != lastSynced) {
+            if (remoteRevision != null && SyncRevisionStore.shouldBlockForRemote(
+                    remoteRevisionId = remoteRevision.revisionId,
+                    lastSyncedRevisionId = lastSynced,
+                    remoteDeviceId = remoteRevision.deviceId,
+                    localDeviceId = SyncRevisionStore.deviceId(applicationContext),
+                    localDirty = dirty,
+                    localParentRevisionId = SyncRevisionStore.revisionForDisplay(applicationContext)
+                        ?.parentRevisionId
+                )
+            ) {
                 val local = if (dirty) SyncRevisionStore.currentOrNextRevision(applicationContext) else null
                 if (!dirty || local?.parentRevisionId != remoteRevision.revisionId) {
                     SyncRevisionStore.setPendingRemote(applicationContext, remoteRevision)
@@ -60,10 +85,29 @@ class CloudSyncWorker(
             CloudSyncManager.updateSyncState(
                 applicationContext,
                 CloudSyncManager.SyncState.SYNCING,
-                "Uploading complete Rider Notes backup…"
+                "Uploading Rider Notes changes…"
             )
-            if (!dirty && remoteRevision != null && remoteRevision.revisionId == lastSynced &&
-                folder.findFile("RiderNotes_Full_Backup.zip") != null
+            val needsDeltaBaseline = writableDestinations.any { (_, folder) ->
+                folder.findFile(DeltaCloudTransport.INDEX_FILE) == null
+            }
+            val needsCheckpoint = needsDeltaBaseline ||
+                CloudSyncManager.fullCheckpointUploadPending(applicationContext) ||
+                writableDestinations.any { (_, folder) ->
+                    folder.findFile(DeltaCloudTransport.FULL_BACKUP_NAME) == null
+                }
+            TopicLibraryRepository.reconcileDeltaSnapshot(applicationContext)
+            val hasPendingDeltas = DeltaChangeJournal.pending(applicationContext).isNotEmpty()
+            if (hasPendingDeltas && !dirty) {
+                // Defensive reconciliation catches any future file writer which forgets
+                // to call markLocalModified after changing a transcript or attachment.
+                SyncRevisionStore.markLocalModified(applicationContext)
+            }
+            if (!dirty && !hasPendingDeltas &&
+                remoteRevision != null && remoteRevision.revisionId == lastSynced &&
+                !needsDeltaBaseline && !needsCheckpoint &&
+                writableDestinations.all { (_, folder) ->
+                    folder.findFile(DeltaCloudTransport.INDEX_FILE) != null
+                }
             ) {
                 CloudSyncManager.updateSyncState(
                     applicationContext,
@@ -73,47 +117,40 @@ class CloudSyncWorker(
                 return Result.success()
             }
 
-            val backup = TopicLibraryRepository.createFreshBackup(applicationContext).getOrThrow()
-            // Use the revision embedded in the actual ZIP being uploaded. Asking for the
-            // current revision again here could accidentally label an older ZIP with a newer
-            // transcription revision that arrived while the backup was being built.
-            val localRevision = SyncRevisionStore.revisionInside(backup)
-                ?: error("Fresh backup has no sync revision")
-            var uploaded = 0
-            var unchanged = 0
-            val existing = folder.listFiles().associateBy { it.name }
-            CloudSyncManager.noteFiles(applicationContext).forEach { local ->
-                val remote = existing[local.name]
-                val currentSignature = CloudSyncManager.signature(local)
-                if (remote != null &&
-                    CloudSyncManager.uploadedSignature(applicationContext, local.name) == currentSignature
-                ) {
-                    unchanged += 1
-                    return@forEach
-                }
-
-                val target = remote ?: folder.createFile(mimeType(local.extension), local.name)
-                    ?: error("Could not create ${local.name}")
-                applicationContext.contentResolver.openOutputStream(target.uri, "wt").use { output ->
-                    requireNotNull(output) { "Could not open ${local.name}" }
-                    local.inputStream().use { input -> input.copyTo(output) }
-                }
-                CloudSyncManager.markUploaded(applicationContext, local)
-                uploaded += 1
+            if (!dirty && (needsDeltaBaseline || needsCheckpoint)) {
+                SyncRevisionStore.markLocalModified(applicationContext)
             }
-            val stateTarget = existing[SyncRevisionStore.REMOTE_STATE_FILE]
-                ?: folder.createFile("application/json", SyncRevisionStore.REMOTE_STATE_FILE)
-                ?: error("Could not create sync state")
-            applicationContext.contentResolver.openOutputStream(stateTarget.uri, "wt").use { output ->
-                requireNotNull(output)
-                output.write(SyncRevisionStore.toJson(localRevision).toString(2).toByteArray())
+            val checkpoint = if (needsCheckpoint) {
+                TopicLibraryRepository.createFreshBackup(applicationContext).getOrThrow()
+            } else null
+            val localRevision = checkpoint?.let(SyncRevisionStore::revisionInside)
+                ?: SyncRevisionStore.currentOrNextRevision(applicationContext)
+            val stats = DeltaCloudTransport.upload(
+                applicationContext,
+                writableDestinations,
+                checkpoint
+            )
+            writableDestinations.forEach { (destination, folder) ->
+                val stateTarget = folder.findFile(SyncRevisionStore.REMOTE_STATE_FILE)
+                    ?: folder.createFile("application/json", SyncRevisionStore.REMOTE_STATE_FILE)
+                    ?: error("Could not create sync state in ${destination.label}")
+                applicationContext.contentResolver.openOutputStream(stateTarget.uri, "wt").use { output ->
+                    requireNotNull(output)
+                    output.write(SyncRevisionStore.toJson(localRevision).toString(2).toByteArray())
+                }
             }
+            if (checkpoint != null) CloudSyncManager.markFullCheckpointUploaded(applicationContext)
             val fullySynced = SyncRevisionStore.markSynced(applicationContext, localRevision)
             if (fullySynced) {
                 CloudSyncManager.updateSyncState(
                     applicationContext,
                     CloudSyncManager.SyncState.COMPLETED,
-                    "Sync complete: $uploaded uploaded, $unchanged unchanged"
+                    "Delta sync complete across ${writableDestinations.size} cloud folder(s): " +
+                        "${stats.uploadedObjects} object(s) uploaded, " +
+                        "${stats.unchangedObjects} unchanged" +
+                        if (stats.checkpointUploads > 0) {
+                            ", ${stats.checkpointUploads} full checkpoint(s) updated"
+                        } else ""
                 )
             } else {
                 CloudSyncManager.markLocalChange(applicationContext)
@@ -128,14 +165,6 @@ class CloudSyncWorker(
             )
             Result.failure()
         }
-    }
-
-    private fun mimeType(extension: String): String = when (extension.lowercase()) {
-        "m4a" -> "audio/mp4"
-        "json" -> "application/json"
-        "vtt" -> "text/vtt"
-        "srt", "txt" -> "text/plain"
-        else -> "application/octet-stream"
     }
 
     companion object {

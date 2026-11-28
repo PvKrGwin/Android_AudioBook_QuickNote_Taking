@@ -2,6 +2,8 @@ package com.praveen.ridernotes.recording
 
 import android.content.Context
 import com.praveen.ridernotes.media.YouTubeSourceLink
+import com.praveen.ridernotes.cloud.DeltaChangeJournal
+import com.praveen.ridernotes.cloud.DeltaEntityKind
 import com.praveen.ridernotes.cloud.SyncRevisionStore
 import org.json.JSONObject
 import java.io.File
@@ -72,15 +74,36 @@ object SavedVoiceNoteRepository {
             .sortedByDescending { it.recordedAtEpochMs }
     }
 
-    fun delete(note: SavedVoiceNote): Boolean {
+    fun delete(context: Context, note: SavedVoiceNote): Boolean {
         val parent = note.audioFile.parentFile ?: return false
         val baseName = note.audioFile.nameWithoutExtension
         val companionExtensions = listOf("json", "txt", "vtt", "srt")
 
+        DeltaChangeJournal.recordDelete(
+            context,
+            "recording-audio:$baseName",
+            DeltaEntityKind.RECORDING_AUDIO,
+            "recordings/${note.audioFile.name}"
+        )
         companionExtensions.forEach { extension ->
+            val tracked = when (extension) {
+                "json" -> "recording-metadata" to DeltaEntityKind.RECORDING_METADATA
+                "txt" -> "transcript" to DeltaEntityKind.TRANSCRIPT
+                else -> null
+            }
+            tracked?.let { (prefix, kind) ->
+                DeltaChangeJournal.recordDelete(
+                    context,
+                    "$prefix:$baseName",
+                    kind,
+                    "recordings/$baseName.$extension"
+                )
+            }
             File(parent, "$baseName.$extension").delete()
         }
-        return note.audioFile.delete() || !note.audioFile.exists()
+        val deleted = note.audioFile.delete() || !note.audioFile.exists()
+        if (deleted) SyncRevisionStore.markLocalModified(context)
+        return deleted
     }
 
     /** Find a previously verified link for the same YouTube title and channel. */
@@ -119,7 +142,7 @@ object SavedVoiceNoteRepository {
         load(context)
             .filter { sameMediaIdentity(it, sourceApp, title, author) }
             .forEach { note ->
-                if (note.sourceUrl != canonical && writeSourceUrl(note, canonical)) {
+                if (note.sourceUrl != canonical && writeSourceUrl(context, note, canonical)) {
                     updated += 1
                 }
             }
@@ -146,7 +169,7 @@ object SavedVoiceNoteRepository {
             val canonical = knownLinks[
                 mediaIdentityKey(note.sourceApp, note.title, note.author)
             ] ?: return@forEach
-            if (note.sourceUrl != canonical && writeSourceUrl(note, canonical)) {
+            if (note.sourceUrl != canonical && writeSourceUrl(context, note, canonical)) {
                 updated += 1
             }
         }
@@ -169,7 +192,7 @@ object SavedVoiceNoteRepository {
                 value.trim().replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
             }
 
-    private fun writeSourceUrl(note: SavedVoiceNote, canonicalUrl: String): Boolean =
+    private fun writeSourceUrl(context: Context, note: SavedVoiceNote, canonicalUrl: String): Boolean =
         runCatching {
             val metadataFile = File(
                 note.audioFile.parentFile,
@@ -179,6 +202,13 @@ object SavedVoiceNoteRepository {
             val json = JSONObject(metadataFile.readText())
             json.put("sourceUrl", canonicalUrl)
             metadataFile.writeText(json.toString(2))
+            DeltaChangeJournal.recordFile(
+                context,
+                "recording-metadata:${note.audioFile.nameWithoutExtension}",
+                DeltaEntityKind.RECORDING_METADATA,
+                metadataFile,
+                "recordings/${metadataFile.name}"
+            )
             true
         }.getOrDefault(false)
 

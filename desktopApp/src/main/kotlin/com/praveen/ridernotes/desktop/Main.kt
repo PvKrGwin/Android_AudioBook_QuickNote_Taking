@@ -83,6 +83,11 @@ import javax.swing.JLabel
 import javax.swing.SwingConstants
 import javax.swing.filechooser.FileNameExtensionFilter
 
+private enum class DesktopCloudDestination(val label: String) {
+    PRIMARY("Cloud 1 (primary)"),
+    SECONDARY("Cloud 2 (secondary mirror)")
+}
+
 fun main() = application {
     var windowVisible by remember { mutableStateOf(true) }
     var mediaNoteRequest by remember { mutableStateOf(0) }
@@ -153,6 +158,7 @@ private fun RiderNotesDesktopApp(
     var mediaChapter by remember { mutableStateOf("") }
     var mediaPosition by remember { mutableStateOf("") }
     var mediaSourceUrl by remember { mutableStateOf("") }
+    var deferredMediaNoteRequest by remember { mutableStateOf(false) }
     var syncObservation by remember { mutableStateOf<DesktopSyncObservation?>(null) }
     var showCloudChangeDialog by remember { mutableStateOf(false) }
     var dismissedCloudRevision by remember { mutableStateOf<String?>(null) }
@@ -160,6 +166,14 @@ private fun RiderNotesDesktopApp(
     var pendingOfflineSnapshot by remember { mutableStateOf<BackupSnapshot?>(null) }
     var offlineEditAcknowledged by remember { mutableStateOf(false) }
     var startupEnabled by remember { mutableStateOf(WindowsStartupManager.isEnabled()) }
+    var secondaryZipPath by remember {
+        mutableStateOf(DesktopDeviceIdentity.secondaryBackupPath())
+    }
+    var pendingCloudZip by remember {
+        mutableStateOf<Pair<DesktopCloudDestination, File>?>(null)
+    }
+    var showRestoreSourceDialog by remember { mutableStateOf(false) }
+    var pendingRestoreSource by remember { mutableStateOf<DesktopCloudDestination?>(null) }
     val audioPlayer = remember { DesktopAudioPlayer() }
     DisposableEffect(audioPlayer) { onDispose { audioPlayer.close() } }
 
@@ -195,7 +209,9 @@ private fun RiderNotesDesktopApp(
         // for passive viewing, but this closes the small gap between two polling cycles.
         val immediateObservation = snapshot?.let(DesktopSyncMonitor::inspect)
         if (immediateObservation != null) syncObservation = immediateObservation
-        if (immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION) {
+        if (DesktopSyncMonitor.isOnline() &&
+            immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION
+        ) {
             snapshot = updated
             dirty = true
             localChangedAt = System.currentTimeMillis()
@@ -220,26 +236,102 @@ private fun RiderNotesDesktopApp(
 
     fun publishNow(forceAgainstRemote: SyncManifest? = null) {
         val current = snapshot ?: return
-        runCatching { BackupPublisher.publish(current, forceAgainstRemote) }
-            .onSuccess {
-                snapshot = it
-                baseSnapshot = runCatching { BackupImporter.import(it.sourceZip) }.getOrDefault(it)
-                dirty = false
-                localChangedAt = null
-                syncSucceeded = true
+        runCatching { BackupPublisher.publishDetailed(current, forceAgainstRemote) }
+            .onSuccess { result ->
+                val published = result.snapshot
+                snapshot = published
+                baseSnapshot = runCatching {
+                    BackupImporter.import(published.sourceZip)
+                }.getOrDefault(published)
+                dirty = result.secondaryError != null
+                localChangedAt = if (dirty) System.currentTimeMillis() else null
+                syncSucceeded = result.secondaryError == null
                 undoReturnsDirty = false
                 DesktopUndoStore.clear()
                 showSyncPrompt = false
-                status = "Cloud-folder ZIP updated by ${DesktopDeviceIdentity.name()} at ${formatTime(System.currentTimeMillis())}"
-                syncObservation = DesktopSyncMonitor.inspect(it)
-                tray.notify("Rider Notes synchronized", "The Drive backup ZIP was updated successfully.")
+                status = when {
+                    result.secondaryError != null ->
+                        "Cloud 1 updated, but Cloud 2 mirror failed: ${result.secondaryError}"
+                    secondaryZipPath != null && result.secondaryMirrored ->
+                        "Cloud 1 and Cloud 2 updated by ${DesktopDeviceIdentity.name()} at " +
+                            formatTime(System.currentTimeMillis())
+                    else ->
+                        "Cloud delta updated by ${DesktopDeviceIdentity.name()} at " +
+                            formatTime(System.currentTimeMillis())
+                }
+                syncObservation = DesktopSyncMonitor.inspect(published)
+                tray.notify("Rider Notes synchronized", status)
+                if (deferredMediaNoteRequest) {
+                    deferredMediaNoteRequest = false
+                    showMediaNoteDialog = true
+                    status = "Cloud conflict resolved — continue the note for the paused media"
+                }
             }
             .onFailure { error ->
                 status = "Sync stopped safely: ${error.message ?: error.javaClass.simpleName}"
             }
     }
 
+    fun configureCloudZip(destination: DesktopCloudDestination, file: File) {
+        val absolute = file.absoluteFile
+        val otherPath = when (destination) {
+            DesktopCloudDestination.PRIMARY -> secondaryZipPath
+            DesktopCloudDestination.SECONDARY -> snapshot?.sourceZip?.absolutePath
+                ?: DesktopDeviceIdentity.lastBackupPath()
+        }
+        val duplicatesOtherCloud = runCatching {
+            otherPath?.let(::File)?.canonicalFile == absolute.canonicalFile
+        }.getOrDefault(false)
+        if (duplicatesOtherCloud) {
+            status = "Cloud 1 and Cloud 2 must use different ZIP locations."
+            return
+        }
+        if (destination == DesktopCloudDestination.SECONDARY) {
+            DesktopDeviceIdentity.rememberSecondaryBackupPath(absolute.path)
+            secondaryZipPath = absolute.path
+        }
+        if (absolute.isFile && runCatching { BackupImporter.import(absolute) }.isSuccess) {
+            pendingCloudZip = destination to absolute
+        } else if (destination == DesktopCloudDestination.PRIMARY) {
+            status = "The selected Cloud 1 ZIP is not a valid Rider Notes full backup."
+        } else {
+            status = "Cloud 2 mirror location saved. It will be created during the next Sync now."
+        }
+    }
+
+    fun replaceLocalFrom(destination: DesktopCloudDestination) {
+        val primary = snapshot?.sourceZip?.absoluteFile
+            ?: DesktopDeviceIdentity.lastBackupPath()?.let(::File)?.absoluteFile
+        when (destination) {
+            DesktopCloudDestination.PRIMARY -> {
+                if (primary?.isFile == true) loadBackup(primary)
+                else status = "Cloud 1 does not contain RiderNotes_Full_Backup.zip yet."
+            }
+            DesktopCloudDestination.SECONDARY -> {
+                val secondary = secondaryZipPath?.let(::File)?.absoluteFile
+                when {
+                    secondary?.isFile != true ->
+                        status = "Cloud 2 does not contain RiderNotes_Full_Backup.zip yet."
+                    primary == null ->
+                        status = "Choose Cloud 1 first, then restore the Cloud 2 copy into it."
+                    else -> runCatching {
+                        replacePrimaryBackup(primary, secondary)
+                        loadBackup(primary)
+                        status = "Local copy replaced from Cloud 2. Cloud 1 remains the active source."
+                    }.onFailure {
+                        status = "Cloud 2 restore failed safely: ${it.message ?: it.javaClass.simpleName}"
+                    }
+                }
+            }
+        }
+    }
+
     fun requestMediaNote() {
+        if (deferredMediaNoteRequest) {
+            showCloudChangeDialog = true
+            status = "The paused media-note request is still waiting for cloud resolution"
+            return
+        }
         val captured = WindowsMediaBridge.captureAndPause()?.let {
             DesktopMediaClassifier.resolve(it, snapshot?.notes.orEmpty())
         }
@@ -251,6 +343,16 @@ private fun RiderNotesDesktopApp(
         mediaChapter = captured?.chapter.orEmpty()
         mediaPosition = captured?.playbackPositionMs?.let(::formatPositionInput).orEmpty()
         mediaSourceUrl = captured?.sourceUrl.orEmpty()
+        val immediateObservation = snapshot?.let(DesktopSyncMonitor::inspect)
+        if (DesktopSyncMonitor.isOnline() &&
+            immediateObservation?.health == DesktopSyncHealth.NEW_CLOUD_VERSION
+        ) {
+            syncObservation = immediateObservation
+            deferredMediaNoteRequest = true
+            showCloudChangeDialog = true
+            status = "Media paused — resolve the newer cloud version, then this note will resume"
+            return
+        }
         showMediaNoteDialog = true
     }
 
@@ -282,6 +384,91 @@ private fun RiderNotesDesktopApp(
                 tray.notify("New Rider Notes backup", observation.message)
             }
         }
+    }
+
+    pendingCloudZip?.let { (destination, file) ->
+        AlertDialog(
+            onDismissRequest = { pendingCloudZip = null },
+            title = { Text("Existing Rider Notes backup found") },
+            text = {
+                Text(
+                    "${destination.label} already contains ${file.name}. " +
+                        "Download and use it as the starting copy on this PC?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingCloudZip = null
+                    if (destination == DesktopCloudDestination.PRIMARY) {
+                        loadBackup(file)
+                    } else {
+                        pendingRestoreSource = DesktopCloudDestination.SECONDARY
+                    }
+                }) { Text("Yes, use cloud copy") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingCloudZip = null
+                    status = if (destination == DesktopCloudDestination.PRIMARY) {
+                        "Cloud 1 was not changed; the current local copy remains active."
+                    } else {
+                        "Cloud 2 saved without replacing the current local copy."
+                    }
+                }) { Text("No") }
+            }
+        )
+    }
+
+    if (showRestoreSourceDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestoreSourceDialog = false },
+            title = { Text("Replace entire local copy") },
+            text = { Text("Which cloud copy should replace the local Rider Notes data?") },
+            confirmButton = {
+                Column {
+                    TextButton(
+                        enabled = DesktopDeviceIdentity.lastBackupPath()?.let(::File)?.isFile == true,
+                        onClick = {
+                            showRestoreSourceDialog = false
+                            pendingRestoreSource = DesktopCloudDestination.PRIMARY
+                        }
+                    ) { Text("Cloud 1") }
+                    TextButton(
+                        enabled = secondaryZipPath?.let(::File)?.isFile == true,
+                        onClick = {
+                            showRestoreSourceDialog = false
+                            pendingRestoreSource = DesktopCloudDestination.SECONDARY
+                        }
+                    ) { Text("Cloud 2") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestoreSourceDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    pendingRestoreSource?.let { destination ->
+        AlertDialog(
+            onDismissRequest = { pendingRestoreSource = null },
+            title = { Text("Confirm full replacement") },
+            text = {
+                Text(
+                    "Replace the complete local working copy with ${destination.label}? " +
+                        "Unsynchronized local edits will be discarded. A safety copy of the current ZIP " +
+                        "is retained before Cloud 2 overwrites Cloud 1."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRestoreSource = null
+                    replaceLocalFrom(destination)
+                }) { Text("Yes, replace local") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRestoreSource = null }) { Text("No") }
+            }
+        )
     }
 
     if (showOfflineEditWarning) {
@@ -324,8 +511,10 @@ private fun RiderNotesDesktopApp(
         val cloudRevision = observation?.remoteRevision
         AlertDialog(
             onDismissRequest = {
-                dismissedCloudRevision = observation?.remoteRevision?.revisionId
-                showCloudChangeDialog = false
+                if (!deferredMediaNoteRequest) {
+                    dismissedCloudRevision = observation?.remoteRevision?.revisionId
+                    showCloudChangeDialog = false
+                }
             },
             title = { Text("A newer cloud version is available") },
             text = {
@@ -347,6 +536,13 @@ private fun RiderNotesDesktopApp(
                             "${observation?.message.orEmpty()}. Reload it before continuing so this PC shows the latest notes."
                         }
                     )
+                    if (deferredMediaNoteRequest) {
+                        Text(
+                            "The media-note request is paused. It will reopen automatically after " +
+                                "you resolve this cloud version.",
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -367,6 +563,11 @@ private fun RiderNotesDesktopApp(
                     } else {
                         current?.sourceZip?.takeIf(File::isFile)?.let(::loadBackup)
                         showCloudChangeDialog = false
+                        if (deferredMediaNoteRequest) {
+                            deferredMediaNoteRequest = false
+                            showMediaNoteDialog = true
+                            status = "Cloud copy loaded — continue the note for the paused media"
+                        }
                     }
                 }) { Text(if (dirty) "Merge both (recommended)" else "Reload cloud version") }
             },
@@ -376,12 +577,17 @@ private fun RiderNotesDesktopApp(
                         TextButton(onClick = {
                             snapshot?.sourceZip?.takeIf(File::isFile)?.let(::loadBackup)
                             showCloudChangeDialog = false
+                            if (deferredMediaNoteRequest) {
+                                deferredMediaNoteRequest = false
+                                showMediaNoteDialog = true
+                                status = "Cloud copy loaded — continue the note for the paused media"
+                            }
                         }) { Text("Use cloud") }
                         TextButton(onClick = {
                             showCloudChangeDialog = false
                             publishNow(observation?.remoteRevision)
                         }) { Text("Keep PC as base") }
-                    } else {
+                    } else if (!deferredMediaNoteRequest) {
                         TextButton(onClick = {
                             dismissedCloudRevision = observation?.remoteRevision?.revisionId
                             showCloudChangeDialog = false
@@ -398,10 +604,9 @@ private fun RiderNotesDesktopApp(
             title = { Text("Before opening a cloud backup") },
             text = {
                 Text(
-                    "Ensure that all recent changes on your phone have been included in a fresh " +
-                        "full backup and successfully synchronized to the cloud. Otherwise, the " +
-                        "ZIP downloaded on this PC may not contain your latest mobile notes, " +
-                        "transcripts, Topics, or attachments."
+                    "Ensure that all recent phone changes have been successfully synchronized. " +
+                        "Rider Notes PC needs the recovery ZIP together with its delta index and " +
+                        "objects; the ZIP alone may be an older checkpoint."
                 )
             },
             confirmButton = {
@@ -418,8 +623,8 @@ private fun RiderNotesDesktopApp(
             title = { Text("Sync these changes?") },
             text = {
                 Text(
-                    "Rider Notes has unsaved cloud changes. Sync now rebuilds the complete ZIP " +
-                        "and replaces it safely in your Google Drive for Desktop folder."
+                    "Rider Notes has local changes. Sync now writes the small delta index and " +
+                        "only new or changed files into your Google Drive for Desktop folder."
                 )
             },
             confirmButton = { TextButton(onClick = { publishNow() }) { Text("Sync now") } },
@@ -533,7 +738,7 @@ private fun RiderNotesDesktopApp(
                     Text(
                         when {
                             dirty -> "Sync now — recommended"
-                            syncSucceeded -> "✓ ZIP rebuilt — verify Drive upload"
+                            syncSucceeded -> "✓ Delta saved — verify Drive upload"
                             else -> "Sync now — no local changes"
                         }
                     )
@@ -555,6 +760,31 @@ private fun RiderNotesDesktopApp(
                 }
             }
             Spacer(Modifier.height(6.dp))
+            if (snapshot == null) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFFFE5E5)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            "⚠ Cloud 1 is not configured on this PC yet. Choose the primary " +
+                                "RiderNotes_Full_Backup.zip to begin.",
+                            color = Color(0xFFC62828),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Button(onClick = {
+                            chooseBackup()?.let {
+                                configureCloudZip(DesktopCloudDestination.PRIMARY, it)
+                            }
+                        }) { Text("Add Cloud 1") }
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+            }
             Card(Modifier.fillMaxWidth()) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
@@ -580,7 +810,11 @@ private fun RiderNotesDesktopApp(
                         label = { Text(if (selectedTab == 1) "Search Topics (* wildcard)" else "Search Notes (* wildcard)") },
                         modifier = Modifier.width(300.dp)
                     )
-                    Button(onClick = { chooseBackup()?.let(::loadBackup) }) {
+                    Button(onClick = {
+                        chooseBackup()?.let {
+                            configureCloudZip(DesktopCloudDestination.PRIMARY, it)
+                        }
+                    }) {
                         Text(if (snapshot == null) "Open ZIP" else "Change ZIP")
                     }
                 }
@@ -589,6 +823,35 @@ private fun RiderNotesDesktopApp(
                 SelectionContainer {
                     Column(Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) {
                         Text("Current ZIP: ${snapshot?.sourceZip?.absolutePath ?: "No backup ZIP selected"}", fontSize = 12.sp)
+                        Text(
+                            "Cloud 2 mirror: ${secondaryZipPath ?: "Not configured"}",
+                            fontSize = 12.sp
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = {
+                                chooseSecondaryBackup(secondaryZipPath)?.let {
+                                    configureCloudZip(DesktopCloudDestination.SECONDARY, it)
+                                }
+                            }) {
+                                Text(if (secondaryZipPath == null) "Add Cloud 2" else "Replace Cloud 2")
+                            }
+                            if (secondaryZipPath != null) {
+                                OutlinedButton(onClick = {
+                                    DesktopDeviceIdentity.rememberSecondaryBackupPath(null)
+                                    secondaryZipPath = null
+                                    status = "Cloud 2 mirror removed. Cloud 1 remains unchanged."
+                                }) { Text("Remove Cloud 2") }
+                            }
+                            OutlinedButton(
+                                enabled = snapshot != null || secondaryZipPath != null,
+                                onClick = { showRestoreSourceDialog = true }
+                            ) { Text("Replace local from cloud…") }
+                        }
+                        Text(
+                            "Sync writes the same backup to both configured locations. Reading, " +
+                                "revision checks, and normal startup always use Cloud 1.",
+                            fontSize = 12.sp
+                        )
                         Text(status, color = MaterialTheme.colorScheme.primary)
                         syncObservation?.let { observation ->
                             Text(
@@ -2510,18 +2773,19 @@ private fun UserManualScreen() {
             "Recommended synchronization — Google Drive for Desktop",
             "1. Install Google Drive for Desktop and allow the Rider Notes cloud folder to synchronize.\n" +
                 "2. In this app, open RiderNotes_Full_Backup.zip directly from that synchronized folder.\n" +
-                "3. Before an edit, Rider Notes checks the ZIP and RiderNotes_Sync_State.json revision marker.\n" +
-                "4. After an edit, Sync now turns red. Press it to rebuild the ZIP and revision marker.\n" +
+                "3. Before an edit, Rider Notes checks RiderNotes_Sync_State.json for a newer device revision.\n" +
+                "4. After an edit, Sync now turns red. Press it to update the delta index, changed objects, and revision marker.\n" +
                 "5. A green result means the local synchronized-folder files were updated. Drive for Desktop uploads them automatically.\n" +
                 "6. Wait for Google Drive to finish uploading before using Rider Notes on the phone."
         )
         ManualSection(
             "Manual Chrome download and upload",
-            "This method works, but it is manual. First press Sync now on the phone. Download both " +
-                "RiderNotes_Full_Backup.zip and RiderNotes_Sync_State.json into the same PC folder. " +
-                "Open the ZIP, make changes, and press Sync now in the PC app. Then upload and replace " +
-                "both the rebuilt ZIP and RiderNotes_Sync_State.json in the original Drive folder. " +
-                "Do not delete the old files first: use Google Drive's replace option so the folder keeps one current file of each name. " +
+            "This method works, but it is manual. First upload local changes on the phone. Download " +
+                "the complete Rider Notes folder: RiderNotes_Full_Backup.zip, RiderNotes_Sync_State.json, " +
+                "RiderNotes_Delta_Index.json, and RiderNotes_Delta_Objects. Open the ZIP, make changes, " +
+                "and press Sync now in the PC app. Upload the changed index, state file, and newly " +
+                "created delta objects back to the original Drive folder; the recovery ZIP is normally unchanged. " +
+                "Do not delete the old files first: use Google Drive's replace option for files with matching names. " +
                 "Do not use the phone during this transfer, and wait for the upload to finish before reopening it."
         )
         ManualSection(
@@ -2630,6 +2894,80 @@ private fun chooseBackup(): File? {
         fileFilter = FileNameExtensionFilter("Rider Notes ZIP backups", "zip")
     }
     return if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) chooser.selectedFile else null
+}
+
+private fun chooseSecondaryBackup(currentPath: String?): File? {
+    val chooser = JFileChooser().apply {
+        dialogTitle = "Choose Cloud 2 Rider Notes mirror"
+        fileFilter = FileNameExtensionFilter("Rider Notes ZIP backups", "zip")
+        selectedFile = currentPath?.let(::File) ?: File("RiderNotes_Full_Backup.zip")
+    }
+    if (chooser.showSaveDialog(null) != JFileChooser.APPROVE_OPTION) return null
+    val selected = chooser.selectedFile.absoluteFile
+    return if (selected.extension.equals("zip", ignoreCase = true)) {
+        selected
+    } else {
+        File(selected.parentFile, "${selected.name}.zip")
+    }
+}
+
+private fun replacePrimaryBackup(primary: File, secondary: File) {
+    require(secondary.isFile) { "Cloud 2 backup is unavailable" }
+    primary.parentFile?.mkdirs()
+    if (primary.isFile) {
+        val safetyFolder = File(
+            System.getProperty("user.home"),
+            "RiderNotesPC/safety_backups"
+        ).apply { mkdirs() }
+        val safety = File(
+            safetyFolder,
+            "${primary.nameWithoutExtension}_before_cloud2_${System.currentTimeMillis()}.zip"
+        )
+        Files.copy(primary.toPath(), safety.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+    val temp = File(primary.parentFile, ".${primary.name}.restore.tmp")
+    Files.copy(secondary.toPath(), temp.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    runCatching {
+        Files.move(
+            temp.toPath(),
+            primary.toPath(),
+            StandardCopyOption.REPLACE_EXISTING,
+            StandardCopyOption.ATOMIC_MOVE
+        )
+    }.getOrElse {
+        Files.move(temp.toPath(), primary.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+    val secondaryState = File(secondary.parentFile, SyncManifestCodec.SIBLING_FILE_NAME)
+    val primaryState = File(primary.parentFile, SyncManifestCodec.SIBLING_FILE_NAME)
+    if (secondaryState.isFile) {
+        Files.copy(
+            secondaryState.toPath(),
+            primaryState.toPath(),
+            StandardCopyOption.REPLACE_EXISTING
+        )
+    } else {
+        BackupImporter.import(primary).syncManifest?.let { SyncManifestCodec.write(primaryState, it) }
+    }
+    val secondaryIndex = File(secondary.parentFile, DesktopDeltaCloudTransport.INDEX_FILE)
+    val primaryIndex = File(primary.parentFile, DesktopDeltaCloudTransport.INDEX_FILE)
+    if (secondaryIndex.isFile) {
+        Files.copy(secondaryIndex.toPath(), primaryIndex.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        val secondaryObjects = File(
+            secondary.parentFile,
+            DesktopDeltaCloudTransport.OBJECT_DIRECTORY
+        )
+        val primaryObjects = File(
+            primary.parentFile,
+            DesktopDeltaCloudTransport.OBJECT_DIRECTORY
+        ).apply { mkdirs() }
+        secondaryObjects.walkTopDown().filter(File::isFile).forEach { source ->
+            Files.copy(
+                source.toPath(),
+                File(primaryObjects, source.name).toPath(),
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        }
+    }
 }
 
 private fun chooseAttachment(): File? {
